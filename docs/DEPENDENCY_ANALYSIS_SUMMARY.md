@@ -6,7 +6,7 @@ A comprehensive dependency analysis of the 3Com DOS Packet Driver v1.0.0 has bee
 ## Analysis Results
 
 ### Doxygen Documentation Generated
-- **Location**: `docs/doxygen/html/index.html`
+- **Location**: `build/doxygen/html/index.html`
 - **Contents**: 
   - Full API documentation
   - Include dependency graphs for all files

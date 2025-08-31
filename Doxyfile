@@ -7,7 +7,7 @@
 PROJECT_NAME           = "3Com DOS Packet Driver"
 PROJECT_NUMBER         = "v1.0.0"
 PROJECT_BRIEF          = "ISA Network Driver with SMC Optimization"
-OUTPUT_DIRECTORY       = ./docs/doxygen
+OUTPUT_DIRECTORY       = ./build/doxygen
 CREATE_SUBDIRS         = YES
 OUTPUT_LANGUAGE        = English
 BRIEF_MEMBER_DESC      = YES
@@ -78,8 +78,7 @@ RECURSIVE              = YES
 EXCLUDE                = ./build \
                         ./tests \
                         ./refs \
-                        ./legacy_migration \
-                        ./docs/doxygen
+                        ./legacy_migration
 EXCLUDE_SYMLINKS       = NO
 EXCLUDE_PATTERNS       = */test_* \
                         *_test.* \
@@ -213,4 +212,4 @@ WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
 WARN_NO_PARAMDOC       = NO
 WARN_FORMAT            = "$file:$line: $text"
-WARN_LOGFILE           = ./docs/doxygen/warnings.log
+WARN_LOGFILE           = ./build/doxygen/warnings.log

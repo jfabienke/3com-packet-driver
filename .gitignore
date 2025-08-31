@@ -25,3 +25,6 @@ Thumbs.db
 
 # Crush directory
 .crush/
+
+# Generated documentation
+docs/doxygen/
