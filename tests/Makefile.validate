@@ -1,0 +1,68 @@
+# Makefile for 3Com Packet Driver Validation Tests
+# Task 2C: Testing & Validation
+# Testing & Validation Specialist
+
+# Directories
+TESTDIR = .
+SRCDIR = ../src
+INCDIR = ../include
+BUILDDIR = ../build
+
+# Tools (Open Watcom and NASM required)
+CC = wcc
+ASM = nasm
+LINK = wlink
+
+# Compiler flags for validation tests
+CFLAGS = -zq -ms -0 -zp1 -I$(INCDIR) -fr=$(BUILDDIR)/ -wcd=201 -d2
+
+# Assembler flags  
+ASMFLAGS = -f obj -i $(INCDIR)/ -o $(BUILDDIR)/ -l $(BUILDDIR)/
+
+# Validation test targets
+VALIDATION_TESTS = validate_vtable_integration.com validate_hardware_activation.exe
+
+all: $(VALIDATION_TESTS)
+
+# Build assembly-based INT 60h test
+validate_vtable_integration.com: validate_vtable_integration.asm
+	@echo "Building INT 60h vtable integration test..."
+	$(ASM) $(ASMFLAGS)validate_vtable_integration.lst validate_vtable_integration.asm
+	$(LINK) name $@ format dos com file $(BUILDDIR)/validate_vtable_integration.obj
+
+# Build C-based hardware activation test  
+validate_hardware_activation.exe: validate_hardware_activation.c
+	@echo "Building hardware activation test..."
+	$(CC) $(CFLAGS) validate_hardware_activation.c -fo=$(BUILDDIR)/validate_hardware_activation.obj
+	$(LINK) name $@ format dos exe file $(BUILDDIR)/validate_hardware_activation.obj
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning validation test artifacts..."
+	@rm -f $(BUILDDIR)/validate_*.obj $(BUILDDIR)/validate_*.lst
+	@rm -f validate_vtable_integration.com validate_hardware_activation.exe
+
+# Run all validation tests
+test: all
+	@echo "=== Running Validation Test Battery ==="
+	@echo "Test 1: INT 60h Vtable Integration"
+	-./validate_vtable_integration.com
+	@echo ""
+	@echo "Test 2: Hardware Activation and Vtable Wiring"  
+	-./validate_hardware_activation.exe
+	@echo ""
+	@echo "=== Validation Test Battery Complete ==="
+
+# Help target
+help:
+	@echo "3Com Packet Driver Validation Tests"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  all                          - Build all validation tests"
+	@echo "  validate_vtable_integration  - Build INT 60h test"
+	@echo "  validate_hardware_activation - Build hardware test"
+	@echo "  test                         - Build and run all tests"
+	@echo "  clean                        - Clean build artifacts"
+	@echo "  help                         - Show this help"
+
+.PHONY: all clean test help

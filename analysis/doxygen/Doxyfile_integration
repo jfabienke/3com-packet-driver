@@ -1,0 +1,87 @@
+# Doxyfile for Integration Features Analysis
+# Focus on DMA safety, cache coherency, and runtime configuration
+
+PROJECT_NAME           = "3Com Integration Features"
+PROJECT_NUMBER         = "Orphaned Code Analysis"
+PROJECT_BRIEF          = "DMA safety, cache coherency, and runtime configuration modules"
+
+OUTPUT_DIRECTORY       = ../analysis/doxygen/integration_output
+CREATE_SUBDIRS         = YES
+
+INPUT                  = ../../src/c/dma_safety.c \
+                        ../../src/c/cache_coherency.c \
+                        ../../src/c/cache_management.c \
+                        ../../src/c/dma.c \
+                        ../../src/c/dma_self_test.c \
+                        ../../src/c/runtime_config.c \
+                        ../../src/c/xms_buffer_migration.c \
+                        ../../src/c/handle_compact.c \
+                        ../../src/c/multi_nic_coord.c \
+                        ../../src/asm/cache_ops.asm \
+                        ../../include/dma.h \
+                        ../../include/dma_safety.h \
+                        ../../include/cache_coherency.h \
+                        ../../include/runtime_config.h \
+                        ../../include/xms_buffer_migration.h \
+                        ../../include/handle_compact.h \
+                        ../../include/multi_nic_coord.h
+
+FILE_PATTERNS          = *.c *.h *.asm
+RECURSIVE              = NO
+EXCLUDE_PATTERNS       = *test* *demo* *duplicate*
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = YES
+
+HTML_OUTPUT            = html_integration
+HTML_FILE_EXTENSION    = .html
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_LOCAL_METHODS  = YES
+EXTRACT_ANON_NSPACES   = YES
+
+SHOW_INCLUDE_FILES     = YES
+SHOW_USED_FILES        = YES
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+
+HAVE_DOT               = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+GROUP_GRAPHS           = YES
+UML_LOOK               = YES
+TEMPLATE_RELATIONS     = YES
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+DOT_IMAGE_FORMAT       = png
+DOT_PATH               = /opt/homebrew/bin
+DOTFILE_DIRS           = 
+DOT_GRAPH_MAX_NODES    = 50
+MAX_DOT_GRAPH_DEPTH    = 0
+DOT_TRANSPARENT        = NO
+DOT_MULTI_TARGETS      = YES
+GENERATE_LEGEND        = YES
+
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES

@@ -1,0 +1,6541 @@
+cscope 15 $HOME/Development/3com-packet-driver/analysis/cscope/pci -q 0000000418 0000038502
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_boomerang.c
+
+13 
+	~"../../šşude/3com_pci.h
+"
+
+14 
+	~"../../šşude/·ck‘.h
+"
+
+15 
+	~"../../šşude/dma.h
+"
+
+16 
+	~"../../šşude/h¬dw¬e.h
+"
+
+17 
+	~"../../šşude/loggšg.h
+"
+
+18 
+	~"../../šşude/ÿche_coh”’cy.h
+"
+
+19 
+	~"../../šşude/hw_checksum.h
+"
+
+20 
+	~<dos.h
+>
+
+21 
+	~<¡ršg.h
+>
+
+24 
+	#BOOM_COMMAND
+ 0x00
+
+	)
+
+25 
+	#BOOM_STATUS
+ 0x02
+
+	)
+
+26 
+	#BOOM_INT_STATUS
+ 0x04
+
+	)
+
+27 
+	#BOOM_INT_ENABLE
+ 0x06
+
+	)
+
+28 
+	#BOOM_FIFO_DIAG
+ 0x08
+
+	)
+
+29 
+	#BOOM_TIMER
+ 0x0A
+
+	)
+
+30 
+	#BOOM_TX_STATUS
+ 0x0C
+
+	)
+
+31 
+	#BOOM_DMA_CTRL
+ 0x20
+
+	)
+
+32 
+	#BOOM_DN_LIST_PTR
+ 0x24
+
+	)
+
+33 
+	#BOOM_UP_LIST_PTR
+ 0x38
+
+	)
+
+36 
+	#BOOM_CMD_GLOBAL_RESET
+ 0x0000
+
+	)
+
+37 
+	#BOOM_CMD_TX_ENABLE
+ 0x4800
+
+	)
+
+38 
+	#BOOM_CMD_RX_ENABLE
+ 0x2000
+
+	)
+
+39 
+	#BOOM_CMD_TX_RESET
+ 0x5800
+
+	)
+
+40 
+	#BOOM_CMD_RX_RESET
+ 0x2800
+
+	)
+
+41 
+	#BOOM_CMD_INT_ACK
+ 0x6800
+
+	)
+
+42 
+	#BOOM_CMD_DN_STALL
+ 0x3002
+
+	)
+
+43 
+	#BOOM_CMD_DN_UNSTALL
+ 0x3003
+
+	)
+
+44 
+	#BOOM_CMD_UP_STALL
+ 0x3000
+
+	)
+
+45 
+	#BOOM_CMD_UP_UNSTALL
+ 0x3001
+
+	)
+
+48 
+	#BOOM_STAT_INT_LATCH
+ 0x0001
+
+	)
+
+49 
+	#BOOM_STAT_HOST_ERROR
+ 0x0002
+
+	)
+
+50 
+	#BOOM_STAT_TX_COMPLETE
+ 0x0004
+
+	)
+
+51 
+	#BOOM_STAT_RX_COMPLETE
+ 0x0010
+
+	)
+
+52 
+	#BOOM_STAT_CMD_IN_PROG
+ 0x1000
+
+	)
+
+55 
+	#BOOM_DMA_DN_COMPLETE
+ 0x00010000
+
+	)
+
+56 
+	#BOOM_DMA_UP_COMPLETE
+ 0x00020000
+
+	)
+
+57 
+	#BOOM_DMA_DN_STALLED
+ 0x00040000
+
+	)
+
+58 
+	#BOOM_DMA_UP_STALLED
+ 0x00080000
+
+	)
+
+61 
+	#DESC_DN_COMPLETE
+ 0x00010000
+
+	)
+
+62 
+	#DESC_ERROR
+ 0x00004000
+
+	)
+
+63 
+	#DESC_LAST
+ 0x80000000
+
+	)
+
+66 
+	#BOOM_TX_RING_SIZE
+ 16
+
+	)
+
+67 
+	#BOOM_RX_RING_SIZE
+ 16
+
+	)
+
+72 
+	$boom”ªg_š™_tx_ršg
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+74 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+75 
+i
+;
+
+78 ià(!
+ùx
+->
+tx_ršg
+) {
+
+79 
+ùx
+->
+tx_ršg
+ = (
+boom_tx_desc_t
+ *)
+	`mem_®loc_®igÃd
+(
+
+80 (
+boom_tx_desc_t
+è* 
+TX_RING_SIZE
+, 16);
+
+81 ià(!
+ùx
+->
+tx_ršg
+) {
+
+82 
+	`LOG_ERROR
+("Boomerang: Failedo‡llocate TX„ing");
+
+83  
+ERROR_NO_MEMORY
+;
+
+88 
+	`mem£t
+(
+ùx
+->
+tx_ršg
+, 0, (
+boom_tx_desc_t
+è* 
+TX_RING_SIZE
+);
+
+90 
+i
+ = 0; i < 
+TX_RING_SIZE
+; i++) {
+
+92 
+ùx
+->
+tx_ršg
+[
+i
+].
+Ãxt
+ = 
+	`dma_vœt_to_phys
+(&ùx->tx_ršg[(˜+ 1è% 
+TX_RING_SIZE
+]);
+
+93 
+ùx
+->
+tx_ršg
+[
+i
+].
+¡©us
+ = 0;
+
+94 
+ùx
+->
+tx_ršg
+[
+i
+].
+addr
+ = 0;
+
+95 
+ùx
+->
+tx_ršg
+[
+i
+].
+Ëngth
+ = 0;
+
+99 
+ùx
+->
+cur_tx
+ = 0;
+
+100 
+ùx
+->
+dœty_tx
+ = 0;
+
+103 
+ùx
+->
+tx_ršg_phys
+ = 
+	`dma_vœt_to_phys
+(ùx->
+tx_ršg
+);
+
+104 
+	`ou
+(
+ißddr
+ + 
+BOOM_DN_LIST_PTR
+, 
+ùx
+->
+tx_ršg_phys
+);
+
+106 
+	`LOG_DEBUG
+("Boom”ªg: TX„šg in™Ÿlized‡ˆ0x%08X", 
+ùx
+->
+tx_ršg_phys
+);
+
+108  
+SUCCESS
+;
+
+109 
+	}
+}
+
+114 
+	$boom”ªg_š™_rx_ršg
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+116 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+117 
+i
+;
+
+120 ià(!
+ùx
+->
+rx_ršg
+) {
+
+121 
+ùx
+->
+rx_ršg
+ = (
+boom_rx_desc_t
+ *)
+	`mem_®loc_®igÃd
+(
+
+122 (
+boom_rx_desc_t
+è* 
+RX_RING_SIZE
+, 16);
+
+123 ià(!
+ùx
+->
+rx_ršg
+) {
+
+124 
+	`LOG_ERROR
+("Boomerang: Failedo‡llocate RX„ing");
+
+125  
+ERROR_NO_MEMORY
+;
+
+130 
+	`mem£t
+(
+ùx
+->
+rx_ršg
+, 0, (
+boom_rx_desc_t
+è* 
+RX_RING_SIZE
+);
+
+132 
+i
+ = 0; i < 
+RX_RING_SIZE
+; i++) {
+
+134 
+·ck‘_t
+ *
+pkt
+ = 
+	`·ck‘_®loc
+(
+PKT_BUF_SIZE
+);
+
+135 ià(!
+pkt
+) {
+
+136 
+	`LOG_ERROR
+("Boom”ªg: FaedØ®loÿ‹ RX bufã¸%d", 
+i
+);
+
+137  
+ERROR_NO_MEMORY
+;
+
+141 
+ùx
+->
+rx_ršg
+[
+i
+].
+Ãxt
+ = 
+	`dma_vœt_to_phys
+(&ùx->rx_ršg[(˜+ 1è% 
+RX_RING_SIZE
+]);
+
+142 
+ùx
+->
+rx_ršg
+[
+i
+].
+¡©us
+ = 0;
+
+143 
+ùx
+->
+rx_ršg
+[
+i
+].
+addr
+ = 
+	`dma_vœt_to_phys
+(
+pkt
+->
+d©a
+);
+
+144 
+ùx
+->
+rx_ršg
+[
+i
+].
+Ëngth
+ = 
+PKT_BUF_SIZE
+ | 
+DESC_LAST
+;
+
+151 
+ùx
+->
+cur_rx
+ = 0;
+
+154 
+ùx
+->
+rx_ršg_phys
+ = 
+	`dma_vœt_to_phys
+(ùx->
+rx_ršg
+);
+
+155 
+	`ou
+(
+ißddr
+ + 
+BOOM_UP_LIST_PTR
+, 
+ùx
+->
+rx_ršg_phys
+);
+
+157 
+	`LOG_DEBUG
+("Boom”ªg: RX„šg in™Ÿlized‡ˆ0x%08X", 
+ùx
+->
+rx_ršg_phys
+);
+
+159  
+SUCCESS
+;
+
+160 
+	}
+}
+
+171 
+	$boom”ªg_¡¬t_xm™
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+·ck‘_t
+ *
+pkt
+)
+
+173 
+ušt16_t
+ 
+ißddr
+;
+
+174 
+ušt16_t
+ 
+’Œy
+;
+
+175 
+boom_tx_desc_t
+ *
+desc
+;
+
+176 
+ušt32_t
+ 
+phys_addr
+;
+
+177 
+ušt32_t
+ 
+desc_æags
+ = 0;
+
+179 ià(!
+ùx
+ || !
+pkt
+ || !pkt->
+d©a
+) {
+
+180 
+	`LOG_ERROR
+("Boomerang: Invalid…arameters forransmission");
+
+181  
+ERROR_INVALID_PARAMETER
+;
+
+184 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+187 ià(
+pkt
+->
+Ëngth
+ < 
+MIN_PACKET_SIZE
+ ||…kt->Ëngth > 
+MAX_PACKET_SIZE
+) {
+
+188 
+	`LOG_ERROR
+("Boom”ªg: Inv®id…ack‘†’gth %d", 
+pkt
+->
+Ëngth
+);
+
+189  
+ERROR_INVALID_PARAMETER
+;
+
+193 ià((
+ùx
+->
+cur_tx
+ - ctx->
+dœty_tx
+è>ğ
+TX_RING_SIZE
+) {
+
+194 
+	`LOG_ERROR
+("Boomerang: TX„ing full");
+
+195 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_drİ³d
+++;
+
+196  
+ERROR_BUFFER_FULL
+;
+
+200 
+’Œy
+ = 
+ùx
+->
+cur_tx
+ % 
+TX_RING_SIZE
+;
+
+201 
+desc
+ = &
+ùx
+->
+tx_ršg
+[
+’Œy
+];
+
+204 ià(
+desc
+->
+¡©us
+ & 
+DESC_DN_COMPLETE
+) {
+
+205 
+	`LOG_ERROR
+("Boomerang: TX descriptor‚ot„eady");
+
+206  
+ERROR_BUSY
+;
+
+210 ià(
+ùx
+->
+checksum_’abËd
+ && (ùx->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+))) {
+
+212 
+ušt32_t
+ 
+checksum_´ÙocŞs
+ = (1 << 
+CHECKSUM_PROTO_IP
+);
+
+215 
+ušt8_t
+ *
+_h—d”
+ = 
+pkt
+->
+d©a
+ + 
+ETH_HEADER_SIZE
+;
+
+216 ià(
+pkt
+->
+Ëngth
+ >ğ
+ETH_HEADER_SIZE
+ + 20) {
+
+217 
+ušt8_t
+ 
+´ÙocŞ
+ = 
+_h—d”
+[9];
+
+218 ià(
+´ÙocŞ
+ =ğ
+IP_PROTO_TCP
+) {
+
+219 
+checksum_´ÙocŞs
+ |ğ(1 << 
+CHECKSUM_PROTO_TCP
+);
+
+220 
+desc_æags
+ |ğ
+DESC_CALC_TCP_CSUM
+;
+
+221 } ià(
+´ÙocŞ
+ =ğ
+IP_PROTO_UDP
+) {
+
+222 
+checksum_´ÙocŞs
+ |ğ(1 << 
+CHECKSUM_PROTO_UDP
+);
+
+223 
+desc_æags
+ |ğ
+DESC_CALC_UDP_CSUM
+;
+
+227 
+desc_æags
+ |ğ
+DESC_CALC_IP_CSUM
+;
+
+230 ià(!(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_HWCKSM
+)) {
+
+231 
+	`hw_checksum_tx_ÿlcuÏ‹
+((
+nic_cÚ‹xt_t
+ *)
+ùx
+, 
+pkt
+->
+d©a
+,
+
+232 
+pkt
+->
+Ëngth
+, 
+checksum_´ÙocŞs
+);
+
+237 ià(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_NWAY
+) {
+
+239 
+dma_sg_li¡_t
+ 
+sg_li¡
+;
+
+240 
+sg_li¡
+.
+num_äagm’ts
+ = 1;
+
+241 
+sg_li¡
+.
+äagm’ts
+[0].
+vœt_addr
+ = 
+pkt
+->
+d©a
+;
+
+242 
+sg_li¡
+.
+äagm’ts
+[0].
+phys_addr
+ = 
+	`dma_vœt_to_phys
+(
+pkt
+->
+d©a
+);
+
+243 
+sg_li¡
+.
+äagm’ts
+[0].
+Ëngth
+ = 
+pkt
+->length;
+
+246 
+phys_addr
+ = 
+sg_li¡
+.
+äagm’ts
+[0].phys_addr;
+
+249 
+phys_addr
+ = 
+	`dma_vœt_to_phys
+(
+pkt
+->
+d©a
+);
+
+253 ià(
+ùx
+->
+ba£
+.
+ÿche_t›r
+ !ğ
+CACHE_TIER_4_FALLBACK
+) {
+
+254 
+	`ÿche_æush_¿nge
+(
+pkt
+->
+d©a
+,…kt->
+Ëngth
+);
+
+257 
+desc
+->
+addr
+ = 
+phys_addr
+;
+
+258 
+desc
+->
+Ëngth
+ = 
+pkt
+->Ëngth | 
+DESC_LAST
+ | 
+desc_æags
+;
+
+259 
+desc
+->
+¡©us
+ = 
+pkt
+->
+Ëngth
+;
+
+262 
+ùx
+->
+cur_tx
+++;
+
+265 ià(
+	`šl
+(
+ißddr
+ + 
+BOOM_DN_LIST_PTR
+) == 0) {
+
+267 
+	`ou
+(
+ißddr
+ + 
+BOOM_DN_LIST_PTR
+,
+
+268 
+ùx
+->
+tx_ršg_phys
+ + (
+’Œy
+ * (
+boom_tx_desc_t
+)));
+
+272 ià(
+	`šl
+(
+ißddr
+ + 
+BOOM_DMA_CTRL
+è& 
+BOOM_DMA_DN_STALLED
+) {
+
+273 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_DN_UNSTALL
+);
+
+277 
+ùx
+->
+tx_·ck‘s
+++;
+
+278 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_·ck‘s
+++;
+
+279 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_by‹s
+ +ğ
+pkt
+->
+Ëngth
+;
+
+281 
+	`LOG_DEBUG
+("Boom”ªg: T¿nsm™‹d %d by‹…ack‘ vŸ DMA", 
+pkt
+->
+Ëngth
+);
+
+283  
+SUCCESS
+;
+
+284 
+	}
+}
+
+292 
+	$boom”ªg_rx
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+294 
+ušt16_t
+ 
+ißddr
+;
+
+295 
+ušt16_t
+ 
+’Œy
+;
+
+296 
+boom_rx_desc_t
+ *
+desc
+;
+
+297 
+·ck‘s_»ûived
+ = 0;
+
+298 
+·ck‘_t
+ *
+pkt
+;
+
+299 
+ušt16_t
+ 
+pkt_Ën
+;
+
+301 ià(!
+ùx
+) {
+
+302  
+ERROR_INVALID_PARAMETER
+;
+
+305 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+308 
+·ck‘s_»ûived
+ < 
+RX_RING_SIZE
+) {
+
+309 
+’Œy
+ = 
+ùx
+->
+cur_rx
+ % 
+RX_RING_SIZE
+;
+
+310 
+desc
+ = &
+ùx
+->
+rx_ršg
+[
+’Œy
+];
+
+313 ià(!(
+desc
+->
+¡©us
+ & 
+UP_COMPLETE
+)) {
+
+318 
+pkt_Ën
+ = 
+desc
+->
+¡©us
+ & 0x1FFF;
+
+321 ià(
+desc
+->
+¡©us
+ & 
+UP_ERROR
+) {
+
+322 
+	`LOG_ERROR
+("Boom”ªg: RXƒ¼Ü stu 0x%08X", 
+desc
+->
+¡©us
+);
+
+323 
+ùx
+->
+rx_”rÜs
+++;
+
+324 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_”rÜs
+++;
+
+325 } ià(
+pkt_Ën
+ >ğ
+MIN_PACKET_SIZE
+ &&…kt_ËÀ<ğ
+MAX_PACKET_SIZE
+) {
+
+327 
+pkt
+ = 
+	`·ck‘_®loc
+(
+pkt_Ën
+);
+
+328 ià(
+pkt
+) {
+
+330 ià(
+ùx
+->
+ba£
+.
+ÿche_t›r
+ !ğ
+CACHE_TIER_4_FALLBACK
+) {
+
+331 
+	`ÿche_šv®id©e_¿nge
+((*)
+desc
+->
+addr
+, 
+pkt_Ën
+);
+
+335 
+	`memıy
+(
+pkt
+->
+d©a
+, (*)
+desc
+->
+addr
+, 
+pkt_Ën
+);
+
+336 
+pkt
+->
+Ëngth
+ = 
+pkt_Ën
+;
+
+339 
+ùx
+->
+rx_·ck‘s
+++;
+
+340 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_·ck‘s
+++;
+
+341 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_by‹s
+ +ğ
+pkt_Ën
+;
+
+344 ià(
+ùx
+->
+ba£
+.
+»ûive_ÿÎback
+) {
+
+345 
+ùx
+->
+ba£
+.
+	`»ûive_ÿÎback
+(&ùx->ba£, 
+pkt
+);
+
+347 
+	`·ck‘_ä“
+(
+pkt
+);
+
+350 
+·ck‘s_»ûived
+++;
+
+352 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_drİ³d
+++;
+
+357 
+desc
+->
+¡©us
+ = 0;
+
+360 
+ùx
+->
+cur_rx
+++;
+
+364 ià(
+·ck‘s_»ûived
+ > 0 && (
+	`šl
+(
+ißddr
+ + 
+BOOM_DMA_CTRL
+è& 
+BOOM_DMA_UP_STALLED
+)) {
+
+365 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_UP_UNSTALL
+);
+
+368 
+	`LOG_DEBUG
+("Boom”ªg: Reûived %d…ack‘ vŸ DMA", 
+·ck‘s_»ûived
+);
+
+370  
+·ck‘s_»ûived
+;
+
+371 
+	}
+}
+
+379 
+	$boom”ªg_š‹¼u±
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+381 
+ušt16_t
+ 
+ißddr
+;
+
+382 
+ušt16_t
+ 
+¡©us
+;
+
+383 
+ušt32_t
+ 
+dma_¡©us
+;
+
+384 
+hªdËd
+ = 0;
+
+386 ià(!
+ùx
+) {
+
+387  
+ERROR_INVALID_PARAMETER
+;
+
+390 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+393 
+¡©us
+ = 
+	`šw
+(
+ißddr
+ + 
+BOOM_STATUS
+);
+
+396 ià(
+¡©us
+ & 
+BOOM_STAT_TX_COMPLETE
+) {
+
+398 
+ùx
+->
+dœty_tx
+ !ğùx->
+cur_tx
+) {
+
+399 
+ušt16_t
+ 
+’Œy
+ = 
+ùx
+->
+dœty_tx
+ % 
+TX_RING_SIZE
+;
+
+400 
+boom_tx_desc_t
+ *
+desc
+ = &
+ùx
+->
+tx_ršg
+[
+’Œy
+];
+
+402 ià(!(
+desc
+->
+¡©us
+ & 
+DESC_DN_COMPLETE
+)) {
+
+407 ià(
+desc
+->
+¡©us
+ & 
+DESC_ERROR
+) {
+
+408 
+ùx
+->
+tx_”rÜs
+++;
+
+409 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_”rÜs
+++;
+
+413 
+desc
+->
+¡©us
+ = 0;
+
+414 
+ùx
+->
+dœty_tx
+++;
+
+418 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_INT_ACK
+ | 
+BOOM_STAT_TX_COMPLETE
+);
+
+419 
+hªdËd
+ = 1;
+
+423 ià(
+¡©us
+ & 
+BOOM_STAT_RX_COMPLETE
+) {
+
+424 
+	`boom”ªg_rx
+(
+ùx
+);
+
+427 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_INT_ACK
+ | 
+BOOM_STAT_RX_COMPLETE
+);
+
+428 
+hªdËd
+ = 1;
+
+432 ià(
+¡©us
+ & 
+BOOM_STAT_HOST_ERROR
+) {
+
+433 
+	`LOG_ERROR
+("Boomerang: Hostƒrror detected");
+
+436 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_TX_RESET
+);
+
+437 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_RX_RESET
+);
+
+438 
+	`d–ay_ms
+(1);
+
+439 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_TX_ENABLE
+);
+
+440 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_RX_ENABLE
+);
+
+443 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_INT_ACK
+ | 
+BOOM_STAT_HOST_ERROR
+);
+
+444 
+hªdËd
+ = 1;
+
+447  
+hªdËd
+ ? 
+SUCCESS
+ : 
+ERROR_NOT_FOUND
+;
+
+448 
+	}
+}
+
+456 
+	$boom”ªg_š™_dma
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+458 
+ušt16_t
+ 
+ißddr
+;
+
+459 
+»suÉ
+;
+
+461 ià(!
+ùx
+) {
+
+462  
+ERROR_INVALID_PARAMETER
+;
+
+465 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+467 
+	`LOG_INFO
+("Boom”ªg: In™Ÿlizšg DMA mod© I/O 0x%04X", 
+ißddr
+);
+
+470 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_TX_RESET
+);
+
+471 
+	`d–ay_ms
+(1);
+
+472 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_RX_RESET
+);
+
+473 
+	`d–ay_ms
+(1);
+
+476 
+»suÉ
+ = 
+	`boom”ªg_š™_tx_ršg
+(
+ùx
+);
+
+477 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+478  
+»suÉ
+;
+
+481 
+»suÉ
+ = 
+	`boom”ªg_š™_rx_ršg
+(
+ùx
+);
+
+482 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+483  
+»suÉ
+;
+
+487 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_TX_ENABLE
+);
+
+488 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_RX_ENABLE
+);
+
+491 
+	`outw
+(
+ißddr
+ + 
+BOOM_COMMAND
+, 
+BOOM_CMD_INT_ACK
+ | 0xFF);
+
+494 
+ùx
+->
+ba£
+.
+Œªsm™
+ = (
+Œªsm™_func_t
+)
+boom”ªg_¡¬t_xm™
+;
+
+495 
+ùx
+->
+ba£
+.
+»ûive
+ = (
+»ûive_func_t
+)
+boom”ªg_rx
+;
+
+496 
+ùx
+->
+ba£
+.
+š‹¼u±_hªdËr
+ = (
+š‹¼u±_func_t
+)
+boom”ªg_š‹¼u±
+;
+
+498 
+	`LOG_INFO
+("Boomerang: DMA mode initialized successfully");
+
+500  
+SUCCESS
+;
+
+501 
+	}
+}
+
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_init.c
+
+14 
+	~"../../šşude/3com_pci.h
+"
+
+15 
+	~"../../šşude/h¬dw¬e.h
+"
+
+16 
+	~"../../šşude/loggšg.h
+"
+
+17 
+	~"../../šşude/nic_š™.h
+"
+
+18 
+	~"../../šşude/ÿche_coh”’cy.h
+"
+
+19 
+	~"../../šşude/hw_checksum.h
+"
+
+20 
+	~"../../šşude/æow_cÚŒŞ.h
+"
+
+21 
+	~"../../šşude/dma.h
+"
+
+22 
+	~<dos.h
+>
+
+23 
+	~<¡ršg.h
+>
+
+26 
+vÜ‹x_š™_pio
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+);
+
+27 
+boom”ªg_š™_dma
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+);
+
+30 
+vÜ‹x_¡¬t_xm™
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+·ck‘_t
+ *
+pkt
+);
+
+31 
+vÜ‹x_rx
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+);
+
+32 
+vÜ‹x_š‹¼u±_hªdËr
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+);
+
+35 
+­¶y_³rfÜmªû_İtimiz©iÚs
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+);
+
+38 
+	#CMD_SELECT_WINDOW
+ (1<<11)
+
+	)
+
+39 
+	#CMD_START_COAX
+ (2<<11)
+
+	)
+
+40 
+	#CMD_STOP_COAX
+ ((2<<11è| 1)
+
+	)
+
+41 
+	#CMD_SET_RX_FILTER
+ (16<<11)
+
+	)
+
+42 
+	#CMD_SET_TX_RECLAIM
+ (18<<11)
+
+	)
+
+43 
+	#CMD_STATS_ENABLE
+ (21<<11)
+
+	)
+
+46 
+	#RX_FILTER_STATION
+ 0x01
+
+	)
+
+47 
+	#RX_FILTER_MULTICAST
+ 0x02
+
+	)
+
+48 
+	#RX_FILTER_BROADCAST
+ 0x04
+
+	)
+
+49 
+	#RX_FILTER_PROMISC
+ 0x08
+
+	)
+
+54 
+	$»ad_mac_add»ss
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+56 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+57 
+ušt8_t
+ 
+mac
+[6];
+
+58 
+i
+;
+
+61 
+	`£Ëù_wšdow
+(
+ißddr
+, 2);
+
+64 
+i
+ = 0; i < 6; i += 2) {
+
+65 
+ušt16_t
+ 
+wÜd
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 2, 
+i
+);
+
+66 
+mac
+[
+i
+] = 
+wÜd
+ & 0xFF;
+
+67 
+mac
+[
+i
+ + 1] = (
+wÜd
+ >> 8) & 0xFF;
+
+71 ià(
+mac
+[0] == 0x00 && mac[1] == 0x00 && mac[2] == 0x00) {
+
+73 
+	`LOG_DEBUG
+("3Com: Reading MAC from EEPROM");
+
+75 
+i
+ = 0; i < 3; i++) {
+
+76 
+ušt16_t
+ 
+wÜd
+ = 
+	`»ad_“´om
+(
+ißddr
+, 0x0A + 
+i
+);
+
+77 
+mac
+[
+i
+ * 2] = (
+wÜd
+ >> 8) & 0xFF;
+
+78 
+mac
+[
+i
+ * 2 + 1] = 
+wÜd
+ & 0xFF;
+
+83 
+	`memıy
+(
+ùx
+->
+ba£
+.
+mac_addr
+, 
+mac
+, 6);
+
+85 
+	`LOG_INFO
+("3Com: MAC‡ddress %02X:%02X:%02X:%02X:%02X:%02X",
+
+86 
+mac
+[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+88  
+SUCCESS
+;
+
+89 
+	}
+}
+
+94 
+	$cÚfigu»_medŸ
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+96 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+97 
+ušt16_t
+ 
+medŸ_¡©us
+;
+
+98 
+ušt32_t
+ 
+cÚfig
+;
+
+101 
+	`£Ëù_wšdow
+(
+ißddr
+, 3);
+
+104 
+ùx
+->
+avaabË_medŸ
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 3, 
+WN3_OPTIONS
+);
+
+107 
+cÚfig
+ = 
+	`wšdow_»ad32
+(
+ißddr
+, 3, 
+WN3_CONFIG
+);
+
+110 
+	`£Ëù_wšdow
+(
+ißddr
+, 4);
+
+111 
+medŸ_¡©us
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 4, 
+WN4_MEDIA
+);
+
+114 ià(
+ùx
+->
+avaabË_medŸ
+ & 0x01) {
+
+116 
+ùx
+->
+medŸ_¡©us
+ = media_status;
+
+117 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 10;
+
+118 
+	`LOG_INFO
+("3Com: 10BaseT selected");
+
+121 ià(
+ùx
+->
+avaabË_medŸ
+ & 0x08) {
+
+123 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 100;
+
+124 
+	`LOG_INFO
+("3Com: 100BaseTX selected");
+
+128 ià(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_MII
+) {
+
+130 
+	`LOG_INFO
+("3Com: MII PHY detected,‡ttempting‡uto-negotiation");
+
+132 
+ušt16_t
+ 
+mii_¡©us
+ = 
+	`mdio_»ad
+(
+ißddr
+, 24, 1);
+
+134 ià(
+mii_¡©us
+ & 0x0020) {
+
+135 
+ušt16_t
+ 
+mii_·¹Ãr
+ = 
+	`mdio_»ad
+(
+ißddr
+, 24, 5);
+
+138 ià(
+mii_·¹Ãr
+ & 0x0100) {
+
+139 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 100;
+
+140 
+ùx
+->
+fuÎ_du¶ex
+ = 1;
+
+141 
+	`LOG_INFO
+("3Com: Negotiated 100Mbps full-duplex");
+
+142 } ià(
+mii_·¹Ãr
+ & 0x0080) {
+
+143 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 100;
+
+144 
+ùx
+->
+fuÎ_du¶ex
+ = 0;
+
+145 
+	`LOG_INFO
+("3Com: Negotiated 100Mbps half-duplex");
+
+146 } ià(
+mii_·¹Ãr
+ & 0x0040) {
+
+147 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 10;
+
+148 
+ùx
+->
+fuÎ_du¶ex
+ = 1;
+
+149 
+	`LOG_INFO
+("3Com: Negotiated 10Mbps full-duplex");
+
+151 
+ùx
+->
+ba£
+.
+lšk_¥“d
+ = 10;
+
+152 
+ùx
+->
+fuÎ_du¶ex
+ = 0;
+
+153 
+	`LOG_INFO
+("3Com: Negotiated 10Mbps half-duplex");
+
+159 ià(
+ùx
+->
+fuÎ_du¶ex
+) {
+
+161 
+	`£Ëù_wšdow
+(
+ißddr
+, 3);
+
+162 
+ušt16_t
+ 
+mac_ù¾
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 3, 
+WN3_MAC_CTRL
+);
+
+163 
+mac_ù¾
+ |= 0x0020;
+
+164 
+	`wšdow_wr™e16
+(
+ißddr
+, 3, 
+WN3_MAC_CTRL
+, 
+mac_ù¾
+);
+
+167  
+SUCCESS
+;
+
+168 
+	}
+}
+
+173 
+	$š™_hw_checksum
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+175 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+176 
+»suÉ
+;
+
+178 ià(!(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_HWCKSM
+)) {
+
+179  
+SUCCESS
+;
+
+182 
+	`LOG_INFO
+("3Com: Enabling hardware checksumming");
+
+185 
+»suÉ
+ = 
+	`hw_checksum_š™
+(
+CHECKSUM_MODE_AUTO
+);
+
+186 ià(
+»suÉ
+ !ğ
+HW_CHECKSUM_SUCCESS
+) {
+
+187 
+	`LOG_WARNING
+("3Com: FaedØš™Ÿlizchecksum subsy¡em: %d", 
+»suÉ
+);
+
+188  
+SUCCESS
+;
+
+192 
+»suÉ
+ = 
+	`hw_checksum_cÚfigu»_nic
+((
+nic_cÚ‹xt_t
+ *)
+ùx
+, 
+CHECKSUM_MODE_HARDWARE
+);
+
+193 ià(
+»suÉ
+ !ğ
+HW_CHECKSUM_SUCCESS
+) {
+
+194 
+	`LOG_WARNING
+("3Com: FaedØcÚfigu» h¬dw¬checksummšg: %d", 
+»suÉ
+);
+
+196 
+	`hw_checksum_cÚfigu»_nic
+((
+nic_cÚ‹xt_t
+ *)
+ùx
+, 
+CHECKSUM_MODE_SOFTWARE
+);
+
+200 
+	`£Ëù_wšdow
+(
+ißddr
+, 7);
+
+203 
+ušt16_t
+ 
+cÚfig
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+);
+
+204 
+cÚfig
+ |= 0x0003;
+
+205 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+, 
+cÚfig
+);
+
+208 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_VLAN_TYPE
+, 0x8100);
+
+211 
+ušt16_t
+ 
+desc_ù¾
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 7, 
+WN7_DESC_CTRL
+);
+
+212 
+desc_ù¾
+ |= 0x0030;
+
+213 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_DESC_CTRL
+, 
+desc_ù¾
+);
+
+215 
+ùx
+->
+ba£
+.
+hw_checksum
+ = 1;
+
+216 
+ùx
+->
+checksum_’abËd
+ = 1;
+
+218 
+	`LOG_INFO
+("3Com: Hardware checksummingƒnabled for Cyclone/Tornado");
+
+220  
+SUCCESS
+;
+
+221 
+	}
+}
+
+226 
+	$»£t_h¬dw¬e
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+228 
+ušt16_t
+ 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+229 
+timeout
+;
+
+231 
+	`LOG_DEBUG
+("3Com: Resetting hardware");
+
+234 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+TÙ®Re£t
+ | 0xFF);
+
+237 
+timeout
+ = 100;
+
+238 
+timeout
+ > 0) {
+
+239 ià(!(
+	`šw
+(
+ißddr
+ + 
+EL3_CMD
+è& 
+CMD_IN_PROGRESS
+)) {
+
+242 
+	`d–ay_ms
+(10);
+
+243 
+timeout
+--;
+
+246 ià(
+timeout
+ == 0) {
+
+247 
+	`LOG_ERROR
+("3Com: Hardware„esetimeout");
+
+248  
+ERROR_TIMEOUT
+;
+
+252 
+	`d–ay_ms
+(10);
+
+254  
+SUCCESS
+;
+
+255 
+	}
+}
+
+263 
+	$š™_3com_pci
+(
+nic_d‘eù_šfo_t
+ *
+šfo
+)
+
+265 
+pci_3com_cÚ‹xt_t
+ *
+ùx
+;
+
+266 
+»suÉ
+;
+
+268 ià(!
+šfo
+) {
+
+269  
+ERROR_INVALID_PARAMETER
+;
+
+272 
+	`LOG_INFO
+("3Com: Initializing %s NIC‡t I/O 0x%04X",
+
+273 
+	`g‘_nic_ty³_¡ršg
+(
+šfo
+->
+nic_ty³
+), info->
+io_ba£
+);
+
+276 
+ùx
+ = (
+pci_3com_cÚ‹xt_t
+ *)
+	`mem_®loc
+((pci_3com_context_t));
+
+277 ià(!
+ùx
+) {
+
+278 
+	`LOG_ERROR
+("3Com: Failedo‡llocate context");
+
+279  
+ERROR_NO_MEMORY
+;
+
+282 
+	`mem£t
+(
+ùx
+, 0, (
+pci_3com_cÚ‹xt_t
+));
+
+285 
+ùx
+->
+ba£
+.
+io_ba£
+ = 
+šfo
+->io_base;
+
+286 
+ùx
+->
+ba£
+.
+œq
+ = 
+šfo
+->irq;
+
+287 
+ùx
+->
+ba£
+.
+nic_ty³
+ = 
+šfo
+->nic_type;
+
+290 
+ùx
+->
+g’”©iÚ
+ = 
+šfo
+->
+pci_šfo
+.generation;
+
+291 
+ùx
+->
+ÿ·b™›s
+ = 
+šfo
+->
+pci_šfo
+.
+hw_ÿ·b™›s
+;
+
+294 
+»suÉ
+ = 
+	`»£t_h¬dw¬e
+(
+ùx
+);
+
+295 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+296 
+	`mem_ä“
+(
+ùx
+);
+
+297  
+»suÉ
+;
+
+301 
+	`»£t_wšdow_Œackšg
+(
+ùx
+->
+ba£
+.
+io_ba£
+);
+
+304 
+»suÉ
+ = 
+	`»ad_mac_add»ss
+(
+ùx
+);
+
+305 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+306 
+	`mem_ä“
+(
+ùx
+);
+
+307  
+»suÉ
+;
+
+311 
+»suÉ
+ = 
+	`cÚfigu»_medŸ
+(
+ùx
+);
+
+312 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+313 
+	`mem_ä“
+(
+ùx
+);
+
+314  
+»suÉ
+;
+
+318 ià(
+ùx
+->
+g’”©iÚ
+ & (
+IS_BOOMERANG
+ | 
+IS_CYCLONE
+ | 
+IS_TORNADO
+)) {
+
+320 
+coh”’cy_ª®ysis_t
+ 
+ª®ysis
+;
+
+321 
+	`ª®yze_ÿche_coh”’cy
+(&
+ª®ysis
+);
+
+322 
+ùx
+->
+ba£
+.
+ÿche_t›r
+ = 
+ª®ysis
+.
+£Ëùed_t›r
+;
+
+323 
+	`LOG_INFO
+("3Com: Cachcoh”’cy›¸%d s–eùed", 
+ùx
+->
+ba£
+.
+ÿche_t›r
+);
+
+326 
+ùx
+->
+ba£
+.
+ÿche_t›r
+ = 
+CACHE_TIER_4_FALLBACK
+;
+
+330 ià(
+ùx
+->
+g’”©iÚ
+ & 
+IS_VORTEX
+) {
+
+332 
+»suÉ
+ = 
+	`vÜ‹x_š™_pio
+(
+ùx
+);
+
+333 } ià(
+ùx
+->
+g’”©iÚ
+ & (
+IS_BOOMERANG
+ | 
+IS_CYCLONE
+ | 
+IS_TORNADO
+)) {
+
+335 
+»suÉ
+ = 
+	`boom”ªg_š™_dma
+(
+ùx
+);
+
+338 ià(
+ùx
+->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+)) {
+
+339 
+	`š™_hw_checksum
+(
+ùx
+);
+
+342 ià(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_NWAY
+) {
+
+343 
+æow_cÚŒŞ_cÚfig_t
+ 
+fc_cÚfig
+ = {
+
+344 .
+’abËd
+ = 1,
+
+345 .
+mode
+ = 
+FLOW_CONTROL_MODE_AUTO
+,
+
+346 .
+·u£_time
+ = 100,
+
+347 .
+high_w©”m¬k
+ = 80,
+
+348 .
+low_w©”m¬k
+ = 20
+
+351 
+æow_cÚŒŞ_cÚ‹xt_t
+ *
+fc_ùx
+ = (æow_cÚŒŞ_cÚ‹xt_ˆ*)
+	`mem_®loc
+((flow_control_context_t));
+
+352 ià(
+fc_ùx
+) {
+
+353 
+»suÉ
+ = 
+	`æow_cÚŒŞ_š™
+(
+fc_ùx
+, (
+nic_cÚ‹xt_t
+ *)
+ùx
+, &
+fc_cÚfig
+);
+
+354 ià(
+»suÉ
+ =ğ
+FLOW_CONTROL_SUCCESS
+) {
+
+355 
+ùx
+->
+æow_cÚŒŞ_ùx
+ = 
+fc_ùx
+;
+
+356 
+	`LOG_INFO
+("3Com: Flow controlƒnabled for %s",
+
+357 
+	`g‘_g’”©iÚ_¡ršg
+(
+ùx
+->
+g’”©iÚ
+));
+
+359 
+	`mem_ä“
+(
+fc_ùx
+);
+
+365 
+	`LOG_ERROR
+("3Com: UnknowÀg’”©iÚ 0x%02X", 
+ùx
+->
+g’”©iÚ
+);
+
+366 
+»suÉ
+ = 
+ERROR_NOT_SUPPORTED
+;
+
+369 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+370 
+	`mem_ä“
+(
+ùx
+);
+
+371  
+»suÉ
+;
+
+375 
+	`outw
+(
+ùx
+->
+ba£
+.
+io_ba£
+ + 
+EL3_CMD
+,
+
+376 
+CMD_SET_RX_FILTER
+ | 
+RX_FILTER_STATION
+ | 
+RX_FILTER_BROADCAST
+);
+
+379 
+	`outw
+(
+ùx
+->
+ba£
+.
+io_ba£
+ + 
+EL3_CMD
+, 
+CMD_STATS_ENABLE
+);
+
+382 
+»suÉ
+ = 
+	`­¶y_³rfÜmªû_İtimiz©iÚs
+(
+ùx
+);
+
+383 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+384 
+	`LOG_WARNING
+("3Com: Some…erformance optimizations could‚ot be‡pplied");
+
+389 
+šfo
+->
+driv”_cÚ‹xt
+ = 
+ùx
+;
+
+391 
+	`LOG_INFO
+("3Com: Initialization complete - %s mode, %d Mbps %s-duplex",
+
+392 (
+ùx
+->
+g’”©iÚ
+ & 
+IS_VORTEX
+) ? "PIO" : "DMA",
+
+393 
+ùx
+->
+ba£
+.
+lšk_¥“d
+,
+
+394 
+ùx
+->
+fuÎ_du¶ex
+ ? "full" : "half");
+
+396  
+SUCCESS
+;
+
+397 
+	}
+}
+
+405 
+	$shutdown_3com_pci
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+407 
+ušt16_t
+ 
+ißddr
+;
+
+409 ià(!
+ùx
+) {
+
+410  
+ERROR_INVALID_PARAMETER
+;
+
+413 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+415 
+	`LOG_INFO
+("3Com: Shu‰šg dowÀNIC‡ˆI/O 0x%04X", 
+ißddr
+);
+
+418 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+S‘IÁrEnb
+ | 0);
+
+421 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+TxDi§bË
+);
+
+422 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+RxDi§bË
+);
+
+425 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+TÙ®Re£t
+ | 0xFF);
+
+428 ià(
+ùx
+->
+tx_ršg
+) {
+
+429 
+	`mem_ä“
+(
+ùx
+->
+tx_ršg
+);
+
+431 ià(
+ùx
+->
+rx_ršg
+) {
+
+432 
+	`mem_ä“
+(
+ùx
+->
+rx_ršg
+);
+
+436 
+	`mem_ä“
+(
+ùx
+);
+
+438  
+SUCCESS
+;
+
+439 
+	}
+}
+
+444 cÚ¡ * 
+	$g‘_g’”©iÚ_¡ršg
+(
+ušt8_t
+ 
+g’”©iÚ
+)
+
+446 ià(
+g’”©iÚ
+ & 
+IS_VORTEX
+)  "Vortex";
+
+447 ià(
+g’”©iÚ
+ & 
+IS_BOOMERANG
+)  "Boomerang";
+
+448 ià(
+g’”©iÚ
+ & 
+IS_CYCLONE
+)  "Cyclone";
+
+449 ià(
+g’”©iÚ
+ & 
+IS_TORNADO
+)  "Tornado";
+
+451 
+	}
+}
+
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_performance.c
+
+13 
+	~"../../šşude/3com_pci.h
+"
+
+14 
+	~"../../šşude/h¬dw¬e.h
+"
+
+15 
+	~"../../šşude/loggšg.h
+"
+
+16 
+	~"../../šşude/ıu_d‘eù.h
+"
+
+17 
+	~<dos.h
+>
+
+18 
+	~<¡ršg.h
+>
+
+21 
+	#INT_COAL_TIMER_US
+ 200
+
+	)
+
+22 
+	#INT_COAL_FRAMES
+ 8
+
+	)
+
+23 
+	#DMA_BURST_SIZE
+ 128
+
+	)
+
+24 
+	#PREFETCH_SIZE
+ 64
+
+	)
+
+27 
+	#OPT_USE_REP_MOVSD
+ 0x01
+
+	)
+
+28 
+	#OPT_USE_PREFETCH
+ 0x02
+
+	)
+
+29 
+	#OPT_USE_PIPELINE
+ 0x04
+
+	)
+
+31 
+ušt8_t
+ 
+	gıu_İt_æags
+ = 0;
+
+36 
+	$d‘eù_ıu_İtimiz©iÚs
+()
+
+38 
+ıu_šfo_t
+ 
+ıu_šfo
+;
+
+41 
+	`d‘eù_ıu
+(&
+ıu_šfo
+);
+
+43 
+	`LOG_INFO
+("3Com: D‘eùed CPU: %s", 
+ıu_šfo
+.
+v’dÜ_¡ršg
+);
+
+46 ià(
+ıu_šfo
+.
+ty³
+ >ğ
+CPU_TYPE_386
+) {
+
+47 
+ıu_İt_æags
+ |ğ
+OPT_USE_REP_MOVSD
+;
+
+48 
+	`LOG_INFO
+("3Com: Enabled 32-bit memory operations");
+
+51 ià(
+ıu_šfo
+.
+ty³
+ >ğ
+CPU_TYPE_486
+) {
+
+52 
+ıu_İt_æags
+ |ğ
+OPT_USE_PREFETCH
+;
+
+53 
+	`LOG_INFO
+("3Com: Enabled cache…refetch optimizations");
+
+56 ià(
+ıu_šfo
+.
+ty³
+ >ğ
+CPU_TYPE_PENTIUM
+) {
+
+57 
+ıu_İt_æags
+ |ğ
+OPT_USE_PIPELINE
+;
+
+58 
+	`LOG_INFO
+("3Com: Enabled…ipeline optimizations");
+
+60 
+	}
+}
+
+70 
+	$cÚfigu»_š‹¼u±_cßËscšg
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+72 
+ušt16_t
+ 
+ißddr
+;
+
+74 ià(!
+ùx
+) {
+
+75  
+ERROR_INVALID_PARAMETER
+;
+
+79 ià(!(
+ùx
+->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+))) {
+
+80  
+SUCCESS
+;
+
+83 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+85 
+	`LOG_INFO
+("3Com: Configuring interrupt coalescing");
+
+88 
+	`£Ëù_wšdow
+(
+ißddr
+, 7);
+
+91 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_INT_TIMER
+, 
+INT_COAL_TIMER_US
+);
+
+94 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_INT_COUNT
+, 
+INT_COAL_FRAMES
+);
+
+97 
+ušt16_t
+ 
+cÚfig
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+);
+
+98 
+cÚfig
+ |= 0x0100;
+
+99 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+, 
+cÚfig
+);
+
+101 
+ùx
+->
+št_m™ig©iÚ_’abËd
+ = 1;
+
+103 
+	`LOG_INFO
+("3Com: Interrupt coalescingƒnabled (%d us / %d frames)",
+
+104 
+INT_COAL_TIMER_US
+, 
+INT_COAL_FRAMES
+);
+
+106  
+SUCCESS
+;
+
+107 
+	}
+}
+
+115 
+	$cÚfigu»_dma_bur¡_mode
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+117 
+ušt16_t
+ 
+ißddr
+;
+
+118 
+ušt32_t
+ 
+dma_ù¾
+;
+
+120 ià(!
+ùx
+) {
+
+121  
+ERROR_INVALID_PARAMETER
+;
+
+125 ià(
+ùx
+->
+g’”©iÚ
+ & 
+IS_VORTEX
+) {
+
+126  
+SUCCESS
+;
+
+129 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+131 
+	`LOG_INFO
+("3Com: Configuring DMA burst mode");
+
+134 
+dma_ù¾
+ = 
+	`šl
+(
+ißddr
+ + 0x20);
+
+137 ià(
+ùx
+->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+)) {
+
+139 
+dma_ù¾
+ &= ~0x00001F00;
+
+140 
+dma_ù¾
+ |= 0x00000800;
+
+141 
+	`LOG_INFO
+("3Com: DMA burst size seto 128 bytes");
+
+144 
+dma_ù¾
+ &= ~0x00001F00;
+
+145 
+dma_ù¾
+ |= 0x00000400;
+
+146 
+	`LOG_INFO
+("3Com: DMA burst size seto 64 bytes");
+
+150 
+dma_ù¾
+ |= 0x00000001;
+
+153 
+	`ou
+(
+ißddr
+ + 0x20, 
+dma_ù¾
+);
+
+155  
+SUCCESS
+;
+
+156 
+	}
+}
+
+165 
+	$İtimized_memıy
+(*
+de¡
+, cÚ¡ *
+¤c
+, 
+size_t
+ 
+couÁ
+)
+
+167 ià(
+ıu_İt_æags
+ & 
+OPT_USE_REP_MOVSD
+) {
+
+169 
+__asm
+ {
+
+170 
+push
+ 
+es
+
+
+171 
+push
+ 
+ds
+
+
+173 
+Ës
+ 
+di
+, 
+de¡
+
+
+174 
+lds
+ 
+si
+, 
+¤c
+
+
+175 
+mov
+ 
+cx
+, 
+couÁ
+
+
+177 ; 
+Align
+ 
+to
+ 4-
+by‹
+ 
+bound¬y
+
+
+178 
+mov
+ 
+ax
+, 
+cx
+
+
+179 
+ªd
+ 
+ax
+, 3
+
+180 
+shr
+ 
+cx
+, 2 ; 
+Divide
+ 
+by
+ 4 
+DWORD
+ 
+couÁ
+
+
+182 ; 
+U£
+ 32-
+b™
+ 
+´efix
+ 
+MOVSD
+
+
+183 
+db
+ 0x66 ; 
+O³¿nd
+ 
+size
+ 
+´efix
+
+
+184 
+»p
+ 
+movsd
+ ; 
+Move
+ 
+DWORDs
+
+
+186 ; 
+Cİy
+ 
+»maššg
+ 
+by‹s
+
+
+187 
+mov
+ 
+cx
+, 
+ax
+
+
+188 
+»p
+ 
+movsb
+
+
+190 
+pİ
+ 
+ds
+
+
+191 
+pİ
+ 
+es
+
+
+195 
+	`memıy
+(
+de¡
+, 
+¤c
+, 
+couÁ
+);
+
+197 
+	}
+}
+
+205 
+	$cÚfigu»_·ck‘_´eãtch
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+207 
+ušt16_t
+ 
+ißddr
+;
+
+209 ià(!
+ùx
+) {
+
+210  
+ERROR_INVALID_PARAMETER
+;
+
+214 ià(!(
+ùx
+->
+g’”©iÚ
+ & 
+IS_TORNADO
+)) {
+
+215  
+SUCCESS
+;
+
+218 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+220 
+	`LOG_INFO
+("3Com: Configuring…acket…refetch");
+
+223 
+	`£Ëù_wšdow
+(
+ißddr
+, 7);
+
+226 
+ušt16_t
+ 
+cÚfig
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+);
+
+227 
+cÚfig
+ |= 0x0200;
+
+228 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_CONFIG
+, 
+cÚfig
+);
+
+231 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_PREFETCH_SIZE
+, 
+PREFETCH_SIZE
+);
+
+233 
+	`LOG_INFO
+("3Com: Pack‘…»ãtchƒÇbËd (%d by‹s)", 
+PREFETCH_SIZE
+);
+
+235  
+SUCCESS
+;
+
+236 
+	}
+}
+
+244 
+	$­¶y_³rfÜmªû_İtimiz©iÚs
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+246 
+»suÉ
+;
+
+248 ià(!
+ùx
+) {
+
+249  
+ERROR_INVALID_PARAMETER
+;
+
+252 
+	`LOG_INFO
+("3Com: Applying…erformance optimizations for %s",
+
+253 
+	`g‘_g’”©iÚ_¡ršg
+(
+ùx
+->
+g’”©iÚ
+));
+
+256 
+	`d‘eù_ıu_İtimiz©iÚs
+();
+
+259 
+»suÉ
+ = 
+	`cÚfigu»_š‹¼u±_cßËscšg
+(
+ùx
+);
+
+260 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+261 
+	`LOG_WARNING
+("3Com: Failedo configure interrupt coalescing");
+
+265 
+»suÉ
+ = 
+	`cÚfigu»_dma_bur¡_mode
+(
+ùx
+);
+
+266 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+267 
+	`LOG_WARNING
+("3Com: Failedo configure DMA burst mode");
+
+271 
+»suÉ
+ = 
+	`cÚfigu»_·ck‘_´eãtch
+(
+ùx
+);
+
+272 ià(
+»suÉ
+ !ğ
+SUCCESS
+) {
+
+273 
+	`LOG_WARNING
+("3Com: Failedo configure…acket…refetch");
+
+276 
+	`LOG_INFO
+("3Com: Performance optimizations‡pplied");
+
+278  
+SUCCESS
+;
+
+279 
+	}
+}
+
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_power.c
+
+13 
+	~"../../šşude/3com_pci.h
+"
+
+14 
+	~"../../šşude/h¬dw¬e.h
+"
+
+15 
+	~"../../šşude/loggšg.h
+"
+
+16 
+	~<dos.h
+>
+
+19 
+	#PM_CTRL
+ 0xE0
+
+	)
+
+20 
+	#PM_STATUS
+ 0xE4
+
+	)
+
+21 
+	#WOL_CTRL
+ 0xF0
+
+	)
+
+22 
+	#WOL_PATTERN
+ 0xF4
+
+	)
+
+25 
+	#PM_STATE_D0
+ 0x00
+
+	)
+
+26 
+	#PM_STATE_D1
+ 0x01
+
+	)
+
+27 
+	#PM_STATE_D2
+ 0x02
+
+	)
+
+28 
+	#PM_STATE_D3
+ 0x03
+
+	)
+
+29 
+	#PM_PME_ENABLE
+ 0x0100
+
+	)
+
+30 
+	#PM_PME_STATUS
+ 0x8000
+
+	)
+
+33 
+	#WOL_MAGIC_ENABLE
+ 0x0001
+
+	)
+
+34 
+	#WOL_PATTERN_ENABLE
+ 0x0002
+
+	)
+
+35 
+	#WOL_LINK_ENABLE
+ 0x0004
+
+	)
+
+36 
+	#WOL_BROADCAST_EN
+ 0x0008
+
+	)
+
+45 
+	$cÚfigu»_wake_Ú_Ïn
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+ušt16_t
+ 
+wŞ_modes
+)
+
+47 
+ušt16_t
+ 
+ißddr
+;
+
+48 
+ušt16_t
+ 
+wŞ_ù¾
+;
+
+50 ià(!
+ùx
+) {
+
+51  
+ERROR_INVALID_PARAMETER
+;
+
+55 ià(!(
+ùx
+->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+)) &&
+
+56 !(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_CB_FNS
+)) {
+
+57 
+	`LOG_INFO
+("3Com: Wake-on-LAN‚ot supported on %s",
+
+58 
+	`g‘_g’”©iÚ_¡ršg
+(
+ùx
+->
+g’”©iÚ
+));
+
+59  
+ERROR_NOT_SUPPORTED
+;
+
+62 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+64 
+	`LOG_INFO
+("3Com: Configuring Wake-on-LAN");
+
+67 
+	`£Ëù_wšdow
+(
+ißddr
+, 7);
+
+70 
+wŞ_ù¾
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 7, 
+WN7_WOL_CTRL
+);
+
+73 
+wŞ_ù¾
+ &ğ~(
+WOL_MAGIC_ENABLE
+ | 
+WOL_PATTERN_ENABLE
+ |
+
+74 
+WOL_LINK_ENABLE
+ | 
+WOL_BROADCAST_EN
+);
+
+77 ià(
+wŞ_modes
+ & 
+WOL_MODE_MAGIC
+) {
+
+78 
+wŞ_ù¾
+ |ğ
+WOL_MAGIC_ENABLE
+;
+
+79 
+	`LOG_INFO
+("3Com: Enabled magic…acket wake");
+
+82 ià(
+wŞ_modes
+ & 
+WOL_MODE_PATTERN
+) {
+
+83 
+wŞ_ù¾
+ |ğ
+WOL_PATTERN_ENABLE
+;
+
+84 
+	`LOG_INFO
+("3Com: Enabled…attern match wake");
+
+87 ià(
+wŞ_modes
+ & 
+WOL_MODE_LINK
+) {
+
+88 
+wŞ_ù¾
+ |ğ
+WOL_LINK_ENABLE
+;
+
+89 
+	`LOG_INFO
+("3Com: Enabled†ink change wake");
+
+92 ià(
+wŞ_modes
+ & 
+WOL_MODE_BROADCAST
+) {
+
+93 
+wŞ_ù¾
+ |ğ
+WOL_BROADCAST_EN
+;
+
+94 
+	`LOG_INFO
+("3Com: Enabled broadcast wake");
+
+98 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_WOL_CTRL
+, 
+wŞ_ù¾
+);
+
+101 
+ušt16_t
+ 
+pm_ù¾
+ = 
+	`špw
+(
+ißddr
+ + 
+PM_CTRL
+);
+
+102 
+pm_ù¾
+ |ğ
+PM_PME_ENABLE
+;
+
+103 
+	`ouw
+(
+ißddr
+ + 
+PM_CTRL
+, 
+pm_ù¾
+);
+
+105 
+ùx
+->
+wŞ_’abËd
+ = (
+wŞ_modes
+ != 0);
+
+107  
+SUCCESS
+;
+
+108 
+	}
+}
+
+119 
+	$£t_wŞ_·‰”n
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, cÚ¡ 
+ušt8_t
+ *
+·‰”n
+,
+
+120 cÚ¡ 
+ušt8_t
+ *
+mask
+, 
+ušt16_t
+ 
+Ëngth
+)
+
+122 
+ušt16_t
+ 
+ißddr
+;
+
+123 
+i
+;
+
+125 ià(!
+ùx
+ || !
+·‰”n
+ || !
+mask
+ || 
+Ëngth
+ > 128) {
+
+126  
+ERROR_INVALID_PARAMETER
+;
+
+129 ià(!(
+ùx
+->
+wŞ_’abËd
+)) {
+
+130 
+	`LOG_ERROR
+("3Com: WOL‚otƒnabled");
+
+131  
+ERROR_NOT_INITIALIZED
+;
+
+134 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+136 
+	`LOG_INFO
+("3Com: S‘tšg WOL…©‹º (%d by‹s)", 
+Ëngth
+);
+
+139 
+	`£Ëù_wšdow
+(
+ißddr
+, 7);
+
+142 
+i
+ = 0; i < 
+Ëngth
+; i++) {
+
+143 
+	`oub
+(
+ißddr
+ + 
+WOL_PATTERN
+ + 
+i
+, 
+·‰”n
+[i]);
+
+147 
+i
+ = 0; i < (
+Ëngth
+ + 7) / 8; i++) {
+
+148 
+	`oub
+(
+ißddr
+ + 
+WOL_PATTERN
+ + 128 + 
+i
+, 
+mask
+[i]);
+
+152 
+	`wšdow_wr™e16
+(
+ißddr
+, 7, 
+WN7_WOL_PATTERN_LEN
+, 
+Ëngth
+);
+
+154  
+SUCCESS
+;
+
+155 
+	}
+}
+
+164 
+	$£t_pow”_¡©e
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+ušt8_t
+ 
+pow”_¡©e
+)
+
+166 
+ušt16_t
+ 
+ißddr
+;
+
+167 
+ušt16_t
+ 
+pm_ù¾
+;
+
+169 ià(!
+ùx
+) {
+
+170  
+ERROR_INVALID_PARAMETER
+;
+
+173 ià(
+pow”_¡©e
+ > 
+PM_STATE_D3
+) {
+
+174 
+	`LOG_ERROR
+("3Com: Inv®id…ow” s‹ %d", 
+pow”_¡©e
+);
+
+175  
+ERROR_INVALID_PARAMETER
+;
+
+179 ià(!(
+ùx
+->
+g’”©iÚ
+ & (
+IS_CYCLONE
+ | 
+IS_TORNADO
+))) {
+
+180  
+ERROR_NOT_SUPPORTED
+;
+
+183 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+185 
+	`LOG_INFO
+("3Com: S‘tšg…ow” s‹ØD%d", 
+pow”_¡©e
+);
+
+188 
+pm_ù¾
+ = 
+	`špw
+(
+ißddr
+ + 
+PM_CTRL
+);
+
+191 
+pm_ù¾
+ &= ~0x0003;
+
+194 
+pm_ù¾
+ |ğ
+pow”_¡©e
+;
+
+197 
+pow”_¡©e
+) {
+
+198 
+PM_STATE_D0
+:
+
+200 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+Pow”Up
+);
+
+203 
+PM_STATE_D1
+:
+
+204 
+PM_STATE_D2
+:
+
+206 ià(
+ùx
+->
+wŞ_’abËd
+) {
+
+207 
+pm_ù¾
+ |ğ
+PM_PME_ENABLE
+;
+
+211 
+PM_STATE_D3
+:
+
+213 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+Pow”Down
+);
+
+214 ià(
+ùx
+->
+wŞ_’abËd
+) {
+
+215 
+pm_ù¾
+ |ğ
+PM_PME_ENABLE
+;
+
+221 
+	`ouw
+(
+ißddr
+ + 
+PM_CTRL
+, 
+pm_ù¾
+);
+
+223 
+ùx
+->
+pow”_¡©e
+ =…ower_state;
+
+225  
+SUCCESS
+;
+
+226 
+	}
+}
+
+235 
+	$hªdË_ÿrdbus_pow”_ev’t
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+ušt8_t
+ 
+ev’t
+)
+
+237 ià(!
+ùx
+) {
+
+238  
+ERROR_INVALID_PARAMETER
+;
+
+242 ià(!(
+ùx
+->
+ÿ·b™›s
+ & 
+HAS_CB_FNS
+)) {
+
+243  
+SUCCESS
+;
+
+246 
+	`LOG_INFO
+("3Com: Hªdlšg C¬dBu pow”ƒv’ˆ0x%02X", 
+ev’t
+);
+
+248 
+ev’t
+) {
+
+249 
+CB_EVENT_SUSPEND
+:
+
+251 
+	`LOG_INFO
+("3Com: CardBus suspend„equested");
+
+254 
+ùx
+->
+§ved_pow”_¡©e
+ = ctx->
+pow”_¡©e
+;
+
+257 
+	`£t_pow”_¡©e
+(
+ùx
+, 
+PM_STATE_D2
+);
+
+260 
+CB_EVENT_RESUME
+:
+
+262 
+	`LOG_INFO
+("3Com: CardBus„esume„equested");
+
+265 
+	`£t_pow”_¡©e
+(
+ùx
+, ctx->
+§ved_pow”_¡©e
+);
+
+268 ià(
+ùx
+->
+§ved_pow”_¡©e
+ =ğ
+PM_STATE_D0
+) {
+
+270 
+	`outw
+(
+ùx
+->
+ba£
+.
+io_ba£
+ + 
+EL3_CMD
+, 
+TxEÇbË
+);
+
+271 
+	`outw
+(
+ùx
+->
+ba£
+.
+io_ba£
+ + 
+EL3_CMD
+, 
+RxEÇbË
+);
+
+275 
+CB_EVENT_REMOVE
+:
+
+277 
+	`LOG_INFO
+("3Com: CardBus„emoval detected");
+
+280 
+	`£t_pow”_¡©e
+(
+ùx
+, 
+PM_STATE_D3
+);
+
+284 
+	`LOG_WARNING
+("3Com: UnknowÀC¬dBu ev’ˆ0x%02X", 
+ev’t
+);
+
+288  
+SUCCESS
+;
+
+289 
+	}
+}
+
+298 
+	$g‘_pow”_¡©us
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+pow”_¡©us_t
+ *
+¡©us
+)
+
+300 
+ušt16_t
+ 
+ißddr
+;
+
+301 
+ušt16_t
+ 
+pm_¡©us
+;
+
+303 ià(!
+ùx
+ || !
+¡©us
+) {
+
+304  
+ERROR_INVALID_PARAMETER
+;
+
+307 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+310 
+pm_¡©us
+ = 
+	`špw
+(
+ißddr
+ + 
+PM_STATUS
+);
+
+313 
+¡©us
+->
+pow”_¡©e
+ = 
+ùx
+->power_state;
+
+314 
+¡©us
+->
+wŞ_’abËd
+ = 
+ùx
+->wol_enabled;
+
+315 
+¡©us
+->
+pme_¡©us
+ = (
+pm_¡©us
+ & 
+PM_PME_STATUS
+) ? 1 : 0;
+
+318 ià(
+¡©us
+->
+pme_¡©us
+) {
+
+319 
+	`LOG_INFO
+("3Com: PME# wakeƒvent detected");
+
+322 
+	`ouw
+(
+ißddr
+ + 
+PM_STATUS
+, 
+PM_PME_STATUS
+);
+
+325  
+SUCCESS
+;
+
+326 
+	}
+}
+
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex.c
+
+14 
+	~"../../šşude/3com_pci.h
+"
+
+15 
+	~"../../šşude/h¬dw¬e.h
+"
+
+16 
+	~"../../šşude/·ck‘.h
+"
+
+17 
+	~"../../šşude/loggšg.h
+"
+
+18 
+	~"../../šşude/commÚ.h
+"
+
+19 
+	~<dos.h
+>
+
+20 
+	~<¡ršg.h
+>
+
+23 
+	#VORTEX_TX_PIO_DATA
+ 0x00
+
+	)
+
+24 
+	#VORTEX_TX_STATUS
+ 0x1B
+
+	)
+
+25 
+	#VORTEX_TX_FREE
+ 0x1C
+
+	)
+
+26 
+	#VORTEX_RX_PIO_DATA
+ 0x00
+
+	)
+
+27 
+	#VORTEX_RX_STATUS
+ 0x18
+
+	)
+
+28 
+	#VORTEX_INT_STATUS
+ 0x0E
+
+	)
+
+31 
+	#CMD_TX_ENABLE
+ (9<<11)
+
+	)
+
+32 
+	#CMD_RX_ENABLE
+ (4<<11)
+
+	)
+
+33 
+	#CMD_TX_RESET
+ (11<<11)
+
+	)
+
+34 
+	#CMD_RX_RESET
+ (5<<11)
+
+	)
+
+35 
+	#CMD_ACK_INTR
+ (13<<11)
+
+	)
+
+36 
+	#CMD_SET_RX_FILTER
+ (16<<11)
+
+	)
+
+39 
+	#TX_STATUS_COMPLETE
+ 0x80
+
+	)
+
+40 
+	#TX_STATUS_ERROR
+ 0x10
+
+	)
+
+41 
+	#RX_STATUS_COMPLETE
+ 0x8000
+
+	)
+
+42 
+	#RX_STATUS_ERROR
+ 0x4000
+
+	)
+
+45 
+	#INT_TX_COMPLETE
+ 0x0004
+
+	)
+
+46 
+	#INT_RX_COMPLETE
+ 0x0001
+
+	)
+
+47 
+	#INT_TX_ERROR
+ 0x0008
+
+	)
+
+48 
+	#INT_RX_ERROR
+ 0x0002
+
+	)
+
+51 
+	#TX_FIFO_THRESHOLD
+ 1536
+
+	)
+
+52 
+	#RX_FIFO_THRESHOLD
+ 1514
+
+	)
+
+64 
+	$vÜ‹x_¡¬t_xm™
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+, 
+·ck‘_t
+ *
+pkt
+)
+
+66 
+ušt16_t
+ 
+ißddr
+;
+
+67 
+ušt16_t
+ 
+Ën
+;
+
+68 
+ušt16_t
+ 
+ä“_¥aû
+;
+
+69 
+timeout
+;
+
+70 
+ušt16_t
+ 
+¡©us
+;
+
+72 ià(!
+ùx
+ || !
+pkt
+ || !pkt->
+d©a
+) {
+
+73 
+	`LOG_ERROR
+("Vortex: Invalid…arameters forransmission");
+
+74  
+ERROR_INVALID_PARAMETER
+;
+
+77 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+78 
+Ën
+ = 
+pkt
+->
+Ëngth
+;
+
+81 ià(
+Ën
+ < 
+MIN_PACKET_SIZE
+ ||†’ > 
+MAX_PACKET_SIZE
+) {
+
+82 
+	`LOG_ERROR
+("VÜ‹x: Inv®id…ack‘†’gth %d", 
+Ën
+);
+
+83  
+ERROR_INVALID_PARAMETER
+;
+
+87 
+ä“_¥aû
+ = 
+	`špw
+(
+ißddr
+ + 
+VORTEX_TX_FREE
+);
+
+90 
+timeout
+ = 1000;
+
+91 
+ä“_¥aû
+ < (
+Ën
+ + 4è&& 
+timeout
+ > 0) {
+
+92 
+	`d–ay_us
+(10);
+
+93 
+ä“_¥aû
+ = 
+	`špw
+(
+ißddr
+ + 
+VORTEX_TX_FREE
+);
+
+94 
+timeout
+--;
+
+97 ià(
+timeout
+ == 0) {
+
+98 
+	`LOG_ERROR
+("Vortex: TX FIFOimeout -‚o space‡vailable");
+
+99 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_”rÜs
+++;
+
+100  
+ERROR_TIMEOUT
+;
+
+104 
+	`di§bË
+();
+
+107 
+	`ouw
+(
+ißddr
+ + 
+VORTEX_TX_PIO_DATA
+, 
+Ën
+);
+
+108 
+	`ouw
+(
+ißddr
+ + 
+VORTEX_TX_PIO_DATA
+, 0);
+
+112 
+ušt16_t
+ *
+d©a16
+ = (ušt16_ˆ*)
+pkt
+->
+d©a
+;
+
+113 
+ušt16_t
+ 
+wÜds
+ = (
+Ën
+ + 1) >> 1;
+
+115 
+ušt16_t
+ 
+i
+ = 0; i < 
+wÜds
+; i++) {
+
+116 
+	`ouw
+(
+ißddr
+ + 
+VORTEX_TX_PIO_DATA
+, 
+d©a16
+[
+i
+]);
+
+120 ià(
+Ën
+ & 1) {
+
+121 
+	`ouw
+(
+ißddr
+ + 
+VORTEX_TX_PIO_DATA
+, 0);
+
+125 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_ENABLE
+);
+
+128 
+	`’abË
+();
+
+131 
+ùx
+->
+tx_·ck‘s
+++;
+
+132 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_·ck‘s
+++;
+
+133 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_by‹s
+ +ğ
+Ën
+;
+
+135 
+	`LOG_DEBUG
+("VÜ‹x: T¿nsm™‹d %d by‹…ack‘", 
+Ën
+);
+
+137  
+SUCCESS
+;
+
+138 
+	}
+}
+
+149 
+	$vÜ‹x_rx
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+151 
+ušt16_t
+ 
+ißddr
+;
+
+152 
+ušt16_t
+ 
+rx_¡©us
+;
+
+153 
+ušt16_t
+ 
+·ck‘_Ën
+;
+
+154 
+·ck‘s_»ûived
+ = 0;
+
+155 
+·ck‘_t
+ *
+pkt
+;
+
+157 ià(!
+ùx
+) {
+
+158  
+ERROR_INVALID_PARAMETER
+;
+
+161 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+166 
+rx_¡©us
+ = 
+	`špw
+(
+ißddr
+ + 
+VORTEX_RX_STATUS
+);
+
+169 ià(!(
+rx_¡©us
+ & 
+RX_STATUS_COMPLETE
+)) {
+
+174 
+·ck‘_Ën
+ = 
+rx_¡©us
+ & 0x1FFF;
+
+177 ià(
+rx_¡©us
+ & 
+RX_STATUS_ERROR
+) {
+
+178 
+	`LOG_ERROR
+("VÜ‹x: RXƒ¼Ü stu 0x%04X", 
+rx_¡©us
+);
+
+179 
+ùx
+->
+rx_”rÜs
+++;
+
+180 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_”rÜs
+++;
+
+183 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_RESET
+);
+
+188 ià(
+·ck‘_Ën
+ < 
+MIN_PACKET_SIZE
+ ||…ack‘_ËÀ> 
+MAX_PACKET_SIZE
+) {
+
+189 
+	`LOG_ERROR
+("VÜ‹x: Inv®id RX…ack‘†’gth %d", 
+·ck‘_Ën
+);
+
+190 
+ùx
+->
+rx_”rÜs
+++;
+
+191 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_”rÜs
+++;
+
+194 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_RESET
+);
+
+199 
+pkt
+ = 
+	`·ck‘_®loc
+(
+·ck‘_Ën
+);
+
+200 ià(!
+pkt
+) {
+
+201 
+	`LOG_ERROR
+("Vortex: Failedo‡llocate…acket buffer");
+
+202 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_drİ³d
+++;
+
+205 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_RESET
+);
+
+210 
+ušt16_t
+ *
+d©a16
+ = (ušt16_ˆ*)
+pkt
+->
+d©a
+;
+
+211 
+ušt16_t
+ 
+wÜds
+ = (
+·ck‘_Ën
+ + 1) >> 1;
+
+213 
+ušt16_t
+ 
+i
+ = 0; i < 
+wÜds
+; i++) {
+
+214 
+d©a16
+[
+i
+] = 
+	`špw
+(
+ißddr
+ + 
+VORTEX_RX_PIO_DATA
+);
+
+218 
+pkt
+->
+Ëngth
+ = 
+·ck‘_Ën
+;
+
+221 
+ùx
+->
+rx_·ck‘s
+++;
+
+222 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_·ck‘s
+++;
+
+223 
+ùx
+->
+ba£
+.
+¡©s
+.
+rx_by‹s
+ +ğ
+·ck‘_Ën
+;
+
+226 ià(
+ùx
+->
+ba£
+.
+»ûive_ÿÎback
+) {
+
+227 
+ùx
+->
+ba£
+.
+	`»ûive_ÿÎback
+(&ùx->ba£, 
+pkt
+);
+
+230 
+	`·ck‘_ä“
+(
+pkt
+);
+
+233 
+·ck‘s_»ûived
+++;
+
+236 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_ACK_INTR
+ | 
+INT_RX_COMPLETE
+);
+
+239 
+	`LOG_DEBUG
+("VÜ‹x: Reûived %d…ack‘s", 
+·ck‘s_»ûived
+);
+
+241  
+·ck‘s_»ûived
+;
+
+242 
+	}
+}
+
+253 
+	$vÜ‹x_š‹¼u±
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+255 
+ušt16_t
+ 
+ißddr
+;
+
+256 
+ušt16_t
+ 
+št_¡©us
+;
+
+257 
+hªdËd
+ = 0;
+
+259 ià(!
+ùx
+) {
+
+260  
+ERROR_INVALID_PARAMETER
+;
+
+263 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+266 
+št_¡©us
+ = 
+	`špw
+(
+ißddr
+ + 
+INT_STATUS
+);
+
+269 ià(
+št_¡©us
+ & 
+INT_TX_COMPLETE
+) {
+
+270 
+ušt16_t
+ 
+tx_¡©us
+ = 
+	`šp
+(
+ißddr
+ + 
+VORTEX_TX_STATUS
+);
+
+272 ià(
+tx_¡©us
+ & 
+TX_STATUS_ERROR
+) {
+
+273 
+	`LOG_ERROR
+("VÜ‹x: TXƒ¼Ü stu 0x%02X", 
+tx_¡©us
+);
+
+274 
+ùx
+->
+tx_”rÜs
+++;
+
+275 
+ùx
+->
+ba£
+.
+¡©s
+.
+tx_”rÜs
+++;
+
+278 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_RESET
+);
+
+279 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_ENABLE
+);
+
+283 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_ACK_INTR
+ | 
+INT_TX_COMPLETE
+);
+
+284 
+hªdËd
+ = 1;
+
+288 ià(
+št_¡©us
+ & 
+INT_RX_COMPLETE
+) {
+
+289 
+	`vÜ‹x_rx
+(
+ùx
+);
+
+290 
+hªdËd
+ = 1;
+
+294 ià(
+št_¡©us
+ & (
+INT_TX_ERROR
+ | 
+INT_RX_ERROR
+)) {
+
+295 
+	`LOG_ERROR
+("VÜ‹x: E¼Ü iÁ”ru± 0x%04X", 
+št_¡©us
+);
+
+297 ià(
+št_¡©us
+ & 
+INT_TX_ERROR
+) {
+
+298 
+ùx
+->
+tx_”rÜs
+++;
+
+299 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_RESET
+);
+
+300 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_ENABLE
+);
+
+303 ià(
+št_¡©us
+ & 
+INT_RX_ERROR
+) {
+
+304 
+ùx
+->
+rx_”rÜs
+++;
+
+305 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_RESET
+);
+
+306 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_ENABLE
+);
+
+310 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_ACK_INTR
+ | (
+št_¡©us
+ & 0x00FF));
+
+311 
+hªdËd
+ = 1;
+
+314  
+hªdËd
+ ? 
+SUCCESS
+ : 
+ERROR_NOT_FOUND
+;
+
+315 
+	}
+}
+
+326 
+	$vÜ‹x_š™_pio
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+328 
+ušt16_t
+ 
+ißddr
+;
+
+330 ià(!
+ùx
+) {
+
+331  
+ERROR_INVALID_PARAMETER
+;
+
+334 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+336 
+	`LOG_INFO
+("VÜ‹x: In™Ÿlizšg PIO mod© I/O 0x%04X", 
+ißddr
+);
+
+339 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_RESET
+);
+
+340 
+	`d–ay_ms
+(1);
+
+341 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_RESET
+);
+
+342 
+	`d–ay_ms
+(1);
+
+345 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_SET_RX_FILTER
+ | 0x01);
+
+348 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_ENABLE
+);
+
+349 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_ENABLE
+);
+
+352 
+	`ouw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_ACK_INTR
+ | 0xFF);
+
+355 
+ùx
+->
+ba£
+.
+Œªsm™
+ = (
+Œªsm™_func_t
+)
+vÜ‹x_¡¬t_xm™
+;
+
+356 
+ùx
+->
+ba£
+.
+»ûive
+ = (
+»ûive_func_t
+)
+vÜ‹x_rx
+;
+
+357 
+ùx
+->
+ba£
+.
+š‹¼u±_hªdËr
+ = (
+š‹¼u±_func_t
+)
+vÜ‹x_š‹¼u±
+;
+
+359 
+	`LOG_INFO
+("Vortex: PIO mode initialized successfully");
+
+361  
+SUCCESS
+;
+
+362 
+	}
+}
+
+	@/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex_init.c
+
+12 
+	~"../../šşude/3com_pci.h
+"
+
+13 
+	~"../../šşude/h¬dw¬e.h
+"
+
+14 
+	~"../../šşude/loggšg.h
+"
+
+15 
+	~<dos.h
+>
+
+18 
+	#CMD_TX_ENABLE
+ (9<<11)
+
+	)
+
+19 
+	#CMD_RX_ENABLE
+ (4<<11)
+
+	)
+
+20 
+	#CMD_SET_TX_RECLAIM
+ (18<<11)
+
+	)
+
+21 
+	#CMD_SET_RX_EARLY
+ (17<<11)
+
+	)
+
+24 
+	#VORTEX_TX_THRESHOLD
+ 256
+
+	)
+
+25 
+	#VORTEX_RX_THRESHOLD
+ 64
+
+	)
+
+33 
+	$vÜ‹x_š™_pio
+(
+pci_3com_cÚ‹xt_t
+ *
+ùx
+)
+
+35 
+ušt16_t
+ 
+ißddr
+;
+
+37 ià(!
+ùx
+) {
+
+38  
+ERROR_INVALID_PARAMETER
+;
+
+41 
+ißddr
+ = 
+ùx
+->
+ba£
+.
+io_ba£
+;
+
+43 
+	`LOG_INFO
+("VÜ‹x: In™Ÿlizšg PIO mod© I/O 0x%04X", 
+ißddr
+);
+
+46 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_SET_TX_RECLAIM
+ | (
+VORTEX_TX_THRESHOLD
+ >> 2));
+
+49 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_SET_RX_EARLY
+ | (
+VORTEX_RX_THRESHOLD
+ >> 2));
+
+52 
+	`£Ëù_wšdow
+(
+ißddr
+, 3);
+
+55 
+ušt32_t
+ 
+cÚfig
+ = 
+	`wšdow_»ad32
+(
+ißddr
+, 3, 
+WN3_CONFIG
+);
+
+56 
+cÚfig
+ |= 0x00000001;
+
+57 
+	`wšdow_wr™e32
+(
+ißddr
+, 3, 
+WN3_CONFIG
+, 
+cÚfig
+);
+
+60 
+	`£Ëù_wšdow
+(
+ißddr
+, 4);
+
+63 
+ušt16_t
+ 
+fifo_dŸg
+ = 
+	`wšdow_»ad16
+(
+ißddr
+, 4, 
+WN4_FIFO_DIAG
+);
+
+64 ià(
+fifo_dŸg
+ & 0x0400) {
+
+65 
+	`LOG_WARNING
+("Vortex: TX FIFO underrun detected");
+
+67 ià(
+fifo_dŸg
+ & 0x2000) {
+
+68 
+	`LOG_WARNING
+("Vortex: RX FIFO overrun detected");
+
+72 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_TX_ENABLE
+);
+
+73 
+	`outw
+(
+ißddr
+ + 
+EL3_CMD
+, 
+CMD_RX_ENABLE
+);
+
+76 
+ùx
+->
+tx_mode
+ = 
+TX_MODE_PIO
+;
+
+77 
+ùx
+->
+rx_mode
+ = 
+RX_MODE_PIO
+;
+
+80 
+ùx
+->
+tx_ršg
+ = 
+NULL
+;
+
+81 
+ùx
+->
+rx_ršg
+ = 
+NULL
+;
+
+84 
+ùx
+->
+ba£
+.
+tx_hªdËr
+ = (*)
+vÜ‹x_¡¬t_xm™
+;
+
+85 
+ùx
+->
+ba£
+.
+rx_hªdËr
+ = (*)
+vÜ‹x_rx
+;
+
+87 
+	`LOG_INFO
+("Vortex: PIO initialization complete");
+
+89  
+SUCCESS
+;
+
+90 
+	}
+}
+
+	@
+1
+.
+0
+6
+412
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_boomerang.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_init.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_performance.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_power.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex_init.c

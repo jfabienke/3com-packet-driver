@@ -1,0 +1,2101 @@
+{
+  "c_to_asm": {
+    "module_manager.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "memory_manager.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "core_loader.c": {
+      "pragma_aux": [],
+      "externs": [
+        "load_required_modules",
+        "load_optional_modules",
+        "unload_all_modules",
+        "detect_and_configure_nics",
+        "bind_nics_to_modules",
+        "core_main_loop",
+        "packet_interrupt_handler",
+        "timer_callback",
+        "dump_statistics",
+        "dump_module_info",
+        "dump_nic_info",
+        "handle_critical_error",
+        "emergency_shutdown"
+      ],
+      "asm_calls": []
+    },
+    "stress_test.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "app_callback.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hw_recovery.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "abi_validation.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "patch_apply_fixed.c": {
+      "pragma_aux": [],
+      "externs": [
+        "asm_patch_5bytes"
+      ],
+      "asm_calls": [
+        "asm_patch_5bytes",
+        "asm_patch_5bytes",
+        "asm_patch_5bytes"
+      ]
+    },
+    "driver_version.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "patch_apply.c": {
+      "pragma_aux": [],
+      "externs": [
+        "asm_atomic_patch",
+        "asm_flush_prefetch",
+        "asm_measure_pit_ticks"
+      ],
+      "asm_calls": [
+        "asm_atomic_patch",
+        "asm_flush_prefetch",
+        "asm_measure_pit_ticks",
+        "asm_flush_prefetch",
+        "asm_flush_prefetch"
+      ]
+    },
+    "tsr_file_io.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "network_logging.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "cpu_detect.c": {
+      "pragma_aux": [],
+      "externs": [
+        "asm_is_v86_mode",
+        "asm_is_hypervisor",
+        "asm_get_cache_info",
+        "asm_get_cpu_speed",
+        "asm_get_speed_confidence",
+        "asm_has_invariant_tsc"
+      ],
+      "asm_calls": [
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_vendor",
+        "asm_get_cpu_vendor_string",
+        "asm_has_cyrix_extensions",
+        "asm_get_cpu_family",
+        "asm_get_cpu_model",
+        "asm_get_cpu_stepping",
+        "asm_get_cpuid_max_level",
+        "asm_is_v86_mode",
+        "asm_is_hypervisor",
+        "asm_get_cache_info",
+        "asm_get_cpu_speed",
+        "asm_get_speed_confidence",
+        "asm_has_invariant_tsc",
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_vendor",
+        "asm_get_cpu_vendor_string",
+        "asm_get_cpu_family",
+        "asm_get_cpu_model",
+        "asm_get_cpu_stepping",
+        "asm_has_cyrix_extensions",
+        "asm_get_cache_info",
+        "asm_is_hypervisor",
+        "asm_has_invariant_tsc",
+        "asm_get_cpu_speed",
+        "asm_get_speed_confidence"
+      ]
+    },
+    "device_registry.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "nic_detect.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "timer_services.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "tsr_memory.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dos_services.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "centralized_detection.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "discardable.c": {
+      "pragma_aux": [],
+      "externs": [
+        "__init_start",
+        "__init_end"
+      ],
+      "asm_calls": []
+    },
+    "diagnostic_dashboard.c": {
+      "pragma_aux": [],
+      "externs": [
+        "diag_monitor_init",
+        "diag_monitor_generate_report",
+        "stat_analysis_init",
+        "stat_analysis_comprehensive_analysis",
+        "debug_logging_init",
+        "debug_logging_print_dashboard",
+        "error_tracking_init",
+        "error_tracking_print_dashboard",
+        "network_analysis_init",
+        "network_analysis_print_dashboard",
+        "memory_monitor_init",
+        "memory_monitor_print_dashboard",
+        "module_integration_init",
+        "module_integration_auto_register",
+        "module_integration_print_dashboard"
+      ],
+      "asm_calls": []
+    },
+    "memory_monitor.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "debug_logging.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "statistical_analysis.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "module_integration.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "network_analysis.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "error_tracking.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "diagnostic_monitor.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "unified_statistics.c": {
+      "pragma_aux": [],
+      "externs": [
+        "get_system_time"
+      ],
+      "asm_calls": []
+    },
+    "config_interface.c": {
+      "pragma_aux": [],
+      "externs": [
+        "get_system_time"
+      ],
+      "asm_calls": []
+    },
+    "handle_manager.c": {
+      "pragma_aux": [],
+      "externs": [
+        "get_system_time"
+      ],
+      "asm_calls": []
+    },
+    "metrics_core.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "unified_api.c": {
+      "pragma_aux": [],
+      "externs": [
+        "install_packet_driver_interrupt",
+        "uninstall_packet_driver_interrupt",
+        "packet_driver_isr"
+      ],
+      "asm_calls": []
+    },
+    "module_dispatch.c": {
+      "pragma_aux": [],
+      "externs": [
+        "get_system_time"
+      ],
+      "asm_calls": []
+    },
+    "performance_validation.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "benchmarks.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "enhanced_ring_management.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "cache_management.c": {
+      "pragma_aux": [],
+      "externs": [
+        "cache_clflush_line",
+        "cache_wbinvd",
+        "read_cr0_register",
+        "write_cr0_register"
+      ],
+      "asm_calls": []
+    },
+    "nic_vtable_implementations.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "vds_mapping.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "performance_monitor.c": {
+      "pragma_aux": [],
+      "externs": [
+        "perf_measure_isr_execution_time",
+        "perf_get_performance_metrics",
+        "asm_get_cpu_flags",
+        "asm_detect_cpu_type"
+      ],
+      "asm_calls": [
+        "asm_get_cpu_flags",
+        "asm_detect_cpu_type",
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags"
+      ]
+    },
+    "pnp.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_performance.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "api.c": {
+      "pragma_aux": [],
+      "externs": [
+        "packet_deliver_to_handler"
+      ],
+      "asm_calls": []
+    },
+    "arp.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "memory.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_boomerang.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hardware_capabilities.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "runtime_config.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dma_safety.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "tsr_defensive.c": {
+      "pragma_aux": [],
+      "externs": [
+        "asm_check_dos_safe",
+        "asm_check_dos_completely_safe",
+        "asm_dos_safety_init",
+        "asm_check_vector_ownership",
+        "asm_periodic_vector_monitoring",
+        "asm_deferred_add_work",
+        "asm_deferred_process_pending",
+        "asm_deferred_work_pending",
+        "asm_tsr_emergency_recovery",
+        "asm_tsr_validate_integrity"
+      ],
+      "asm_calls": [
+        "asm_check_dos_safe",
+        "asm_check_dos_completely_safe",
+        "asm_dos_safety_init",
+        "asm_check_vector_ownership",
+        "asm_periodic_vector_monitoring",
+        "asm_deferred_add_work",
+        "asm_deferred_process_pending",
+        "asm_deferred_work_pending",
+        "asm_tsr_emergency_recovery",
+        "asm_tsr_validate_integrity",
+        "asm_dos_safety_init",
+        "asm_check_dos_safe",
+        "asm_check_dos_completely_safe",
+        "asm_check_vector_ownership",
+        "asm_periodic_vector_monitoring",
+        "asm_deferred_add_work",
+        "asm_deferred_process_pending",
+        "asm_deferred_work_pending",
+        "asm_tsr_emergency_recovery",
+        "asm_tsr_validate_integrity"
+      ]
+    },
+    "3com_init.c": {
+      "pragma_aux": [],
+      "externs": [
+        "vortex_init_pio",
+        "boomerang_init_dma",
+        "vortex_start_xmit",
+        "vortex_rx",
+        "vortex_interrupt_handler",
+        "apply_performance_optimizations"
+      ],
+      "asm_calls": []
+    },
+    "busmaster_test.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "handle_compact.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "media_control.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "error_handling.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hardware.c": {
+      "pragma_aux": [],
+      "externs": [
+        "_3c509b_init",
+        "_3c509b_cleanup",
+        "_3c509b_reset",
+        "_3c509b_send_packet",
+        "_3c509b_receive_packet",
+        "_3c509b_check_interrupt",
+        "_3c509b_handle_interrupt",
+        "_3c509b_self_test",
+        "_3c509b_enable_interrupts",
+        "_3c509b_disable_interrupts",
+        "_3c515_init",
+        "_3c515_cleanup",
+        "_3c515_reset",
+        "_3c515_send_packet",
+        "_3c515_receive_packet",
+        "_3c515_check_interrupt",
+        "_3c515_handle_interrupt",
+        "_3c515_self_test",
+        "_3c515_enable_interrupts",
+        "_3c515_disable_interrupts",
+        "error_handling_init",
+        "create_adapter_error_context"
+      ],
+      "asm_calls": [
+        "asm_3c509b_detect_hardware",
+        "asm_3c509b_init_hardware",
+        "asm_3c509b_reset_hardware",
+        "asm_3c509b_configure_media",
+        "asm_3c509b_set_station_address",
+        "asm_3c509b_enable_interrupts",
+        "asm_3c509b_start_transceiver",
+        "asm_3c509b_stop_transceiver",
+        "asm_3c509b_get_link_status",
+        "asm_3c509b_get_statistics",
+        "asm_3c509b_set_multicast",
+        "asm_3c509b_set_promiscuous",
+        "asm_3c515_detect_hardware",
+        "asm_3c515_init_hardware",
+        "asm_3c515_reset_hardware",
+        "asm_3c515_configure_media",
+        "asm_3c515_set_station_address",
+        "asm_3c515_enable_interrupts",
+        "asm_3c515_start_transceiver",
+        "asm_3c515_stop_transceiver",
+        "asm_3c515_get_link_status",
+        "asm_3c515_get_statistics",
+        "asm_3c515_set_multicast",
+        "asm_3c515_set_promiscuous"
+      ]
+    },
+    "init.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_vortex_init.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "routing.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_smc_opt.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "chipset_detect.c": {
+      "pragma_aux": [],
+      "externs": [
+        "is_mca_system",
+        "is_eisa_system",
+        "nic_detect_mca_3c523",
+        "nic_detect_mca_3c529",
+        "nic_detect_eisa_3c592",
+        "nic_detect_eisa_3c597",
+        "nic_detect_vlb",
+        "get_ps2_model"
+      ],
+      "asm_calls": []
+    },
+    "interrupt_mitigation.c": {
+      "pragma_aux": [],
+      "externs": [
+        "_3c515_check_interrupt",
+        "_3c509b_check_interrupt_batched",
+        "_3c515_process_single_event",
+        "_3c509b_process_single_event"
+      ],
+      "asm_calls": []
+    },
+    "buffer_autoconfig.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c509b.c": {
+      "pragma_aux": [],
+      "externs": [
+        "direct_pio_outsw",
+        "send_packet_direct_pio_asm",
+        "direct_pio_header_and_payload"
+      ],
+      "asm_calls": [
+        "send_packet_direct_pio_asm",
+        "send_packet_direct_pio_asm"
+      ]
+    },
+    "init_capabilities.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "diagnostics.c": {
+      "pragma_aux": [],
+      "externs": [
+        "arp_get_table_size",
+        "arp_get_table_size",
+        "protected_hardware_operation",
+        "get_available_memory",
+        "print_recovery_statistics"
+      ],
+      "asm_calls": []
+    },
+    "ansi_demo.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hw_checksum.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "stats.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "timestamp.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "nic_buffer_pools.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ring_statistics.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_power.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "eeprom.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dma.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "cpu_database.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "packet_ops.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "console.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "deferred_work.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "static_routing.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "main.c": {
+      "pragma_aux": [],
+      "externs": [
+        "driver_entry",
+        "cpu_detect_main",
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_family",
+        "asm_get_cpuid_max_level",
+        "asm_is_v86_mode"
+      ],
+      "asm_calls": [
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_family",
+        "asm_get_cpuid_max_level",
+        "asm_is_v86_mode",
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_vendor",
+        "asm_get_cpu_vendor_string",
+        "asm_has_cyrix_extensions",
+        "asm_get_cpu_family",
+        "asm_get_cpuid_max_level",
+        "asm_is_v86_mode"
+      ]
+    },
+    "multi_nic_coord.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "xms_buffer_migration.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dma_self_test.c": {
+      "pragma_aux": [],
+      "externs": [
+        "is_vds_available",
+        "get_vds_version"
+      ],
+      "asm_calls": []
+    },
+    "promisc.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "config.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "buffer_alloc.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "chipset_database.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "packet_ops_capabilities.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c515_enhanced.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_windows.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "performance_enabler.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "nic_display.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "smc_patches.c": {
+      "pragma_aux": [],
+      "externs": [
+        "flush_instruction_prefetch",
+        "flush_prefetch_at_address",
+        "asm_flush_prefetch_near_jump",
+        "asm_atomic_patch_bytes",
+        "asm_save_interrupt_state",
+        "asm_restore_interrupt_state"
+      ],
+      "asm_calls": [
+        "asm_flush_prefetch_near_jump",
+        "asm_atomic_patch_bytes",
+        "asm_save_interrupt_state",
+        "asm_restore_interrupt_state",
+        "asm_save_interrupt_state",
+        "asm_restore_interrupt_state",
+        "asm_atomic_patch_bytes",
+        "asm_flush_prefetch_near_jump",
+        "asm_restore_interrupt_state",
+        "asm_save_interrupt_state",
+        "asm_atomic_patch_bytes",
+        "asm_restore_interrupt_state"
+      ]
+    },
+    "error_recovery.c": {
+      "pragma_aux": [],
+      "externs": [
+        "timeout_init",
+        "timeout_cleanup",
+        "timeout_set_operation",
+        "timeout_check_expired",
+        "timeout_reset",
+        "timeout_hardware_io",
+        "timeout_wait_ready",
+        "timeout_dma_complete",
+        "retry_with_backoff"
+      ],
+      "asm_calls": []
+    },
+    "safe_hardware_probe.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ring_buffer_pools.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "nic_capabilities.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c515.c": {
+      "pragma_aux": [],
+      "externs": [
+        "dma_stall_engines",
+        "dma_unstall_engines",
+        "dma_start_transfer",
+        "dma_stop_transfer",
+        "dma_get_engine_status",
+        "dma_prepare_coherent_buffer",
+        "dma_complete_coherent_buffer"
+      ],
+      "asm_calls": []
+    },
+    "flow_control.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "logging.c": {
+      "pragma_aux": [],
+      "externs": [
+        "hardware_get_nic_count",
+        "hardware_get_nic"
+      ],
+      "asm_calls": []
+    },
+    "umb_loader.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "xms_detect.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3com_vortex.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "cache_coherency.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "nic_init.c": {
+      "pragma_aux": [],
+      "externs": [
+        "pnp_init_system",
+        "pnp_detect_nics",
+        "hardware_set_pnp_detection_results",
+        "flow_control_init_nic",
+        "pnp_detect_nics",
+        "pnp_filter_by_type"
+      ],
+      "asm_calls": []
+    },
+    "device_capabilities.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ptask_module.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ptask_module_old.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ptask_api_old.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ptask_api.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c589_duplicate_removed.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c509b_duplicate_removed.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "boomtex_module.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "memory_mgmt.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "boomtex_pci_detection.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "network_lib.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c900tpo.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "boomtex_api.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "ethrlink3.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "corkscrew.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dma_rings_duplicate_removed.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "3c515_duplicate_removed.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "bounce_buffers.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "corkscrw_module_old.c": {
+      "pragma_aux": [],
+      "externs": [
+        "corkscrw_isr"
+      ],
+      "asm_calls": []
+    },
+    "corkscrw_module.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "module_init_helper.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "xms_service.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "mempool_module.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "dma_buffers.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hello_module.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "integration.c": {
+      "pragma_aux": [],
+      "externs": [
+        "ptask_init_pcmcia",
+        "ptask_cleanup_pcmcia",
+        "boomtex_init_cardbus",
+        "boomtex_cleanup_cardbus"
+      ],
+      "asm_calls": []
+    },
+    "point_enabler.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "cis_parser.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "hotplug.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "socket_services.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "validate_abi.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "module_loader.c": {
+      "pragma_aux": [],
+      "externs": [],
+      "asm_calls": []
+    },
+    "loader_main.c": {
+      "pragma_aux": [],
+      "externs": [
+        "load_module",
+        "unload_module"
+      ],
+      "asm_calls": []
+    }
+  },
+  "asm_to_c": {
+    "packet_api_smc.asm": {
+      "exports": [
+        "packet_driver_isr",
+        "packet_send_fast",
+        "packet_receive_fast"
+      ],
+      "c_calls": [],
+      "externals": [
+        "handle_table",
+        "callback_chains",
+        "packet_buffer"
+      ]
+    },
+    "hardware_smc.asm": {
+      "exports": [
+        "hw_read_register",
+        "hw_write_register",
+        "hw_read_eeprom",
+        "hw_reset_nic",
+        "hw_read_block",
+        "hw_write_block",
+        "reset"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "defensive_integration.asm": {
+      "exports": [
+        "defensive_init",
+        "defensive_shutdown",
+        "queue_deferred_work",
+        "process_deferred_work",
+        "dos_is_safe",
+        "get_defensive_stats",
+        "enhanced_int28_handler",
+        "enhanced_packet_handler",
+        "deferred_work_queue_add",
+        "deferred_work_queue_process",
+        "deferred_work_queue_count",
+        "send_proper_eoi",
+        "get_irq_for_nic",
+        "check_vector_ownership",
+        "safe_restore_vector",
+        "validate_all_vectors",
+        "emergency_vector_recovery",
+        "periodic_vector_monitoring",
+        "install_amis_handler",
+        "safe_port_wait",
+        "safe_port_wait_clear",
+        "safe_command_wait",
+        "hardware_reset_with_timeout",
+        "log_hardware_timeout",
+        "example_safe_nic_reset",
+        "example_safe_command_send",
+        "place_memory_canaries",
+        "check_memory_canaries",
+        "validate_critical_data",
+        "initialize_data_protection",
+        "periodic_memory_validation",
+        "enhanced_critical_section_demo",
+        "reentrant_critical_section_demo",
+        "safe_shared_data_update",
+        "log_event",
+        "log_irq_event",
+        "flush_log_buffer",
+        "check_irq_vector_integrity"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cpu_optimized.asm": {
+      "exports": [
+        "cpu_detect_optimizations",
+        "cpu_optimized_copy",
+        "cpu_optimized_checksum",
+        "cpu_optimized_memset",
+        "cpu_get_best_copy_func",
+        "cpu_get_performance_metrics",
+        "copy_8086",
+        "checksum_8086",
+        "memset_8086"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "promisc.asm": {
+      "exports": [
+        "_promisc_asm_capture_packet",
+        "_promisc_asm_enable_capture",
+        "_promisc_asm_disable_capture",
+        "_promisc_asm_get_timestamp"
+      ],
+      "c_calls": [],
+      "externals": [
+        "g_promisc_buffer_tail",
+        "g_promisc_buffers",
+        "promisc_capture_packet"
+      ]
+    },
+    "nic_irq_smc.asm": {
+      "exports": [
+        "nic_irq_handler",
+        "nic_3c509_handler",
+        "nic_3c515_handler"
+      ],
+      "c_calls": [],
+      "externals": [
+        "packet_buffer",
+        "packet_process",
+        "statistics"
+      ]
+    },
+    "performance_opt.asm": {
+      "exports": [
+        "perf_init_optimizations",
+        "perf_optimize_lfsr_generation",
+        "perf_optimize_memory_operations",
+        "perf_optimize_interrupt_handling",
+        "perf_measure_isr_execution_time",
+        "perf_get_performance_metrics",
+        "perf_apply_cpu_specific_optimizations",
+        "lfsr_generate_optimized",
+        "lfsr_generate_batch",
+        "lfsr_precompute_table",
+        "memcpy_optimized",
+        "memset_optimized",
+        "memcpy_32bit_aligned",
+        "memcpy_16bit_aligned",
+        "perf_copy_with_66_prefix",
+        "perf_copy_pipeline_optimized",
+        "perf_copy_pentium_optimized",
+        "perf_enable_66_prefix_mode",
+        "perf_get_optimal_copy_size",
+        "interrupt_coalesce_start",
+        "interrupt_coalesce_process",
+        "interrupt_batch_process",
+        "perf_start_measurement",
+        "perf_end_measurement",
+        "perf_calculate_cycles",
+        "flags"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cbtramp.asm": {
+      "exports": [
+        "_call_recv_reg_tramp",
+        "_call_cdecl_tramp"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "nic_irq.asm": {
+      "exports": [
+        "nic_irq_init",
+        "install_nic_irq",
+        "uninstall_nic_irq",
+        "nic_irq_handler_3c509b",
+        "nic_irq_handler_3c515",
+        "nic_irq_handler_3c509b_batched",
+        "nic_irq_handler_3c515_batched",
+        "nic_common_irq_handler",
+        "nic_set_receive_mode",
+        "get_irq_stats",
+        "process_3c509b_packets",
+        "process_3c515_packets",
+        "nic_process_interrupt_batch_3c509b",
+        "nic_process_interrupt_batch_3c515",
+        "check_3c509b_interrupt_source",
+        "check_3c515_interrupt_source",
+        "acknowledge_3c509b_interrupt",
+        "acknowledge_3c515_interrupt",
+        "process_3c509b_packets",
+        "process_3c515_packets",
+        "ENTRY",
+        "send_eoi_master",
+        "send_eoi_slave",
+        "send_eoi_for_irq",
+        "enable_irq_line",
+        "disable_irq_line",
+        "check_stack_canaries",
+        "initialize_stack_canaries",
+        "emergency_canary_response"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "enhanced_irq.asm": {
+      "exports": [
+        "functions",
+        "irq_setup_shared_handler",
+        "irq_install_handler",
+        "irq_remove_handler",
+        "irq_enable_line",
+        "irq_disable_line",
+        "irq_dispatch",
+        "irq_get_handler_info",
+        "irq_update_statistics",
+        "irq_common_handler"
+      ],
+      "c_calls": [],
+      "externals": [
+        "hardware_handle_3c509b_irq",
+        "hardware_handle_3c515_irq"
+      ]
+    },
+    "smc_patches.asm": {
+      "exports": [
+        "flush_instruction_prefetch",
+        "flush_prefetch_at_address",
+        "asm_flush_prefetch_near_jump",
+        "asm_atomic_patch_bytes",
+        "asm_save_interrupt_state",
+        "asm_restore_interrupt_state"
+      ],
+      "c_calls": [],
+      "externals": [
+        "g_patch_manager"
+      ]
+    },
+    "enhanced_hardware.asm": {
+      "exports": [],
+      "c_calls": [],
+      "externals": []
+    },
+    "tsr_memory_opt.asm": {
+      "exports": [
+        "resident_packet_handler",
+        "resident_hardware_isr",
+        "initialize_memory_optimization",
+        "init_hardware_memory_layout",
+        "full_packet_handler",
+        "diagnostics_overlay_entry",
+        "check_stack_depth",
+        "load_packet_handler_overlay",
+        "get_memory_usage_stats",
+        "compact_memory_structures",
+        "resident_code_start",
+        "resident_data_start",
+        "init_code_start",
+        "init_data_start"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "main.asm": {
+      "exports": [
+        "driver_entry",
+        "tsr_main",
+        "install_interrupts",
+        "uninstall_interrupts",
+        "check_driver_loaded",
+        "packet_handler",
+        "dos_idle_handler"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "packet_ops.asm": {
+      "exports": [
+        "packet_ops_init",
+        "packet_copy_fast",
+        "packet_copy_optimized",
+        "packet_copy_64_bytes",
+        "packet_copy_128_bytes",
+        "packet_copy_512_bytes",
+        "packet_copy_1518_bytes",
+        "packet_checksum_ip",
+        "packet_checksum_tcp_udp",
+        "packet_ops_receive",
+        "packet_ops_patch_32bit",
+        "set_packet_optimization",
+        "get_performance_cycles",
+        "read_timestamp_counter",
+        "init_function_tables",
+        "packet_memset_optimized",
+        "packet_copy_aligned_dma",
+        "analyze_copy_parameters",
+        "packet_copy_32bit_optimized",
+        "packet_copy_pipeline_optimized",
+        "packet_copy_cache_optimized",
+        "packet_copy_pentium_agi_aware",
+        "packet_copy_aligned"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "packet_api.asm": {
+      "exports": [
+        "packet_api_init",
+        "packet_int_handler",
+        "api_driver_info",
+        "api_access_type",
+        "api_release_type",
+        "api_send_packet",
+        "api_terminate",
+        "api_get_address",
+        "api_reset_interface",
+        "api_get_parameters",
+        "api_as_send_packet",
+        "api_set_rcv_mode",
+        "api_get_rcv_mode",
+        "api_set_multicast",
+        "api_get_multicast",
+        "api_get_statistics",
+        "api_set_address",
+        "packet_deliver_to_handler",
+        "optimal_register_save",
+        "optimal_register_restore",
+        "fast_api_dispatch",
+        "fast_register_restore",
+        "api_performance_metrics",
+        "QoS",
+        "reset",
+        "reset"
+      ],
+      "c_calls": [
+        "packet_send",
+        "pd_get_address",
+        "pd_set_rcv_mode",
+        "pd_get_statistics"
+      ],
+      "externals": []
+    },
+    "tsr_loader.asm": {
+      "exports": [
+        "tsr_loader_start",
+        "tsr_loader_install",
+        "_main"
+      ],
+      "c_calls": [],
+      "externals": [
+        "main_init",
+        "edata",
+        "cpu_detect_init",
+        "patch_init_and_apply",
+        "nic_detect_init"
+      ]
+    },
+    "api.asm": {
+      "exports": [],
+      "c_calls": [],
+      "externals": []
+    },
+    "direct_pio.asm": {
+      "exports": [
+        "direct_pio_init_cpu_detection",
+        "direct_pio_outsw",
+        "send_packet_direct_pio_asm",
+        "direct_pio_header_and_payload",
+        "direct_pio_outsl",
+        "direct_pio_insl",
+        "send_packet_direct_pio_enhanced",
+        "direct_pio_get_optimization_level",
+        "direct_pio_get_cpu_support_info"
+      ],
+      "c_calls": [],
+      "externals": [
+        "asm_detect_cpu_type",
+        "check_cpu_feature"
+      ]
+    },
+    "tsr_c_wrappers.asm": {
+      "exports": [
+        "asm_check_dos_safe",
+        "asm_check_dos_completely_safe",
+        "asm_dos_safety_init",
+        "asm_check_vector_ownership",
+        "asm_periodic_vector_monitoring",
+        "asm_deferred_add_work",
+        "asm_deferred_process_pending",
+        "asm_deferred_work_pending",
+        "asm_tsr_emergency_recovery",
+        "asm_tsr_validate_integrity"
+      ],
+      "c_calls": [],
+      "externals": [
+        "caller_ss",
+        "caller_sp",
+        "critical_nesting",
+        "indos_segment",
+        "indos_offset",
+        "criterr_segment",
+        "criterr_offset",
+        "periodic_vector_monitoring",
+        "deferred_work_queue_add",
+        "deferred_work_queue_process",
+        "deferred_work_queue_count"
+      ]
+    },
+    "hardware.asm": {
+      "exports": [
+        "hardware_init_asm",
+        "hardware_detect_all",
+        "hardware_configure_3c509b",
+        "hardware_configure_3c515",
+        "hardware_read_packet",
+        "hardware_send_packet_asm",
+        "hardware_get_address",
+        "hardware_handle_3c509b_irq",
+        "hardware_handle_3c515_irq",
+        "io_read_byte",
+        "io_write_byte",
+        "io_read_word",
+        "io_write_word",
+        "detect_3c509b",
+        "init_3c509b",
+        "hardware_detect_and_configure",
+        "hardware_get_device_info",
+        "hardware_set_device_state",
+        "hardware_handle_interrupt",
+        "hardware_validate_configuration",
+        "detect_3c509b_device",
+        "detect_3c515_device",
+        "configure_3c509b_device",
+        "configure_3c515_device",
+        "setup_3c509b_irq",
+        "setup_3c515_irq",
+        "reset_3c509b_device",
+        "reset_3c515_device",
+        "read_3c509b_eeprom",
+        "read_3c515_eeprom",
+        "asm_3c515_detect_hardware",
+        "asm_3c515_init_hardware",
+        "asm_3c515_reset_hardware",
+        "asm_3c515_configure_media",
+        "asm_3c515_set_station_address",
+        "asm_3c515_enable_interrupts",
+        "asm_3c515_start_transceiver",
+        "asm_3c515_stop_transceiver",
+        "asm_3c515_get_link_status",
+        "asm_3c515_get_statistics",
+        "asm_3c515_set_multicast",
+        "asm_3c515_set_promiscuous",
+        "dma_stall_engines",
+        "dma_unstall_engines",
+        "dma_start_transfer",
+        "dma_get_engine_status",
+        "dma_prepare_coherent_buffer",
+        "dma_complete_coherent_buffer",
+        "setup_advanced_dma_descriptors",
+        "advanced_dma_interrupt_check",
+        "asm_3c509b_detect_hardware",
+        "asm_3c509b_init_hardware",
+        "asm_3c509b_reset_hardware",
+        "asm_3c509b_configure_media",
+        "asm_3c509b_set_station_address",
+        "asm_3c509b_enable_interrupts",
+        "asm_3c509b_start_transceiver",
+        "asm_3c509b_stop_transceiver",
+        "asm_3c509b_get_link_status",
+        "asm_3c509b_get_statistics",
+        "asm_3c509b_set_multicast",
+        "asm_3c509b_set_promiscuous",
+        "isa_virt_to_phys",
+        "check_isa_dma_boundary",
+        "setup_isa_dma_descriptor",
+        "init_3c515_bus_master",
+        "is_mca_system",
+        "get_ps2_model",
+        "nic_detect_mca_3c523",
+        "nic_detect_mca_3c529",
+        "is_eisa_system",
+        "nic_detect_eisa_3c592",
+        "nic_detect_eisa_3c597",
+        "nic_detect_vlb"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cpu_detect.asm": {
+      "exports": [
+        "cpu_detect_main",
+        "get_cpu_type",
+        "get_cpu_features",
+        "check_cpu_feature",
+        "asm_detect_cpu_type",
+        "asm_get_cpu_flags",
+        "asm_get_cpu_family",
+        "asm_get_cpuid_max_level",
+        "asm_is_v86_mode",
+        "asm_get_cpu_model",
+        "asm_get_cpu_stepping",
+        "asm_get_cpu_vendor",
+        "asm_get_cpu_vendor_string",
+        "asm_has_cyrix_extensions",
+        "asm_get_cache_info",
+        "asm_get_cpu_speed",
+        "asm_get_speed_confidence",
+        "asm_has_invariant_tsc",
+        "asm_has_rdtscp",
+        "asm_is_hypervisor",
+        "detect_386_features",
+        "detect_486_features",
+        "test_cache_type",
+        "detect_486_cache_config",
+        "get_cpu_signature_info",
+        "get_cache_descriptors",
+        "parse_cache_descriptors",
+        "get_brand_string",
+        "get_extended_features",
+        "detect_v86_mode",
+        "get_cpuid_max_level",
+        "detect_clflush_support",
+        "check_wbinvd_safety"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "flow_routing.asm": {
+      "exports": [
+        "flow_routing_init",
+        "flow_lookup",
+        "flow_add",
+        "flow_remove",
+        "flow_age_entries",
+        "flow_get_stats",
+        "hash_calculate",
+        "flow_find_nic",
+        "swap_ip_dxax",
+        "swap_ip_eax",
+        "swap_ip_bswap"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "tsr_common.asm": {
+      "exports": [
+        "umb_segment",
+        "initialize_tsr_defense",
+        "install_packet_api_vector",
+        "queue_deferred_work",
+        "validate_interrupt_vectors",
+        "allocate_protected_memory",
+        "validate_protected_memory",
+        "safe_port_read",
+        "safe_port_write",
+        "validate_driver_integrity",
+        "detect_memory_managers",
+        "check_umb_availability",
+        "attempt_umb_allocation",
+        "restore_allocation_strategy",
+        "relocate_tsr_to_umb",
+        "get_memory_usage_info",
+        "cleanup_umb_allocation"
+      ],
+      "c_calls": [],
+      "externals": [
+        "packet_api_entry"
+      ]
+    },
+    "3com_smc_opt.asm": {
+      "exports": [
+        "packet_header_bswap_486",
+        "packet_header_bswap_p5",
+        "packet_header_bswap_p6",
+        "packet_header_bswap_p4",
+        "checksum_dual_acc_486",
+        "checksum_dual_acc_p5",
+        "checksum_sse2_p4",
+        "descriptor_update_nolock",
+        "isr_dispatch_bsf",
+        "copy_by_size_dispatch",
+        "PATCH_ring_mask",
+        "PATCH_io_base",
+        "PATCH_copy_size"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "timeout_handlers.asm": {
+      "exports": [
+        "timeout_init",
+        "timeout_cleanup",
+        "timeout_set_operation",
+        "timeout_check_expired",
+        "timeout_reset",
+        "timeout_hardware_io",
+        "timeout_wait_ready",
+        "timeout_dma_complete",
+        "timeout_interrupt_wait",
+        "retry_with_backoff",
+        "get_system_ticks"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "routing.asm": {
+      "exports": [],
+      "c_calls": [],
+      "externals": []
+    },
+    "pnp.asm": {
+      "exports": [
+        "pnp_detect_all",
+        "pnp_init_system",
+        "pnp_isolate_devices",
+        "pnp_configure_device",
+        "pnp_find_read_port",
+        "pnp_send_initiation_key",
+        "pnp_read_resource_data",
+        "pnp_get_device_info",
+        "pnp_detect_nics",
+        "pnp_enumerate_devices",
+        "pnp_get_device_resources",
+        "pnp_assign_resources",
+        "pnp_get_lfsr_table",
+        "pnp_generate_lfsr_sequence",
+        "pnp_shutdown_system",
+        "pnp_activate_device",
+        "reset",
+        "variable",
+        "DATA"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cache_ops.asm": {
+      "exports": [
+        "cache_clflush_line",
+        "cache_clflush_safe",
+        "cache_wbinvd",
+        "cache_wbinvd_safe",
+        "cache_invd",
+        "read_cr0_register",
+        "write_cr0_register",
+        "memory_fence",
+        "memory_fence_after_clflush",
+        "store_fence",
+        "load_fence",
+        "detect_cache_mode",
+        "get_current_timestamp"
+      ],
+      "c_calls": [],
+      "externals": [
+        "cpuid_available",
+        "cpu_features",
+        "cache_line_size",
+        "cpu_is_486_plus",
+        "is_v86_mode",
+        "sse2_available",
+        "cpuid_available"
+      ]
+    },
+    "enhanced_pnp.asm": {
+      "exports": [],
+      "c_calls": [],
+      "externals": []
+    },
+    "pic_eoi.asm": {
+      "exports": [
+        "send_eoi",
+        "send_eoi_for_irq",
+        "send_specific_eoi",
+        "mask_irq",
+        "unmask_irq"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "test_suite.asm": {
+      "exports": [
+        "test_suite_main",
+        "test_suite_init",
+        "test_suite_discover_tests",
+        "test_suite_execute_all",
+        "test_suite_register_suite",
+        "test_suite_get_results",
+        "test_suite_cleanup",
+        "test_suite_set_config",
+        "test_suite_handle_error",
+        "test_suite_timeout_check"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "mem_manager_test.asm": {
+      "exports": [
+        "mem_manager_test_init",
+        "mem_manager_test_run",
+        "mem_manager_test_cleanup",
+        "detect_memory_manager",
+        "test_xms_functions",
+        "test_umb_support",
+        "variables"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "performance_bench.asm": {
+      "exports": [
+        "performance_bench_init",
+        "performance_bench_run",
+        "performance_bench_cleanup",
+        "calibrate_timing",
+        "measure_throughput",
+        "measure_latency",
+        "measure_memory_bandwidth",
+        "measure_cpu_utilization"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cpu_compat_test.asm": {
+      "exports": [
+        "cpu_compat_test_init",
+        "cpu_compat_test_run",
+        "cpu_compat_test_cleanup",
+        "detect_cpu_type",
+        "detect_v86_mode",
+        "test_cpu_instructions",
+        "test_cpu_performance_paths"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "unified_interrupt.asm": {
+      "exports": [
+        "_install_packet_driver_interrupt",
+        "_uninstall_packet_driver_interrupt",
+        "_packet_driver_isr"
+      ],
+      "c_calls": [
+        "unified_packet_driver_api"
+      ],
+      "externals": [
+        "unified_packet_driver_api"
+      ]
+    },
+    "pio_lib.asm": {
+      "exports": [
+        "pio_lib_init",
+        "pio_get_interface",
+        "_pio_outb_optimized",
+        "_pio_outw_optimized",
+        "_pio_inb_optimized",
+        "_pio_inw_optimized",
+        "_pio_outsw_optimized",
+        "_pio_insw_optimized",
+        "pio_patch_286_optimizations",
+        "pio_patch_386_optimizations",
+        "pio_patch_486_optimizations",
+        "pio_patch_pentium_optimizations",
+        "flush_prefetch_queue"
+      ],
+      "c_calls": [],
+      "externals": [
+        "cpu_type",
+        "cpu_features"
+      ]
+    },
+    "ptask_isr.asm": {
+      "exports": [
+        "ptask_isr_asm_entry",
+        "ptask_install_isr",
+        "ptask_remove_isr"
+      ],
+      "c_calls": [
+        "ptask_handle_3c509b_interrupt",
+        "ptask_handle_3c589_interrupt",
+        "ptask_handle_ne2000_interrupt"
+      ],
+      "externals": [
+        "g_ptask_context",
+        "ptask_handle_3c509b_interrupt",
+        "ptask_handle_3c589_interrupt",
+        "ptask_handle_ne2000_interrupt",
+        "pio_inw_optimized"
+      ]
+    },
+    "boomtex_isr.asm": {
+      "exports": [
+        "boomtex_isr_asm_entry",
+        "context",
+        "boomtex_patch_386_optimizations",
+        "boomtex_patch_486_optimizations",
+        "boomtex_patch_pentium_optimizations",
+        "flush_prefetch_queue_asm",
+        "update_isr_timing_stats",
+        "boomtex_scan_all_nics",
+        "boomtex_handle_ne2000_interrupt"
+      ],
+      "c_calls": [],
+      "externals": [
+        "g_boomtex_context",
+        "boomtex_3c515tx_interrupt",
+        "boomtex_3c900tpo_interrupt",
+        "boomtex_handle_ne2000_interrupt"
+      ]
+    },
+    "corkscrw_isr.asm": {
+      "exports": [
+        "corkscrw_isr",
+        "isr_install",
+        "isr_remove"
+      ],
+      "c_calls": [],
+      "externals": [
+        "g_nic_context",
+        "corkscrw_process_tx_complete",
+        "corkscrw_process_rx_complete",
+        "pit_timestamp_start",
+        "pit_timestamp_end"
+      ]
+    },
+    "memory_ops.asm": {
+      "exports": [
+        "FUNCTIONS",
+        "mempool_copy_optimized",
+        "mempool_move_optimized",
+        "mempool_set_optimized",
+        "mempool_compare_optimized",
+        "mempool_copy_64kb_safe",
+        "mempool_move_64kb_safe",
+        "mempool_copy_string_safe",
+        "mempool_validate_range"
+      ],
+      "c_calls": [],
+      "externals": []
+    },
+    "cpu_patches.asm": {
+      "exports": [
+        "generate_rep_movsw_patch",
+        "generate_rep_movsd_patch",
+        "generate_pusha_popa_patch",
+        "generate_unrolled_copy_patch",
+        "generate_string_io_patch",
+        "generate_burst_io_patch",
+        "get_patch_template",
+        "get_patch_template_size",
+        "initialize_patch_templates",
+        "asm_atomic_patch_bytes",
+        "asm_flush_prefetch_near_jump"
+      ],
+      "c_calls": [],
+      "externals": []
+    }
+  },
+  "header_usage": {
+    "eeprom.h": [
+      "3c515.c"
+    ],
+    "module_api.h": [
+      "ethrlink3.c",
+      "corkscrew.c",
+      "routing.c",
+      "stats.c"
+    ],
+    "packet_api.h": [
+      "core_loader.c"
+    ],
+    "3c515.h": [
+      "3c515.c"
+    ],
+    "core_loader.h": [
+      "module_manager.c",
+      "memory_manager.c",
+      "core_loader.c"
+    ],
+    "xms_detect.h": [
+      "buffer_autoconfig.c"
+    ],
+    "flow_control.h": [
+      "flow_control.c"
+    ],
+    "logging.h": [
+      "buffer_autoconfig.c",
+      "3c515.c",
+      "flow_control.c"
+    ],
+    "buffer_config.h": [
+      "buffer_autoconfig.c"
+    ],
+    "enhanced_ring_context.h": [
+      "3c515.c",
+      "flow_control.c"
+    ],
+    "memory.h": [
+      "buffer_autoconfig.c",
+      "flow_control.c"
+    ],
+    "interrupt_mitigation.h": [
+      "3c515.c"
+    ],
+    "cpu_detect.h": [
+      "buffer_autoconfig.c"
+    ],
+    "error_handling.h": [
+      "3c515.c"
+    ],
+    "media_control.h": [
+      "3c515.c"
+    ],
+    "hardware.h": [
+      "buffer_autoconfig.c"
+    ],
+    "nic_buffer_pools.h": [
+      "flow_control.c"
+    ],
+    "module_format.h": [
+      "module_manager.c"
+    ]
+  },
+  "orphaned_refs": [
+    {
+      "file": "patch_apply_fixed.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "centralized_detection.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "cache_management.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "3com_boomerang.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "runtime_config.c",
+      "features": [
+        "Runtime Configuration"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "dma_safety.c",
+      "features": [
+        "DMA Safety"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "3com_init.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "3c509b.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "xms_buffer_migration.c",
+      "features": [
+        "DMA Safety"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "dma_self_test.c",
+      "features": [
+        "DMA Safety",
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "chipset_database.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "performance_enabler.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "3c515.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "cache_coherency.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "nic_init.c",
+      "features": [
+        "Cache Coherency"
+      ],
+      "type": "Reference without integration"
+    },
+    {
+      "file": "device_capabilities.c",
+      "features": [
+        "DMA Safety"
+      ],
+      "type": "Reference without integration"
+    }
+  ],
+  "integration_gaps": {
+    "dma_safety": [
+      {
+        "file": "3c515.c",
+        "function": "transmit_packet",
+        "reason": "DMA boundary check needed"
+      },
+      {
+        "file": "packet_ops.c",
+        "function": "dma_receive",
+        "reason": "Cache coherency required"
+      },
+      {
+        "file": "buffer_alloc.c",
+        "function": "allocate_dma_buffer",
+        "reason": "DMA safety validation"
+      }
+    ],
+    "runtime_config": [
+      {
+        "file": "config.c",
+        "function": "load_config",
+        "reason": "Should support runtime changes"
+      },
+      {
+        "file": "media_control.c",
+        "function": "set_media_type",
+        "reason": "Runtime media switching"
+      }
+    ]
+  },
+  "header_corrections": [],
+  "live_files": [
+    "promisc.c",
+    "hardware.c",
+    "media_control.c",
+    "nic_init.c",
+    "packet_api.asm",
+    "buffer_alloc.c",
+    "api.c",
+    "packet_ops.c",
+    "3c509b.c",
+    "nic_irq.asm",
+    "stats.c",
+    "memory.c",
+    "config.c",
+    "3c515.c",
+    "hardware.asm"
+  ],
+  "orphaned_files": [
+    "dma_safety.c",
+    "cache_coherency.c",
+    "runtime_config.c",
+    "xms_buffer_migration.c",
+    "multi_nic_coord.c",
+    "cache_ops.asm",
+    "cache_management.c",
+    "handle_compact.c"
+  ],
+  "pci_files": [
+    "3com_init.c",
+    "3com_power.c",
+    "3com_boomerang.c",
+    "3com_performance.c",
+    "3com_vortex.c",
+    "3c900tpo.c"
+  ]
+}

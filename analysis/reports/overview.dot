@@ -1,0 +1,85 @@
+digraph DriverDependencies {
+    rankdir=LR;
+    node [shape=box];
+    
+    subgraph cluster_live {
+        label="Live Driver Code";
+        color=green;
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "3c509b.c" [color=green];
+        "3c515.c" [color=green];
+        "api.c" [color=green];
+        "buffer_alloc.c" [color=green];
+        "config.c" [color=green];
+        "hardware.asm" [color=green];
+        "hardware.c" [color=green];
+        "media_control.c" [color=green];
+        "memory.c" [color=green];
+        "nic_init.c" [color=green];
+        "nic_irq.asm" [color=green];
+        "packet_api.asm" [color=green];
+        "packet_ops.c" [color=green];
+        "promisc.c" [color=green];
+        "stats.c" [color=green];
+    }
+    
+    subgraph cluster_orphaned {
+        label="Orphaned Features";
+        color=red;
+        style=dashed;
+        fillcolor=lightpink;
+        
+        "cache_coherency.c" [color=red, style=dashed];
+        "cache_management.c" [color=red, style=dashed];
+        "cache_ops.asm" [color=red, style=dashed];
+        "dma_safety.c" [color=red, style=dashed];
+        "handle_compact.c" [color=red, style=dashed];
+        "multi_nic_coord.c" [color=red, style=dashed];
+        "runtime_config.c" [color=red, style=dashed];
+        "xms_buffer_migration.c" [color=red, style=dashed];
+    }
+    
+    subgraph cluster_pci {
+        label="PCI Variants";
+        color=blue;
+        style=dotted;
+        fillcolor=lightblue;
+        
+        "3c900tpo.c" [color=blue, style=dotted];
+        "3com_boomerang.c" [color=blue, style=dotted];
+        "3com_init.c" [color=blue, style=dotted];
+        "3com_performance.c" [color=blue, style=dotted];
+        "3com_power.c" [color=blue, style=dotted];
+        "3com_vortex.c" [color=blue, style=dotted];
+    }
+    
+    // Add cross-references
+    "hardware.c" -> "asm_3c509b_detect_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c509b_init_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c509b_reset_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c509b_configure_media" [label="calls"];
+    "hardware.c" -> "asm_3c509b_set_station_address" [label="calls"];
+    "hardware.c" -> "asm_3c509b_enable_interrupts" [label="calls"];
+    "hardware.c" -> "asm_3c509b_start_transceiver" [label="calls"];
+    "hardware.c" -> "asm_3c509b_stop_transceiver" [label="calls"];
+    "hardware.c" -> "asm_3c509b_get_link_status" [label="calls"];
+    "hardware.c" -> "asm_3c509b_get_statistics" [label="calls"];
+    "hardware.c" -> "asm_3c509b_set_multicast" [label="calls"];
+    "hardware.c" -> "asm_3c509b_set_promiscuous" [label="calls"];
+    "hardware.c" -> "asm_3c515_detect_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c515_init_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c515_reset_hardware" [label="calls"];
+    "hardware.c" -> "asm_3c515_configure_media" [label="calls"];
+    "hardware.c" -> "asm_3c515_set_station_address" [label="calls"];
+    "hardware.c" -> "asm_3c515_enable_interrupts" [label="calls"];
+    "hardware.c" -> "asm_3c515_start_transceiver" [label="calls"];
+    "hardware.c" -> "asm_3c515_stop_transceiver" [label="calls"];
+    "hardware.c" -> "asm_3c515_get_link_status" [label="calls"];
+    "hardware.c" -> "asm_3c515_get_statistics" [label="calls"];
+    "hardware.c" -> "asm_3c515_set_multicast" [label="calls"];
+    "hardware.c" -> "asm_3c515_set_promiscuous" [label="calls"];
+    "3c509b.c" -> "send_packet_direct_pio_asm" [label="calls"];
+    "3c509b.c" -> "send_packet_direct_pio_asm" [label="calls"];
+}

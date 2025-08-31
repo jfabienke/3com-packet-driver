@@ -1,0 +1,83 @@
+# Doxyfile for PCI Variants Analysis
+# Focus on 3Com Vortex/Boomerang PCI drivers
+
+PROJECT_NAME           = "3Com PCI Variants"
+PROJECT_NUMBER         = "PCI Driver Analysis"
+PROJECT_BRIEF          = "3Com Vortex and Boomerang PCI network drivers"
+
+OUTPUT_DIRECTORY       = ../analysis/doxygen/pci_output
+CREATE_SUBDIRS         = YES
+
+INPUT                  = ../../src/c/3com_vortex.c \
+                        ../../src/c/3com_vortex_init.c \
+                        ../../src/c/3com_boomerang.c \
+                        ../../src/c/3com_init.c \
+                        ../../src/c/3com_power.c \
+                        ../../src/c/3com_performance.c \
+                        ../../src/c/3com_windows.c \
+                        ../../src/c/3c900tpo.c \
+                        ../../src/c/pci_access.c \
+                        ../../src/c/pci_config.c \
+                        ../../include/3com_common.h \
+                        ../../include/pci.h \
+                        ../../include/pci_config.h
+
+FILE_PATTERNS          = *.c *.h *.asm
+RECURSIVE              = NO
+EXCLUDE_PATTERNS       = *test* *demo* *duplicate*
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = YES
+
+HTML_OUTPUT            = html_pci
+HTML_FILE_EXTENSION    = .html
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_LOCAL_METHODS  = YES
+EXTRACT_ANON_NSPACES   = YES
+
+SHOW_INCLUDE_FILES     = YES
+SHOW_USED_FILES        = YES
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+
+HAVE_DOT               = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+GROUP_GRAPHS           = YES
+UML_LOOK               = YES
+TEMPLATE_RELATIONS     = YES
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+DOT_IMAGE_FORMAT       = png
+DOT_PATH               = /opt/homebrew/bin
+DOTFILE_DIRS           = 
+DOT_GRAPH_MAX_NODES    = 50
+MAX_DOT_GRAPH_DEPTH    = 0
+DOT_TRANSPARENT        = NO
+DOT_MULTI_TARGETS      = YES
+GENERATE_LEGEND        = YES
+
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES

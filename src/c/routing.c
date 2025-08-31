@@ -1,0 +1,1356 @@
+/**
+ * @file routing.c
+ * @brief Packet routing between multiple NICs
+ *
+ * 3Com Packet Driver - Support for 3C515-TX and 3C509B NICs
+ *
+ * This file is part of the 3Com Packet Driver project.
+ *
+ */
+
+#include "../include/routing.h"
+#include "../include/logging.h"
+#include "../include/static_routing.h"
+#include "../include/common.h"
+#include "../include/cpu_detect.h"
+
+/* Global routing state */
+routing_table_t g_routing_table;
+bridge_table_t g_bridge_table;
+routing_stats_t g_routing_stats;
+bool g_routing_enabled = false;
+
+/* Private global state */
+static bool g_routing_initialized = false;
+static bool g_learning_enabled = true;
+static uint32_t g_aging_time_ms = 300000; /* 5 minutes default */
+
+/* Rate limiting structures */
+typedef struct rate_limit_info {
+    uint32_t packets_per_sec;
+    uint32_t current_count;
+    uint32_t last_reset_time;
+} rate_limit_info_t;
+
+static rate_limit_info_t g_rate_limits[MAX_NICS];
+
+/* Internal helper functions */
+static route_entry_t* routing_find_entry(route_rule_type_t rule_type, const void *rule_data);
+static void routing_remove_entry(route_entry_t *entry);
+static bridge_entry_t* bridge_find_entry(const uint8_t *mac);
+static void bridge_remove_entry(bridge_entry_t *entry);
+static void bridge_add_entry(const uint8_t *mac, uint8_t nic_index);
+static bridge_entry_t* bridge_find_oldest_entry(void);
+static uint32_t routing_get_timestamp(void);
+static bool routing_check_rate_limit_internal(uint8_t nic_index);
+
+/* Routing initialization and cleanup */
+int routing_init(void) {
+    if (g_routing_initialized) {
+        return SUCCESS;
+    }
+    
+    /* Initialize routing table */
+    int result = routing_table_init(&g_routing_table, 256);
+    if (result != SUCCESS) {
+        return result;
+    }
+    
+    /* Initialize bridge table */
+    result = bridge_table_init(&g_bridge_table, 512);
+    if (result != SUCCESS) {
+        routing_table_cleanup(&g_routing_table);
+        return result;
+    }
+    
+    /* Initialize statistics */
+    routing_stats_init(&g_routing_stats);
+    
+    /* Initialize rate limiting */
+    for (int i = 0; i < MAX_NICS; i++) {
+        g_rate_limits[i].packets_per_sec = 0; /* Unlimited by default */
+        g_rate_limits[i].current_count = 0;
+        g_rate_limits[i].last_reset_time = 0;
+    }
+    
+    /* Set default routing configuration */
+    g_routing_table.default_decision = ROUTE_DECISION_FORWARD;
+    g_routing_table.default_nic = 0;
+    g_routing_table.learning_enabled = g_learning_enabled;
+    g_routing_table.learning_timeout = g_aging_time_ms;
+    
+    g_routing_initialized = true;
+    g_routing_enabled = false; /* Must be explicitly enabled */
+    
+    return SUCCESS;
+}
+
+void routing_cleanup(void) {
+    if (!g_routing_initialized) {
+        return;
+    }
+    
+    /* Cleanup routing and bridge tables */
+    routing_table_cleanup(&g_routing_table);
+    bridge_table_cleanup(&g_bridge_table);
+    
+    /* Clear statistics */
+    routing_stats_init(&g_routing_stats);
+    
+    g_routing_initialized = false;
+    g_routing_enabled = false;
+}
+
+int routing_enable(bool enable) {
+    if (!g_routing_initialized) {
+        return ERROR_NOT_FOUND;
+    }
+    
+    g_routing_enabled = enable;
+    return SUCCESS;
+}
+
+bool routing_is_enabled(void) {
+    return g_routing_enabled && g_routing_initialized;
+}
+
+/* Routing table management */
+int routing_table_init(routing_table_t *table, uint16_t max_entries) {
+    if (!table) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    table->entries = NULL;
+    table->entry_count = 0;
+    table->max_entries = max_entries;
+    table->default_decision = ROUTE_DECISION_DROP;
+    table->default_nic = 0;
+    table->learning_enabled = true;
+    table->learning_timeout = 300000; /* 5 minutes */
+    
+    return SUCCESS;
+}
+
+void routing_table_cleanup(routing_table_t *table) {
+    if (!table) {
+        return;
+    }
+    
+    /* Free all route entries with proper linked list traversal */
+    route_entry_t *current = table->entries;
+    while (current) {
+        route_entry_t *next = current->next;
+        
+        /* Zero out the entry before freeing for security */
+        memory_zero(current, sizeof(route_entry_t));
+        memory_free(current);
+        
+        current = next;
+    }
+    
+    /* Clear table state */
+    table->entries = NULL;
+    table->entry_count = 0;
+}
+
+int routing_add_rule(route_rule_type_t rule_type, const void *rule_data,
+                    uint8_t src_nic, uint8_t dest_nic, route_decision_t decision) {
+    if (!rule_data || !routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    if (g_routing_table.entry_count >= g_routing_table.max_entries) {
+        return ERROR_NO_MEMORY;
+    }
+    
+    /* Check if rule already exists to prevent duplicates */
+    route_entry_t *existing = routing_find_entry(rule_type, rule_data);
+    if (existing) {
+        /* Update existing rule */
+        existing->src_nic = src_nic;
+        existing->dest_nic = dest_nic;
+        existing->decision = decision;
+        return SUCCESS;
+    }
+    
+    /* Create new rule entry */
+    route_entry_t *entry = (route_entry_t*)memory_alloc(sizeof(route_entry_t), 
+                                                       MEM_TYPE_DRIVER_DATA, 0);
+    if (!entry) {
+        return ERROR_NO_MEMORY;
+    }
+    
+    /* Initialize entry */
+    entry->rule_type = rule_type;
+    entry->src_nic = src_nic;
+    entry->dest_nic = dest_nic;
+    entry->decision = decision;
+    entry->priority = 100; /* Default priority */
+    entry->flags = 0;
+    entry->packet_count = 0;
+    entry->byte_count = 0;
+    entry->next = NULL;
+    
+    /* Copy rule-specific data */
+    switch (rule_type) {
+        case ROUTE_RULE_MAC_ADDRESS:
+            memory_copy(entry->dest_mac, (const uint8_t*)rule_data, ETH_ALEN);
+            memory_set(entry->mask, 0xFF, ETH_ALEN); /* Full match by default */
+            break;
+        case ROUTE_RULE_ETHERTYPE:
+            entry->ethertype = *(const uint16_t*)rule_data;
+            break;
+        default:
+            memory_free(entry);
+            return ERROR_INVALID_PARAM;
+    }
+    
+    /* Add to routing table */
+    entry->next = g_routing_table.entries;
+    g_routing_table.entries = entry;
+    g_routing_table.entry_count++;
+    
+    return SUCCESS;
+}
+
+/* Bridge learning functions */
+int bridge_table_init(bridge_table_t *table, uint16_t max_entries) {
+    if (!table) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    table->entries = NULL;
+    table->entry_count = 0;
+    table->max_entries = max_entries;
+    table->aging_time = 300000; /* 5 minutes */
+    table->total_lookups = 0;
+    table->successful_lookups = 0;
+    
+    return SUCCESS;
+}
+
+void bridge_table_cleanup(bridge_table_t *table) {
+    if (!table) {
+        return;
+    }
+    
+    /* Free all bridge entries with proper linked list traversal */
+    bridge_entry_t *current = table->entries;
+    while (current) {
+        bridge_entry_t *next = current->next;
+        
+        /* Zero out the entry before freeing for security */
+        memory_zero(current, sizeof(bridge_entry_t));
+        memory_free(current);
+        
+        current = next;
+    }
+    
+    /* Clear table state and reset statistics */
+    table->entries = NULL;
+    table->entry_count = 0;
+    table->total_lookups = 0;
+    table->successful_lookups = 0;
+}
+
+int bridge_learn_mac(const uint8_t *mac, uint8_t nic_index) {
+    if (!mac || !routing_validate_nic(nic_index) || !g_learning_enabled) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Check if MAC already exists */
+    bridge_entry_t *existing = bridge_find_entry(mac);
+    if (existing) {
+        /* Update existing entry */
+        existing->nic_index = nic_index;
+        existing->timestamp = routing_get_timestamp();
+        existing->packet_count++;
+        return SUCCESS;
+    }
+    
+    /* Check table capacity */
+    if (g_bridge_table.entry_count >= g_bridge_table.max_entries) {
+        /* Remove oldest entry to make room (LRU eviction) */
+        bridge_entry_t *oldest = bridge_find_oldest_entry();
+        if (oldest) {
+            bridge_remove_entry(oldest);
+            memory_zero(oldest, sizeof(bridge_entry_t));
+            memory_free(oldest);
+        } else {
+            /* Should not happen, but handle gracefully */
+            return ERROR_NO_MEMORY;
+        }
+    }
+    
+    /* Create new entry */
+    bridge_add_entry(mac, nic_index);
+    
+    return SUCCESS;
+}
+
+bridge_entry_t* bridge_lookup_mac(const uint8_t *mac) {
+    if (!mac) {
+        return NULL;
+    }
+    
+    g_bridge_table.total_lookups++;
+    
+    bridge_entry_t *entry = bridge_find_entry(mac);
+    if (entry) {
+        g_bridge_table.successful_lookups++;
+        return entry;
+    }
+    
+    return NULL;
+}
+
+/* Packet routing decisions */
+route_decision_t routing_decide(const packet_buffer_t *packet, uint8_t src_nic,
+                               uint8_t *dest_nic) {
+    if (!packet || !packet->data || !dest_nic || !routing_is_enabled()) {
+        return ROUTE_DECISION_DROP;
+    }
+    
+    /* Extract and validate Ethernet header */
+    if (packet->length < ETH_HLEN) {
+        g_routing_stats.packets_dropped++;
+        return ROUTE_DECISION_DROP;
+    }
+    
+    const uint8_t *eth_header = packet->data;
+    const uint8_t *dest_mac = eth_header;
+    const uint8_t *src_mac = eth_header + ETH_ALEN;
+    uint16_t ethertype = ntohs(*(uint16_t*)(eth_header + 2 * ETH_ALEN));
+    
+    /* Learn source MAC if learning is enabled */
+    if (g_learning_enabled) {
+        bridge_learn_mac(src_mac, src_nic);
+    }
+    
+    /* Check for broadcast */
+    if (is_broadcast_mac(dest_mac)) {
+        g_routing_stats.packets_broadcast++;
+        return ROUTE_DECISION_BROADCAST;
+    }
+    
+    /* Check for multicast */
+    if (is_multicast_mac(dest_mac)) {
+        g_routing_stats.packets_multicast++;
+        return ROUTE_DECISION_MULTICAST;
+    }
+    
+    /* Try MAC-based routing first */
+    route_decision_t decision = routing_lookup_mac(dest_mac, src_nic, dest_nic);
+    if (decision != ROUTE_DECISION_DROP) {
+        return decision;
+    }
+    
+    /* Try Ethertype-based routing */
+    decision = routing_lookup_ethertype(ethertype, src_nic, dest_nic);
+    if (decision != ROUTE_DECISION_DROP) {
+        return decision;
+    }
+    
+    /* Check bridge learning table */
+    bridge_entry_t *bridge_entry = bridge_lookup_mac(dest_mac);
+    if (bridge_entry) {
+        *dest_nic = bridge_entry->nic_index;
+        
+        /* Avoid routing back to source NIC */
+        if (*dest_nic == src_nic) {
+            return ROUTE_DECISION_DROP;
+        }
+        
+        g_routing_stats.packets_forwarded++;
+        return ROUTE_DECISION_FORWARD;
+    }
+    
+    /* Use default routing decision */
+    *dest_nic = g_routing_table.default_nic;
+    
+    switch (g_routing_table.default_decision) {
+        case ROUTE_DECISION_FORWARD:
+            g_routing_stats.packets_forwarded++;
+            break;
+        case ROUTE_DECISION_BROADCAST:
+            g_routing_stats.packets_broadcast++;
+            break;
+        case ROUTE_DECISION_DROP:
+        default:
+            g_routing_stats.packets_dropped++;
+            break;
+    }
+    
+    return g_routing_table.default_decision;
+}
+
+route_decision_t routing_lookup_mac(const uint8_t *dest_mac, uint8_t src_nic,
+                                   uint8_t *dest_nic) {
+    if (!dest_mac || !dest_nic) {
+        return ROUTE_DECISION_DROP;
+    }
+    
+    /* Search routing table for MAC-based rules */
+    route_entry_t *entry = g_routing_table.entries;
+    while (entry) {
+        if (entry->rule_type == ROUTE_RULE_MAC_ADDRESS) {
+            /* Check if MAC matches with mask */
+            if (routing_mac_match_mask(dest_mac, entry->dest_mac, entry->mask)) {
+                *dest_nic = entry->dest_nic;
+                entry->packet_count++;
+                g_routing_stats.table_lookups++;
+                return entry->decision;
+            }
+        }
+        entry = entry->next;
+    }
+    
+    g_routing_stats.table_lookups++;
+    return ROUTE_DECISION_DROP;
+}
+
+route_decision_t routing_lookup_ethertype(uint16_t ethertype, uint8_t src_nic,
+                                         uint8_t *dest_nic) {
+    if (!dest_nic) {
+        return ROUTE_DECISION_DROP;
+    }
+    
+    /* Search routing table for Ethertype-based rules */
+    route_entry_t *entry = g_routing_table.entries;
+    while (entry) {
+        if (entry->rule_type == ROUTE_RULE_ETHERTYPE) {
+            if (entry->ethertype == ethertype) {
+                *dest_nic = entry->dest_nic;
+                entry->packet_count++;
+                g_routing_stats.table_lookups++;
+                return entry->decision;
+            }
+        }
+        entry = entry->next;
+    }
+    
+    g_routing_stats.table_lookups++;
+    return ROUTE_DECISION_DROP;
+}
+
+/* Packet processing */
+int route_packet(packet_buffer_t *packet, uint8_t src_nic) {
+    if (!packet || !routing_is_enabled()) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Check rate limiting */
+    if (!routing_check_rate_limit_internal(src_nic)) {
+        g_routing_stats.packets_dropped++;
+        return ERROR_BUSY;
+    }
+    
+    uint8_t dest_nic;
+    route_decision_t decision = routing_decide(packet, src_nic, &dest_nic);
+    
+    switch (decision) {
+        case ROUTE_DECISION_FORWARD:
+            return forward_packet(packet, src_nic, dest_nic);
+            
+        case ROUTE_DECISION_BROADCAST:
+            return broadcast_packet(packet, src_nic);
+            
+        case ROUTE_DECISION_MULTICAST:
+            /* Extract destination MAC for multicast routing */\n            const uint8_t *dest_mac = packet->data;\n            return multicast_packet(packet, src_nic, dest_mac);
+            
+        case ROUTE_DECISION_LOOPBACK:
+            /* Implement loopback - packet stays on same interface */
+            LOG_DEBUG("Loopback packet on NIC %d", src_nic);
+            return SUCCESS;
+            
+        case ROUTE_DECISION_DROP:
+        default:
+            return SUCCESS; /* Silently drop */
+    }
+}
+
+int forward_packet(packet_buffer_t *packet, uint8_t src_nic, uint8_t dest_nic) {
+    if (!packet || !routing_validate_nic(dest_nic)) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Avoid forwarding back to source */
+    if (src_nic == dest_nic) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Get destination NIC and send packet */
+    nic_info_t *nic = hardware_get_nic(dest_nic);
+    if (!nic || !nic->ops) {
+        return ERROR_NOT_FOUND;
+    }
+    
+    /* Use hardware abstraction to send packet */
+    int result = hardware_send_packet(nic, packet->data, packet->length);
+    if (result == SUCCESS) {
+        g_routing_stats.packets_forwarded++;
+    } else {
+        g_routing_stats.routing_errors++;
+    }
+    
+    return result;
+}
+
+int broadcast_packet(packet_buffer_t *packet, uint8_t src_nic) {
+    if (!packet) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Send to all NICs except source */
+    int errors = 0;
+    int sent = 0;
+    
+    for (int i = 0; i < hardware_get_nic_count(); i++) {
+        if (i == src_nic) {
+            continue; /* Skip source NIC */
+        }
+        
+        nic_info_t *nic = hardware_get_nic(i);
+        if (!nic || !nic->ops) {
+            continue;
+        }
+        
+        int result = hardware_send_packet(nic, packet->data, packet->length);
+        if (result == SUCCESS) {
+            sent++;
+        } else {
+            errors++;
+        }
+    }
+    
+    if (sent > 0) {
+        g_routing_stats.packets_broadcast++;
+        return SUCCESS;
+    } else {
+        g_routing_stats.routing_errors++;
+        return ERROR_IO;
+    }
+}
+
+/* Validation functions */
+bool routing_validate_nic(uint8_t nic_index) {
+    return (nic_index < MAX_NICS) && hardware_is_nic_present(nic_index);
+}
+
+/* MAC address utilities */
+bool routing_mac_equals(const uint8_t *mac1, const uint8_t *mac2) {
+    if (!mac1 || !mac2) {
+        return false;
+    }
+    
+    return memory_compare(mac1, mac2, ETH_ALEN) == 0;
+}
+
+bool routing_mac_match_mask(const uint8_t *mac, const uint8_t *pattern,
+                           const uint8_t *mask) {
+    if (!mac || !pattern || !mask) {
+        return false;
+    }
+    
+    for (int i = 0; i < ETH_ALEN; i++) {
+        if ((mac[i] & mask[i]) != (pattern[i] & mask[i])) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+void routing_mac_copy(uint8_t *dest, const uint8_t *src) {
+    if (dest && src) {
+        memory_copy(dest, src, ETH_ALEN);
+    }
+}
+
+/* Statistics and monitoring */
+void routing_stats_init(routing_stats_t *stats) {
+    if (!stats) {
+        return;
+    }
+    
+    memory_zero(stats, sizeof(routing_stats_t));
+}
+
+const routing_stats_t* routing_get_stats(void) {
+    return &g_routing_stats;
+}
+
+void routing_clear_stats(void) {
+    routing_stats_init(&g_routing_stats);
+}
+
+/* Configuration */
+int routing_set_learning_enabled(bool enable) {
+    g_learning_enabled = enable;
+    g_routing_table.learning_enabled = enable;
+    return SUCCESS;
+}
+
+bool routing_get_learning_enabled(void) {
+    return g_learning_enabled;
+}
+
+int routing_set_aging_time(uint32_t aging_time_ms) {
+    g_aging_time_ms = aging_time_ms;
+    g_routing_table.learning_timeout = aging_time_ms;
+    g_bridge_table.aging_time = aging_time_ms;
+    return SUCCESS;
+}
+
+uint32_t routing_get_aging_time(void) {
+    return g_aging_time_ms;
+}
+
+/* Rate limiting */
+int routing_set_rate_limit(uint8_t nic_index, uint32_t packets_per_sec) {
+    if (nic_index >= MAX_NICS) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    g_rate_limits[nic_index].packets_per_sec = packets_per_sec;
+    g_rate_limits[nic_index].current_count = 0;
+    g_rate_limits[nic_index].last_reset_time = routing_get_timestamp();
+    
+    return SUCCESS;
+}
+
+int routing_check_rate_limit(uint8_t nic_index) {
+    return routing_check_rate_limit_internal(nic_index) ? SUCCESS : ERROR_BUSY;
+}
+
+void routing_update_rate_counters(void) {
+    uint32_t current_time = routing_get_timestamp();
+    
+    for (int i = 0; i < MAX_NICS; i++) {
+        rate_limit_info_t *limit = &g_rate_limits[i];
+        
+        /* Reset counter every second */
+        if (current_time - limit->last_reset_time >= 1000) {
+            limit->current_count = 0;
+            limit->last_reset_time = current_time;
+        }
+    }
+}
+
+/* Debug and utility functions */
+const char* routing_decision_to_string(route_decision_t decision) {
+    switch (decision) {
+        case ROUTE_DECISION_DROP:       return "DROP";
+        case ROUTE_DECISION_FORWARD:    return "FORWARD";
+        case ROUTE_DECISION_BROADCAST:  return "BROADCAST";
+        case ROUTE_DECISION_LOOPBACK:   return "LOOPBACK";
+        case ROUTE_DECISION_MULTICAST:  return "MULTICAST";
+        default:                        return "UNKNOWN";
+    }
+}
+
+const char* routing_rule_type_to_string(route_rule_type_t rule_type) {
+    switch (rule_type) {
+        case ROUTE_RULE_NONE:           return "NONE";
+        case ROUTE_RULE_MAC_ADDRESS:    return "MAC_ADDRESS";
+        case ROUTE_RULE_ETHERTYPE:      return "ETHERTYPE";
+        case ROUTE_RULE_PORT:           return "PORT";
+        case ROUTE_RULE_VLAN:           return "VLAN";
+        case ROUTE_RULE_PRIORITY:       return "PRIORITY";
+        default:                        return "UNKNOWN";
+    }
+}
+
+/* Private helper function implementations */
+static route_entry_t* routing_find_entry(route_rule_type_t rule_type, const void *rule_data) {
+    if (!rule_data) {
+        return NULL;
+    }
+    
+    route_entry_t *entry = g_routing_table.entries;
+    while (entry) {
+        if (entry->rule_type == rule_type) {
+            switch (rule_type) {
+                case ROUTE_RULE_MAC_ADDRESS:
+                    if (routing_mac_equals(entry->dest_mac, (const uint8_t*)rule_data)) {
+                        return entry;
+                    }
+                    break;
+                case ROUTE_RULE_ETHERTYPE:
+                    if (entry->ethertype == *(const uint16_t*)rule_data) {
+                        return entry;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        entry = entry->next;
+    }
+    
+    return NULL;
+}
+
+static bridge_entry_t* bridge_find_entry(const uint8_t *mac) {
+    if (!mac) {
+        return NULL;
+    }
+    
+    bridge_entry_t *entry = g_bridge_table.entries;
+    while (entry) {
+        if (routing_mac_equals(entry->mac, mac)) {
+            return entry;
+        }
+        entry = entry->next;
+    }
+    
+    return NULL;
+}
+
+static void bridge_add_entry(const uint8_t *mac, uint8_t nic_index) {
+    bridge_entry_t *entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
+                                                         MEM_TYPE_DRIVER_DATA, 0);
+    if (!entry) {
+        return;
+    }
+    
+    memory_copy(entry->mac, mac, ETH_ALEN);
+    entry->nic_index = nic_index;
+    entry->timestamp = routing_get_timestamp();
+    entry->packet_count = 1;
+    entry->next = g_bridge_table.entries;
+    
+    g_bridge_table.entries = entry;
+    g_bridge_table.entry_count++;
+}
+
+static uint32_t routing_get_timestamp(void) {
+    return get_system_timestamp_ms();
+}
+
+static bool routing_check_rate_limit_internal(uint8_t nic_index) {
+    if (nic_index >= MAX_NICS) {
+        return false;
+    }
+    
+    rate_limit_info_t *limit = &g_rate_limits[nic_index];
+    
+    /* No rate limiting if packets_per_sec is 0 */
+    if (limit->packets_per_sec == 0) {
+        return true;
+    }
+    
+    /* Check if within rate limit */
+    if (limit->current_count < limit->packets_per_sec) {
+        limit->current_count++;
+        return true;
+    }
+    
+    return false;
+}
+
+static void bridge_remove_entry(bridge_entry_t *entry) {
+    if (!entry) {
+        return;
+    }
+    
+    /* Remove from singly-linked list */
+    bridge_entry_t **current = &g_bridge_table.entries;
+    while (*current) {
+        if (*current == entry) {
+            *current = entry->next;
+            break;
+        }
+        current = &(*current)->next;
+    }
+    
+    /* Update entry count */
+    if (g_bridge_table.entry_count > 0) {
+        g_bridge_table.entry_count--;
+    }
+}
+
+static bridge_entry_t* bridge_find_oldest_entry(void) {
+    bridge_entry_t *current = g_bridge_table.entries;
+    bridge_entry_t *oldest = NULL;
+    uint32_t oldest_timestamp = 0xFFFFFFFF;
+    
+    /* Find entry with oldest (smallest) timestamp */
+    while (current) {
+        if (current->timestamp < oldest_timestamp) {
+            oldest_timestamp = current->timestamp;
+            oldest = current;
+        }
+        current = current->next;
+    }
+    
+    return oldest;
+}
+
+/* Missing bridge_entry_t structure needs prev pointer for doubly linked list */
+static void bridge_add_entry_impl(const uint8_t *mac, uint8_t nic_index) {
+    bridge_entry_t *entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
+                                                         MEM_TYPE_DRIVER_DATA, 0);
+    if (!entry) {
+        return;
+    }
+    
+    memory_copy(entry->mac, mac, ETH_ALEN);
+    entry->nic_index = nic_index;
+    entry->timestamp = routing_get_timestamp();
+    entry->packet_count = 1;
+    entry->next = g_bridge_table.entries;
+    
+    g_bridge_table.entries = entry;
+    g_bridge_table.entry_count++;
+}
+
+/* Implementation of remaining functions declared in header file */
+int routing_remove_rule(route_rule_type_t rule_type, const void *rule_data) {
+    if (!rule_data || !routing_is_enabled()) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    route_entry_t **current = &g_routing_table.entries;
+    while (*current) {
+        route_entry_t *entry = *current;
+        bool should_remove = false;
+        
+        if (entry->rule_type == rule_type) {
+            switch (rule_type) {
+                case ROUTE_RULE_MAC_ADDRESS:
+                    if (routing_mac_equals(entry->dest_mac, (const uint8_t*)rule_data)) {
+                        should_remove = true;
+                    }
+                    break;
+                case ROUTE_RULE_ETHERTYPE:
+                    if (entry->ethertype == *(const uint16_t*)rule_data) {
+                        should_remove = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        
+        if (should_remove) {
+            *current = entry->next;
+            memory_zero(entry, sizeof(route_entry_t));
+            memory_free(entry);
+            g_routing_table.entry_count--;
+            return SUCCESS;
+        }
+        
+        current = &entry->next;
+    }
+    
+    return ERROR_NOT_FOUND;
+}
+
+route_entry_t* routing_find_rule(route_rule_type_t rule_type, const void *rule_data) {
+    return routing_find_entry(rule_type, rule_data);
+}
+
+void routing_clear_table(void) {
+    routing_table_cleanup(&g_routing_table);
+    routing_table_init(&g_routing_table, g_routing_table.max_entries);
+}
+
+int routing_set_default_route(uint8_t nic_index, route_decision_t decision) {
+    if (!routing_validate_nic(nic_index)) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    g_routing_table.default_nic = nic_index;
+    g_routing_table.default_decision = decision;
+    
+    return SUCCESS;
+}
+
+void bridge_age_entries(void) {
+    if (!g_routing_initialized || !g_learning_enabled) {
+        return;
+    }
+    
+    uint32_t current_time = routing_get_timestamp();
+    uint32_t aged_count = 0;
+    
+    bridge_entry_t **current = &g_bridge_table.entries;
+    while (*current) {
+        bridge_entry_t *entry = *current;
+        
+        /* Check if entry has expired */
+        if ((current_time - entry->timestamp) > g_bridge_table.aging_time) {
+            /* Remove expired entry */
+            *current = entry->next;
+            
+            memory_zero(entry, sizeof(bridge_entry_t));
+            memory_free(entry);
+            g_bridge_table.entry_count--;
+            aged_count++;
+        } else {
+            current = &entry->next;
+        }
+    }
+    
+    g_routing_stats.cache_misses += aged_count; /* Reuse cache_misses for aged entries */
+}
+
+void bridge_flush_table(void) {
+    bridge_table_cleanup(&g_bridge_table);
+    bridge_table_init(&g_bridge_table, g_bridge_table.max_entries);
+}
+
+int bridge_remove_mac(const uint8_t *mac) {
+    if (!mac) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    bridge_entry_t *entry = bridge_find_entry(mac);
+    if (entry) {
+        bridge_remove_entry(entry);
+        memory_zero(entry, sizeof(bridge_entry_t));
+        memory_free(entry);
+        return SUCCESS;
+    }
+    
+    return ERROR_NOT_FOUND;
+}
+
+int multicast_packet(packet_buffer_t *packet, uint8_t src_nic,
+                    const uint8_t *dest_mac) {
+    if (!packet || !dest_mac) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* For now, implement basic IGMP snooping */
+    /* Check if this is an IGMP packet (IP protocol 2) */
+    if (packet->length >= ETH_HLEN + 20) { /* Ethernet + IP headers */
+        const uint8_t *ip_header = packet->data + ETH_HLEN;
+        uint8_t protocol = ip_header[9];
+        
+        if (protocol == 2) { /* IGMP */
+            /* Forward IGMP to all NICs for multicast management */
+            return broadcast_packet(packet, src_nic);
+        }
+    }
+    
+    /* For other multicast packets, use MAC-based forwarding if possible */
+    uint8_t dest_nic;
+    route_decision_t decision = routing_lookup_mac(dest_mac, src_nic, &dest_nic);
+    
+    if (decision == ROUTE_DECISION_FORWARD) {
+        return forward_packet(packet, src_nic, dest_nic);
+    }
+    
+    /* Default to controlled flooding - send to all NICs except source */
+    return broadcast_packet(packet, src_nic);
+}
+
+/* Additional utility functions */
+static uint16_t mac_hash_16bit(const uint8_t *mac) {
+    if (!mac) return 0;
+    
+    uint16_t hash = ((uint16_t)mac[0] << 8) | mac[1];
+    hash ^= ((uint16_t)mac[2] << 8) | mac[3];
+    hash ^= ((uint16_t)mac[4] << 8) | mac[5];
+    hash = (hash << 5) - hash; /* Multiply by 31 */
+    return hash & 0x01FF; /* Modulo 512 */
+}
+
+bool routing_is_local_mac(const uint8_t *mac) {
+    if (!mac) {
+        return false;
+    }
+    
+    /* Check against each NIC's MAC address */
+    for (int i = 0; i < hardware_get_nic_count(); i++) {
+        nic_info_t *nic = hardware_get_nic(i);
+        if (nic && routing_mac_equals(mac, nic->mac_addr)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+void routing_stats_update(routing_stats_t *stats, route_decision_t decision) {
+    if (!stats) {
+        return;
+    }
+    
+    stats->packets_routed++;
+    
+    switch (decision) {
+        case ROUTE_DECISION_FORWARD:
+            stats->packets_forwarded++;
+            break;
+        case ROUTE_DECISION_BROADCAST:
+            stats->packets_broadcast++;
+            break;
+        case ROUTE_DECISION_MULTICAST:
+            stats->packets_multicast++;
+            break;
+        case ROUTE_DECISION_LOOPBACK:
+            stats->packets_looped++;
+            break;
+        case ROUTE_DECISION_DROP:
+        default:
+            stats->packets_dropped++;
+            break;
+    }
+}
+
+void routing_print_stats(void) {
+    const routing_stats_t *stats = &g_routing_stats;
+    
+    log_info("=== Routing Statistics ===");
+    log_info("Packets Routed:    %lu", stats->packets_routed);
+    log_info("Packets Forwarded: %lu", stats->packets_forwarded);
+    log_info("Packets Broadcast: %lu", stats->packets_broadcast);
+    log_info("Packets Multicast: %lu", stats->packets_multicast);
+    log_info("Packets Looped:    %lu", stats->packets_looped);
+    log_info("Packets Dropped:   %lu", stats->packets_dropped);
+    log_info("Routing Errors:    %lu", stats->routing_errors);
+    log_info("Table Lookups:     %lu", stats->table_lookups);
+    log_info("Cache Hits:        %lu", stats->cache_hits);
+    log_info("Cache Misses:      %lu", stats->cache_misses);
+}
+
+void routing_print_table(void) {
+    if (!routing_is_enabled()) {
+        log_info("Routing is not enabled");
+        return;
+    }
+    
+    log_info("=== Routing Table ===");
+    log_info("Entries: %d/%d", g_routing_table.entry_count, g_routing_table.max_entries);
+    
+    route_entry_t *entry = g_routing_table.entries;
+    int count = 0;
+    while (entry && count < 20) { /* Limit output for readability */
+        log_info("Rule %d: Type=%s, SRC=%d, DST=%d, Decision=%s, Priority=%d",
+                count + 1,
+                routing_rule_type_to_string(entry->rule_type),
+                entry->src_nic,
+                entry->dest_nic,
+                routing_decision_to_string(entry->decision),
+                entry->priority);
+        
+        if (entry->rule_type == ROUTE_RULE_MAC_ADDRESS) {
+            log_info("  MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                    entry->dest_mac[0], entry->dest_mac[1], entry->dest_mac[2],
+                    entry->dest_mac[3], entry->dest_mac[4], entry->dest_mac[5]);
+        } else if (entry->rule_type == ROUTE_RULE_ETHERTYPE) {
+            log_info("  EtherType: 0x%04X", entry->ethertype);
+        }
+        
+        entry = entry->next;
+        count++;
+    }
+    
+    if (entry) {
+        log_info("... (%d more entries not shown)", g_routing_table.entry_count - count);
+    }
+}
+
+void routing_print_bridge_table(void) {
+    if (!g_routing_initialized) {
+        log_info("Bridge table not initialized");
+        return;
+    }
+    
+    log_info("=== Bridge Learning Table ===");
+    log_info("Entries: %d/%d", g_bridge_table.entry_count, g_bridge_table.max_entries);
+    log_info("Lookups: %lu total, %lu successful (%.1f%% hit rate)",
+            g_bridge_table.total_lookups,
+            g_bridge_table.successful_lookups,
+            g_bridge_table.total_lookups > 0 ?
+                (100.0f * g_bridge_table.successful_lookups) / g_bridge_table.total_lookups : 0.0f);
+    
+    bridge_entry_t *entry = g_bridge_table.entries;
+    int count = 0;
+    while (entry && count < 20) { /* Limit output */
+        log_info("Bridge %d: %02X:%02X:%02X:%02X:%02X:%02X -> NIC %d (packets: %lu)",
+                count + 1,
+                entry->mac[0], entry->mac[1], entry->mac[2],
+                entry->mac[3], entry->mac[4], entry->mac[5],
+                entry->nic_index,
+                entry->packet_count);
+        
+        entry = entry->next;
+        count++;
+    }
+    
+    if (entry) {
+        log_info("... (%d more entries not shown)", g_bridge_table.entry_count - count);
+    }
+}
+
+bool routing_should_forward(const packet_buffer_t *packet, uint8_t src_nic, uint8_t dest_nic) {
+    if (!packet || src_nic == dest_nic) {
+        return false;
+    }
+    
+    if (!routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
+        return false;
+    }
+    
+    /* Don't forward if destination NIC is not active */
+    nic_info_t *dest_nic_info = hardware_get_nic(dest_nic);
+    if (!dest_nic_info || !dest_nic_info->enabled) {
+        return false;
+    }
+    
+    return true;
+}
+
+bool routing_is_loop(const packet_buffer_t *packet, uint8_t src_nic, uint8_t dest_nic) {
+    /* Simple loop detection - forwarding back to source NIC */
+    if (src_nic == dest_nic) {
+        return true;
+    }
+    
+    /* Additional loop detection could be implemented here */
+    /* For example, checking for broadcast loops, TTL, etc. */
+    
+    return false;
+}
+
+int routing_set_table_size(uint16_t max_entries) {
+    if (g_routing_table.entry_count > 0) {
+        return ERROR_BUSY; /* Cannot resize active table */
+    }
+    
+    g_routing_table.max_entries = max_entries;
+    return SUCCESS;
+}
+
+void routing_dump_table(void) {
+    routing_print_table();
+}
+
+void routing_dump_bridge_table(void) {
+    routing_print_bridge_table();
+}
+
+void routing_dump_packet_route(const packet_buffer_t *packet, uint8_t src_nic) {
+    if (!packet || !packet->data) {
+        log_info("Invalid packet for route dump");
+        return;
+    }
+    
+    log_info("=== Packet Route Analysis ===");
+    log_info("Source NIC: %d", src_nic);
+    log_info("Packet Length: %d bytes", packet->length);
+    
+    if (packet->length >= ETH_HLEN) {
+        const uint8_t *eth_header = packet->data;
+        const uint8_t *dest_mac = eth_header;
+        const uint8_t *src_mac = eth_header + ETH_ALEN;
+        uint16_t ethertype = ntohs(*(uint16_t*)(eth_header + 2 * ETH_ALEN));
+        
+        log_info("Destination MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                dest_mac[0], dest_mac[1], dest_mac[2],
+                dest_mac[3], dest_mac[4], dest_mac[5]);
+        log_info("Source MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                src_mac[0], src_mac[1], src_mac[2],
+                src_mac[3], src_mac[4], src_mac[5]);
+        log_info("EtherType: 0x%04X", ethertype);
+        
+        uint8_t dest_nic;
+        route_decision_t decision = routing_decide(packet, src_nic, &dest_nic);
+        
+        log_info("Routing Decision: %s", routing_decision_to_string(decision));
+        if (decision == ROUTE_DECISION_FORWARD) {
+            log_info("Destination NIC: %d", dest_nic);
+        }
+    }
+}
+
+/* Self-test and validation functions */
+int routing_self_test(void) {
+    log_info("Running routing self-test...");
+    
+    /* Test basic routing functions */
+    if (!routing_is_enabled()) {
+        log_info("Routing is not enabled - enabling for test");
+        if (routing_enable(true) != SUCCESS) {
+            log_error("Failed to enable routing");
+            return ERROR_FAILED;
+        }
+    }
+    
+    /* Test MAC utilities */
+    uint8_t mac1[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    uint8_t mac2[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    uint8_t mac3[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    
+    if (!routing_mac_equals(mac1, mac2)) {
+        log_error("MAC comparison failed - identical MACs not equal");
+        return ERROR_FAILED;
+    }
+    
+    if (routing_mac_equals(mac1, mac3)) {
+        log_error("MAC comparison failed - different MACs are equal");
+        return ERROR_FAILED;
+    }
+    
+    /* Test hash function */
+    uint16_t hash1 = mac_hash_16bit(mac1);
+    uint16_t hash2 = mac_hash_16bit(mac2);
+    uint16_t hash3 = mac_hash_16bit(mac3);
+    
+    if (hash1 != hash2) {
+        log_error("Hash function failed - identical MACs have different hashes");
+        return ERROR_FAILED;
+    }
+    
+    /* Different MACs should generally have different hashes (not guaranteed, but likely) */
+    log_info("MAC hash test: %04X vs %04X", hash1, hash3);
+    
+    log_info("Routing self-test completed successfully");
+    return SUCCESS;
+}
+
+int routing_validate_configuration(void) {
+    if (!g_routing_initialized) {
+        log_error("Routing not initialized");
+        return ERROR_NOT_FOUND;
+    }
+    
+    /* Validate routing table integrity */
+    route_entry_t *entry = g_routing_table.entries;
+    int count = 0;
+    
+    while (entry) {
+        count++;
+        
+        /* Validate NIC indices */
+        if (!routing_validate_nic(entry->src_nic) || !routing_validate_nic(entry->dest_nic)) {
+            log_error("Invalid NIC index in routing entry");
+            return ERROR_INVALID_PARAM;
+        }
+        
+        /* Check for circular references */
+        if (count > g_routing_table.max_entries) {
+            log_error("Circular reference detected in routing table");
+            return ERROR_FAILED;
+        }
+        
+        entry = entry->next;
+    }
+    
+    if (count != g_routing_table.entry_count) {
+        log_error("Routing table count mismatch: counted %d, expected %d", 
+                 count, g_routing_table.entry_count);
+        return ERROR_FAILED;
+    }
+    
+    /* Validate bridge table integrity */
+    bridge_entry_t *bridge_entry = g_bridge_table.entries;
+    count = 0;
+    
+    while (bridge_entry) {
+        count++;
+        
+        if (!routing_validate_nic(bridge_entry->nic_index)) {
+            log_error("Invalid NIC index in bridge entry");
+            return ERROR_INVALID_PARAM;
+        }
+        
+        if (count > g_bridge_table.max_entries) {
+            log_error("Circular reference detected in bridge table");
+            return ERROR_FAILED;
+        }
+        
+        bridge_entry = bridge_entry->next;
+    }
+    
+    if (count != g_bridge_table.entry_count) {
+        log_error("Bridge table count mismatch: counted %d, expected %d",
+                 count, g_bridge_table.entry_count);
+        return ERROR_FAILED;
+    }
+    
+    log_info("Routing configuration validation successful");
+    return SUCCESS;
+}
+
+int routing_test_forwarding(uint8_t src_nic, uint8_t dest_nic) {
+    if (!routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    if (src_nic == dest_nic) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Check if both NICs are available and operational */
+    nic_info_t *src_nic_info = hardware_get_nic(src_nic);
+    nic_info_t *dest_nic_info = hardware_get_nic(dest_nic);
+    
+    if (!src_nic_info || !dest_nic_info) {
+        return ERROR_NOT_FOUND;
+    }
+    
+    if (!src_nic_info->enabled || !dest_nic_info->enabled) {
+        return ERROR_NOT_READY;
+    }
+    
+    log_info("Forwarding test: NIC %d -> NIC %d: OK", src_nic, dest_nic);
+    return SUCCESS;
+}
+
+/* Additional MAC address utility functions */
+bool is_broadcast_mac(const uint8_t *mac) {
+    if (!mac) return false;
+    return (mac[0] == 0xFF && mac[1] == 0xFF && mac[2] == 0xFF &&
+            mac[3] == 0xFF && mac[4] == 0xFF && mac[5] == 0xFF);
+}
+
+bool is_multicast_mac(const uint8_t *mac) {
+    if (!mac) return false;
+    return (mac[0] & 0x01) != 0;
+}
+
+bool is_unicast_mac(const uint8_t *mac) {
+    if (!mac) return false;
+    return (mac[0] & 0x01) == 0;
+}
+
+/* Network byte order conversion utilities */
+uint16_t ntohs(uint16_t netshort) {
+    return ((netshort & 0xFF) << 8) | ((netshort & 0xFF00) >> 8);
+}
+
+uint16_t htons(uint16_t hostshort) {
+    return ntohs(hostshort); /* Same operation for 16-bit values */
+}
+
+uint32_t ntohl(uint32_t netlong) {
+    /* Use BSWAP instruction on 486+ for optimal performance */
+    extern cpu_info_t g_cpu_info;  /* From cpu_detect module */
+    
+    if (g_cpu_info.features & FEATURE_BSWAP) {
+        /* Use inline assembly for BSWAP on 486+ */
+        uint32_t result = netlong;
+        _asm {
+            mov eax, result
+            bswap eax
+            mov result, eax
+        }
+        return result;
+    }
+    
+    /* Fallback for 286/386 */
+    return ((netlong & 0xFF) << 24) |
+           ((netlong & 0xFF00) << 8) |
+           ((netlong & 0xFF0000) >> 8) |
+           ((netlong & 0xFF000000) >> 24);
+}
+
+uint32_t htonl(uint32_t hostlong) {
+    return ntohl(hostlong); /* Same operation */
+}
+

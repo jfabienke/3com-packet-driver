@@ -1,0 +1,10 @@
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_vortex_init.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_boomerang.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_init.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_power.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3com_performance.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/3c900tpo.c
+/Users/jvindahl/Development/3com-packet-driver/include/3com_common.h
+/Users/jvindahl/Development/3com-packet-driver/include/pci.h
+/Users/jvindahl/Development/3com-packet-driver/include/pci_config.h

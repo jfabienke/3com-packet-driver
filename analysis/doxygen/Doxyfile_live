@@ -1,0 +1,90 @@
+# Doxyfile for Live 3Com Network Driver Code
+# Focus on actively used 3C509B and 3C515 drivers
+
+PROJECT_NAME           = "3Com Live Network Driver"
+PROJECT_NUMBER         = "Phase 3 - Production Ready"
+PROJECT_BRIEF          = "Active TSR packet driver for 3C509B/3C515 NICs"
+
+OUTPUT_DIRECTORY       = ../analysis/doxygen/live_output
+CREATE_SUBDIRS         = YES
+
+INPUT                  = ../../src/c/3c509b.c \
+                        ../../src/c/3c515.c \
+                        ../../src/c/nic_init.c \
+                        ../../src/c/api.c \
+                        ../../src/c/packet_ops.c \
+                        ../../src/c/buffer_alloc.c \
+                        ../../src/c/memory.c \
+                        ../../src/c/config.c \
+                        ../../src/c/stats.c \
+                        ../../src/c/promisc.c \
+                        ../../src/c/media_control.c \
+                        ../../src/c/hardware.c \
+                        ../../src/asm/packet_api.asm \
+                        ../../src/asm/nic_irq.asm \
+                        ../../src/asm/hardware.asm \
+                        ../../include/3c509b.h \
+                        ../../include/3c515.h \
+                        ../../include/packet_api.h \
+                        ../../include/config.h \
+                        ../../include/hardware.h
+
+FILE_PATTERNS          = *.c *.h *.asm
+RECURSIVE              = NO
+EXCLUDE_PATTERNS       = *test* *demo* *duplicate* *enhanced*
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_XML           = YES
+
+HTML_OUTPUT            = html_live
+HTML_FILE_EXTENSION    = .html
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_LOCAL_METHODS  = YES
+EXTRACT_ANON_NSPACES   = YES
+
+SHOW_INCLUDE_FILES     = YES
+SHOW_USED_FILES        = YES
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = YES
+
+HAVE_DOT               = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+GROUP_GRAPHS           = YES
+UML_LOOK               = YES
+TEMPLATE_RELATIONS     = YES
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+DOT_IMAGE_FORMAT       = png
+DOT_PATH               = /opt/homebrew/bin
+DOTFILE_DIRS           = 
+DOT_GRAPH_MAX_NODES    = 50
+MAX_DOT_GRAPH_DEPTH    = 0
+DOT_TRANSPARENT        = NO
+DOT_MULTI_TARGETS      = YES
+GENERATE_LEGEND        = YES
+
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES

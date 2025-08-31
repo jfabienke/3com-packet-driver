@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+*.obj
+*.com
+*.map
+*.exe
+*.err
+
+# Test artifacts
+tests/build/
+test_coverage_report.txt
+test_profile_report.txt
+TEST_SUITE_DOCS.md
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Crush directory
+.crush/

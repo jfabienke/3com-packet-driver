@@ -1,0 +1,110 @@
+digraph DependencyMap {
+    rankdir=TB;
+    node [shape=box, style=rounded];
+    
+    // Define node colors by layer
+    node [fillcolor=lightblue, style="rounded,filled"];
+    "main" "api" "diagnostics";
+    
+    node [fillcolor=lightgreen, style="rounded,filled"];
+    "config" "init" "runtime_config";
+    
+    node [fillcolor=lightyellow, style="rounded,filled"];
+    "packet_ops" "arp" "routing" "static_routing";
+    
+    node [fillcolor=lightcoral, style="rounded,filled"];
+    "hardware" "nic_init" "nic_capabilities";
+    
+    node [fillcolor=lightpink, style="rounded,filled"];
+    "3c509b" "3c509b_pio" "3c515" "3c515_enhanced";
+    
+    node [fillcolor=lightsalmon, style="rounded,filled"];
+    "dma_mapping" "dma_boundary" "cache_coherency_enhanced";
+    
+    // Critical paths
+    subgraph cluster_pio {
+        label="PIO Fast Path (A+ Grade)";
+        style=filled; fillcolor=honeydew;
+        "api" -> "packet_ops" -> "3c509b_pio";
+    }
+    
+    subgraph cluster_dma {
+        label="DMA Path";
+        style=filled; fillcolor=mistyrose;
+        "packet_ops" -> "dma_mapping" -> "dma_boundary" -> "cache_coherency_enhanced";
+    }
+    
+    // Key dependencies
+    "main" -> "init";
+    "init" -> "hardware";
+    "hardware" -> "3c509b";
+    "hardware" -> "3c515";
+    "3c515" -> "dma_mapping";
+    "3c509b_pio" -> "hardware" [style=dashed, label="bypasses DMA"];
+    
+    // Support services
+    node [fillcolor=lightgray, style="rounded,filled"];
+    "logging" "memory" "xms_detect";
+    
+    "init" -> "memory";
+    "memory" -> "xms_detect";
+    "3c509b" -> "logging";
+    "3c515" -> "logging";
+    
+    // ORPHANED MODULES - Critical for production
+    subgraph cluster_orphaned_critical {
+        label="ORPHANED - CRITICAL (System Stability)";
+        style=filled; fillcolor=mistyrose;
+        node [fillcolor=red, style="rounded,filled"];
+        "dma_safety" "dma_boundary" "cache_coherency_enhanced" "cache_management" "error_recovery";
+        
+        // Show intended integration points with dashed lines
+        "3c515" -> "dma_safety" [style=dashed, color=red, label="MISSING"];
+        "dma_safety" -> "dma_boundary" [style=dashed, color=red];
+        "3c515" -> "cache_coherency_enhanced" [style=dashed, color=red, label="MISSING"];
+    }
+    
+    subgraph cluster_orphaned_high {
+        label="ORPHANED - HIGH Priority (Enterprise Features)";
+        style=filled; fillcolor=wheat;
+        node [fillcolor=orange, style="rounded,filled"];
+        "multi_nic_coord" "runtime_config" "handle_compact" "xms_buffer_migration" "performance_monitor" "deferred_work";
+        
+        // Show intended integration points
+        "hardware" -> "multi_nic_coord" [style=dashed, color=orange, label="MISSING"];
+        "config" -> "runtime_config" [style=dashed, color=orange, label="MISSING"];
+        "api" -> "handle_compact" [style=dashed, color=orange, label="MISSING"];
+    }
+    
+    subgraph cluster_orphaned_medium {
+        label="ORPHANED - MEDIUM Priority (Optimization)";
+        style=filled; fillcolor=lightyellow;
+        node [fillcolor=gold, style="rounded,filled"];
+        "3c515_enhanced" "enhanced_ring_management" "3com_boomerang" "3com_performance" "3com_power" "buffer_autoconfig";
+        
+        // Show potential integration points
+        "3c515" -> "3c515_enhanced" [style=dashed, color=gold, label="enhance"];
+        "hardware" -> "3com_boomerang" [style=dashed, color=gold, label="extend"];
+    }
+    
+    subgraph cluster_orphaned_low {
+        label="ORPHANED - LOW Priority (Support/Test)";
+        style=filled; fillcolor=lavender;
+        node [fillcolor=lightblue, style="rounded,filled"];
+        "ansi_demo" "console" "busmaster_test" "dma_mapping_test" "cpu_database" "chipset_database";
+        
+        // Test relationships
+        "busmaster_test" -> "3c515" [style=dotted, color=blue, label="test"];
+        "dma_mapping_test" -> "dma_safety" [style=dotted, color=blue, label="test"];
+    }
+    
+    // Success Story - Recently Integrated
+    subgraph cluster_success {
+        label="SUCCESS - Recently Integrated (A+ Grade)";
+        style=filled; fillcolor=lightgreen;
+        "3c509b_pio" [fillcolor=green, style="rounded,filled"];
+        
+        // Show successful integration
+        "packet_ops" -> "3c509b_pio" [color=green, penwidth=2, label="INTEGRATED"];
+    }
+}

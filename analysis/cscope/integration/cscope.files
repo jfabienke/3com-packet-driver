@@ -1,0 +1,17 @@
+/Users/jvindahl/Development/3com-packet-driver/src/c/dma_safety.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/cache_coherency.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/cache_management.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/dma.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/dma_self_test.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/runtime_config.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/xms_buffer_migration.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/handle_compact.c
+/Users/jvindahl/Development/3com-packet-driver/src/c/multi_nic_coord.c
+/Users/jvindahl/Development/3com-packet-driver/src/asm/cache_ops.asm
+/Users/jvindahl/Development/3com-packet-driver/include/dma.h
+/Users/jvindahl/Development/3com-packet-driver/include/dma_safety.h
+/Users/jvindahl/Development/3com-packet-driver/include/cache_coherency.h
+/Users/jvindahl/Development/3com-packet-driver/include/runtime_config.h
+/Users/jvindahl/Development/3com-packet-driver/include/xms_buffer_migration.h
+/Users/jvindahl/Development/3com-packet-driver/include/handle_compact.h
+/Users/jvindahl/Development/3com-packet-driver/include/multi_nic_coord.h

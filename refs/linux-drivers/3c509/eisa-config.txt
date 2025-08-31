@@ -1,0 +1,668 @@
+BOARD
+	ID = "TCM5090"
+	NAME = "3Com 3C509-TP Network Adapter"
+	MFR = "3Com Corporation"
+	CATEGORY = "NET"
+	LENGTH = 160
+	READID = yes
+	AMPERAGE = 400
+	DISABLE = supported
+	HELP =
+	   "The 3Com 3C509-TP network adapter
+	   connects your personal
+	   computer to an 802.3 local area network.\n
+	   \n
+	   Refer to the adapter guide for
+	   additional information on configuring
+	   this adapter."
+
+IOPORT(1) = 0zc86h
+	SIZE = word
+	INITVAL = xxxxxxxxx0xxxxxx
+
+IOPORT(2) = 0zc88h
+	SIZE = word
+	INITVAL = LOC(15 14 13 12 9 8 7 6 5 4 3 2 1 0) xxxxxxxxxxxxxx
+
+FUNCTION = "I/O Address Range"
+	SHOW = NO
+	HELP =
+	    "This function is a placeholder for the I/O ports resource."
+	CHOICE = ""
+	    LINK
+		PORT = 0z0h-0zfh
+		INIT = IOPORT(1) LOC(4 3 2 1 0) 11111
+
+FUNCTION = "Interrupt Request Level"
+	HELP =
+	   "Determines the interrupt request level that is used by the adapter."
+	CHOICE = "3"
+		LINK
+		    IRQ = 3
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0011
+	CHOICE = "5"
+		LINK
+		    IRQ = 5
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0101
+	CHOICE = "7"
+		LINK
+		    IRQ = 7
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0111
+	CHOICE = "9"
+		LINK
+		    IRQ = 9
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1001
+	CHOICE = "10"
+		LINK
+		    IRQ = 10
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1010
+	CHOICE = "11"
+		LINK
+		    IRQ = 11
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1011
+	CHOICE = "12"
+		LINK
+		    IRQ = 12
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1100
+	CHOICE = "15"
+		LINK
+		    IRQ = 15
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1111
+
+FUNCTION = "Boot PROM Size"
+	HELP =
+	   "Specifies the size of the boot PROM that
+	   is installed on the adapter for remote
+	   system booting over the network.\n
+	   \n
+	   Disabled  -  No boot PROM is installed.\n
+	   \n
+	   8K  -  An 8K boot PROM is installed.\n
+	   \n
+	   16K  -  A 16K boot PROM is installed.\n
+	   \n
+	   32K  -  A 32K boot PROM is installed."
+	CHOICE = "Disabled"
+		LINK
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000000
+	CHOICE = "8K"
+		COMBINE
+			MEMORY = 8k
+				ADDRESS = 0c2000h-0de000h  STEP = 8k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000001 | 000010 | 000011 | 000100 | 000101 | 000110 | 000111 | 001000 | 001001 | 001010 | 001011 | 001100 | 001101 | 001110 | 001111
+	CHOICE = "16K"
+		COMBINE
+			MEMORY = 16k
+				ADDRESS = 0c0000h-0dc000h  STEP = 16k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 010001 | 010010 | 010100 | 000110 | 011000 | 011010 | 011100 | 011110
+	CHOICE = "32K"
+		COMBINE
+			MEMORY = 32k
+				ADDRESS = 0c0000h-0d8000h  STEP = 32k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 100001 | 100100 | 101000 | 101100
+
+FUNCTION = "Transceiver Type"
+	HELP =
+	   "Specifies which of the adapter's
+	   transceivers is being used.\n
+	   \n
+	   On-board TP  -  The on-board transceiver
+	   (RJ-45 connector) on the the adapter is
+	   being used.\n
+	   \n
+	   External  -  An external transceiver
+	   (AUI connector) is being used."
+	CHOICE = "On-board TP"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 00
+	CHOICE = "External"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 01
+
+; %VER 3C509-TP EISA Configuration File v2.0a
+
+BOARD
+	ID = "TCM5091"
+	NAME = "3Com 3C509 Network Adapter"
+	MFR = "3Com Corporation"
+	CATEGORY = "NET"
+	LENGTH = 160
+	READID = yes
+	AMPERAGE = 400
+	DISABLE = supported
+	HELP =
+	   "The 3Com 3C509 network adapter
+	   connects your personal
+	   computer to an 802.3 local area network.\n
+	   \n
+	   Refer to the adapter guide for
+	   additional information on configuring
+	   this adapter."
+
+IOPORT(1) = 0zc86h
+	SIZE = word
+	INITVAL = xxxxxxxxx0xxxxxx
+
+IOPORT(2) = 0zc88h
+	SIZE = word
+	INITVAL = LOC(15 14 13 12 9 8 7 6 5 4 3 2 1 0) xxxxxxxxxxxxxx
+
+FUNCTION = "I/O Address Range"
+	SHOW = NO
+	HELP =
+	    "This function is a placeholder for the I/O ports resource."
+	CHOICE = ""
+	    LINK
+		PORT = 0z0h-0zfh
+		INIT = IOPORT(1) LOC(4 3 2 1 0) 11111
+
+FUNCTION = "Interrupt Request Level"
+	HELP =
+	   "Determines the interrupt request level that is used by the adapter."
+	CHOICE = "3"
+		LINK
+		    IRQ = 3
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0011
+	CHOICE = "5"
+		LINK
+		    IRQ = 5
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0101
+	CHOICE = "7"
+		LINK
+		    IRQ = 7
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0111
+	CHOICE = "9"
+		LINK
+		    IRQ = 9
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1001
+	CHOICE = "10"
+		LINK
+		    IRQ = 10
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1010
+	CHOICE = "11"
+		LINK
+		    IRQ = 11
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1011
+	CHOICE = "12"
+		LINK
+		    IRQ = 12
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1100
+	CHOICE = "15"
+		LINK
+		    IRQ = 15
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1111
+
+
+FUNCTION = "Boot PROM Size"
+	HELP =
+	   "Specifies the size of the boot PROM that
+	   is installed on the adapter for remote
+	   system booting over the network.\n
+	   \n
+	   Disabled  -  No boot PROM is installed.\n
+	   \n
+	   8K  -  An 8K boot PROM is installed.\n
+	   \n
+	   16K  -  A 16K boot PROM is installed.\n
+	   \n
+	   32K  -  A 32K boot PROM is installed."
+	CHOICE = "Disabled"
+		LINK
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000000
+	CHOICE = "8K"
+		COMBINE
+			MEMORY = 8k
+				ADDRESS = 0c2000h-0de000h  STEP = 8k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000001 | 000010 | 000011 | 000100 | 000101 | 000110 | 000111 | 001000 | 001001 | 001010 | 001011 | 001100 | 001101 | 001110 | 001111
+	CHOICE = "16K"
+		COMBINE
+			MEMORY = 16k
+				ADDRESS = 0c0000h-0dc000h  STEP = 16k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 010001 | 010010 | 010100 | 000110 | 011000 | 011010 | 011100 | 011110
+	CHOICE = "32K"
+		COMBINE
+			MEMORY = 32k
+				ADDRESS = 0c0000h-0d8000h  STEP = 32k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 100001 | 100100 | 101000 | 101100
+
+FUNCTION = "Transceiver Type"
+	HELP =
+	   "Specifies which of the adapter's
+	   transceivers is being used.\n
+	   \n
+	   On-board coax  -  The on-board
+	   transceiver (BNC connector) on the
+	   adapter is being used.\n
+	   \n
+	   External  -  An external transceiver
+	   (AUI connector) is being used."
+	CHOICE = "On-board coax"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 11
+	CHOICE = "External"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 01
+
+; %VER 3C509 EISA Configuration File v2.0a
+
+BOARD
+	ID = "TCM5094"
+	NAME = "3Com 3C509-Combo Network Adapter"
+	MFR = "3Com Corporation"
+	CATEGORY = "NET"
+	LENGTH = 160
+	READID = yes
+	AMPERAGE = 400
+	DISABLE = supported
+	HELP =
+	   "The 3Com 3C509-Combo network adapter
+	   connects your personal
+	   computer to an 802.3 local area network.\n
+	   \n
+	   Refer to the adapter guide for
+	   additional information on configuring
+	   this adapter."
+
+IOPORT(1) = 0zc86h
+	SIZE = word
+	INITVAL = xxxxxxxxx0xxxxxx
+
+IOPORT(2) = 0zc88h
+	SIZE = word
+	INITVAL = LOC(15 14 13 12 9 8 7 6 5 4 3 2 1 0) xxxxxxxxxxxxxx
+
+FUNCTION = "I/O Address Range"
+	SHOW = NO
+	HELP =
+	    "This function is a placeholder for the I/O ports resource."
+	CHOICE = ""
+	    LINK
+		PORT = 0z0h-0zfh
+		INIT = IOPORT(1) LOC(4 3 2 1 0) 11111
+
+FUNCTION = "Interrupt Request Level"
+	HELP =
+	   "Determines the interrupt request level that is used by the adapter."
+	CHOICE = "3"
+		LINK
+		    IRQ = 3
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0011
+	CHOICE = "5"
+		LINK
+		    IRQ = 5
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0101
+	CHOICE = "7"
+		LINK
+		    IRQ = 7
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0111
+	CHOICE = "9"
+		LINK
+		    IRQ = 9
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1001
+	CHOICE = "10"
+		LINK
+		    IRQ = 10
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1010
+	CHOICE = "11"
+		LINK
+		    IRQ = 11
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1011
+	CHOICE = "12"
+		LINK
+		    IRQ = 12
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1100
+	CHOICE = "15"
+		LINK
+		    IRQ = 15
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1111
+
+FUNCTION = "Boot PROM Size"
+	HELP =
+	   "Specifies the size of the boot PROM that
+	   is installed on the adapter for remote
+	   system booting over the network.\n
+	   \n
+	   Disabled  -  No boot PROM is installed.\n
+	   \n
+	   8K  -  An 8K boot PROM is installed.\n
+	   \n
+	   16K  -  A 16K boot PROM is installed.\n
+	   \n
+	   32K  -  A 32K boot PROM is installed."
+	CHOICE = "Disabled"
+		LINK
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000000
+	CHOICE = "8K"
+		COMBINE
+			MEMORY = 8k
+				ADDRESS = 0c2000h-0de000h  STEP = 8k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000001 | 000010 | 000011 | 000100 | 000101 | 000110 | 000111 | 001000 | 001001 | 001010 | 001011 | 001100 | 001101 | 001110 | 001111
+	CHOICE = "16K"
+		COMBINE
+			MEMORY = 16k
+				ADDRESS = 0c0000h-0dc000h  STEP = 16k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 010001 | 010010 | 010100 | 000110 | 011000 | 011010 | 011100 | 011110
+	CHOICE = "32K"
+		COMBINE
+			MEMORY = 32k
+				ADDRESS = 0c0000h-0d8000h  STEP = 32k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 100001 | 100100 | 101000 | 101100
+
+FUNCTION = "Transceiver Type"
+	HELP =
+	   "Specifies which of the adapter's
+	   transceivers is being used.\n
+	   \n
+	   On-board coax  -  The on-board
+	   transceiver (BNC connector) on the
+	   adapter is being used.\n
+	   \n
+	   On-board TP  -  The on-board transceiver
+	   (RJ-45 connector) on the the adapter is
+	   being used.\n
+	   \n
+	   External  -  An external transceiver
+	   (AUI connector) is being used."
+	CHOICE = "On-board coax"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 11
+	CHOICE = "On-board TP"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 00
+	CHOICE = "External"
+		LINK
+			INIT = IOPORT(1) LOC(15 14) 01
+
+; %VER 3C509-Combo EISA Configuration File v2.0a
+
+BOARD
+	ID = "TCM5095"
+	NAME = "3Com 3C509-TPO Network Adapter"
+	MFR = "3Com Corporation"
+	CATEGORY = "NET"
+	SLOT = EISA
+	LENGTH = 180
+	READID = yes
+	AMPERAGE = 600
+	DISABLE = supported
+	HELP =
+	   "The 3Com 3C509-TPO (TP Only) network adapter
+	   connects your personal
+	   computer to an 802.3 local area network.\n
+	   \n
+	   Refer to the adapter guide for
+	   additional information on configuring
+	   this adapter."
+
+IOPORT(1) = 0zc86h
+	SIZE = word
+	INITVAL = xxxxxxxxx0xxxxxx
+
+IOPORT(2) = 0zc88h
+	SIZE = word
+	INITVAL = LOC(15 14 13 12 9 8 7 6 5 4 3 2 1 0) xxxxxxxxxxxxxx
+
+FUNCTION = "I/O Address Range"
+	SHOW = NO
+	HELP =
+	    "This function is a placeholder for the I/O ports resource."
+	CHOICE = ""
+	    LINK
+		PORT = 0z0h-0zfh
+		INIT = IOPORT(1) LOC(4 3 2 1 0) 11111
+
+FUNCTION = "Interrupt Request Level"
+	HELP =
+	   "Determines the interrupt request level that is used by the adapter."
+	CHOICE = "3"
+		LINK
+		    IRQ = 3
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0011
+	CHOICE = "5"
+		LINK
+		    IRQ = 5
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0101
+	CHOICE = "7"
+		LINK
+		    IRQ = 7
+		    INIT = IOPORT(2) LOC(15 14 13 12) 0111
+	CHOICE = "9"
+		LINK
+		    IRQ = 9
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1001
+	CHOICE = "10"
+		LINK
+		    IRQ = 10
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1010
+	CHOICE = "11"
+		LINK
+		    IRQ = 11
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1011
+	CHOICE = "12"
+		LINK
+		    IRQ = 12
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1100
+	CHOICE = "15"
+		LINK
+		    IRQ = 15
+		    INIT = IOPORT(2) LOC(15 14 13 12) 1111
+
+FUNCTION = "Boot PROM Size"
+	HELP =
+	   "Specifies the size of the boot PROM that
+	   is installed on the adapter for remote
+	   system booting over the network.\n
+	   \n
+	   Disabled  -  No boot PROM is installed.\n
+	   \n
+	   8K  -  An 8K boot PROM is installed.\n
+	   \n
+	   16K  -  A 16K boot PROM is installed.\n
+	   \n
+	   32K  -  A 32K boot PROM is installed."
+	CHOICE = "Disabled"
+		LINK
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000000
+	CHOICE = "8K"
+		COMBINE
+			MEMORY = 8k
+				ADDRESS = 0c2000h-0de000h  STEP = 8k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000001 | 000010 | 000011 | 000100 | 000101 | 000110 | 000111 | 001000 | 001001 | 001010 | 001011 | 001100 | 001101 | 001110 | 001111
+	CHOICE = "16K"
+		COMBINE
+			MEMORY = 16k
+				ADDRESS = 0c0000h-0dc000h  STEP = 16k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 010001 | 010010 | 010100 | 000110 | 011000 | 011010 | 011100 | 011110
+	CHOICE = "32K"
+		COMBINE
+			MEMORY = 32k
+				ADDRESS = 0c0000h-0d8000h  STEP = 32k
+				MEMTYPE = oth
+				WRITABLE = no
+				SIZE = word
+				DECODE = 20
+			INIT = IOPORT(1) LOC(13 12 11 10 9 8) 100001 | 100100 | 101000 | 101100
+
+
+; %VER 3C509-TPO EISA Configuration File v2.0a
+
+BOARD
+        ID = "TCM5098"
+        NAME = "3Com 3C509-TPC Network Adapter"
+        MFR = "3Com Corporation"
+        CATEGORY = "NET"
+        LENGTH = 160
+        READID = yes
+        AMPERAGE = 400
+        DISABLE = supported
+        HELP =
+           "The 3Com 3C509-TPC network adapter
+           connects your personal
+           computer to an 802.3 local area network.\n
+           \n
+           Refer to the adapter guide for
+           additional information on configuring
+           this adapter."
+
+IOPORT(1) = 0zc86h
+        SIZE = word
+        INITVAL = xxxxxxxxx0xxxxxx
+
+IOPORT(2) = 0zc88h
+        SIZE = word
+        INITVAL = LOC(15 14 13 12 9 8 7 6 5 4 3 2 1 0) xxxxxxxxxxxxxx
+
+FUNCTION = "I/O Address Range"
+        SHOW = NO
+        HELP =
+            "This function is a placeholder for the I/O ports resource."
+        CHOICE = ""
+            LINK
+                PORT = 0z0h-0zfh
+                INIT = IOPORT(1) LOC(4 3 2 1 0) 11111
+
+FUNCTION = "Interrupt Request Level"
+        HELP =
+           "Determines the interrupt request level that is used by the adapter."
+        CHOICE = "3"
+                LINK
+                    IRQ = 3
+                    INIT = IOPORT(2) LOC(15 14 13 12) 0011
+        CHOICE = "5"
+                LINK
+                    IRQ = 5
+                    INIT = IOPORT(2) LOC(15 14 13 12) 0101
+        CHOICE = "7"
+                LINK
+                    IRQ = 7
+                    INIT = IOPORT(2) LOC(15 14 13 12) 0111
+        CHOICE = "9"
+                LINK
+                    IRQ = 9
+                    INIT = IOPORT(2) LOC(15 14 13 12) 1001
+        CHOICE = "10"
+                LINK
+                    IRQ = 10
+                    INIT = IOPORT(2) LOC(15 14 13 12) 1010
+        CHOICE = "11"
+                LINK
+                    IRQ = 11
+                    INIT = IOPORT(2) LOC(15 14 13 12) 1011
+        CHOICE = "12"
+                LINK
+                    IRQ = 12
+                    INIT = IOPORT(2) LOC(15 14 13 12) 1100
+        CHOICE = "15"
+                LINK
+                    IRQ = 15
+                    INIT = IOPORT(2) LOC(15 14 13 12) 1111
+
+FUNCTION = "Boot PROM Size"
+        HELP =
+           "Specifies the size of the boot PROM that
+           is installed on the adapter for remote
+           system booting over the network.\n
+           \n
+           Disabled  -  No boot PROM is installed.\n
+           \n
+           8K  -  An 8K boot PROM is installed.\n
+           \n
+           16K  -  A 16K boot PROM is installed.\n
+           \n
+           32K  -  A 32K boot PROM is installed."
+        CHOICE = "Disabled"
+                LINK
+                        INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000000
+        CHOICE = "8K"
+                COMBINE
+                        MEMORY = 8k
+                                ADDRESS = 0c2000h-0de000h  STEP = 8k
+                                MEMTYPE = oth
+                                WRITABLE = no
+                                SIZE = word
+                                DECODE = 20
+                        INIT = IOPORT(1) LOC(13 12 11 10 9 8) 000001 | 000010 | 000011 | 000100 | 000101 | 000110 | 000111 | 001000 | 001001 | 001010 | 001011 | 001100 | 001101 | 001110 | 001111
+        CHOICE = "16K"
+                COMBINE
+                        MEMORY = 16k
+                                ADDRESS = 0c0000h-0dc000h  STEP = 16k
+                                MEMTYPE = oth
+                                WRITABLE = no
+                                SIZE = word
+                                DECODE = 20
+                        INIT = IOPORT(1) LOC(13 12 11 10 9 8) 010001 | 010010 | 010100 | 000110 | 011000 | 011010 | 011100 | 011110
+        CHOICE = "32K"
+                COMBINE
+                        MEMORY = 32k
+                                ADDRESS = 0c0000h-0d8000h  STEP = 32k
+                                MEMTYPE = oth
+                                WRITABLE = no
+                                SIZE = word
+                                DECODE = 20
+                        INIT = IOPORT(1) LOC(13 12 11 10 9 8) 100001 | 100100 | 101000 | 101100
+
+FUNCTION = "Transceiver Type"
+        HELP =
+           "Specifies which of the adapter's
+           transceivers is being used.\n
+           \n
+           On-board TP  -  The on-board transceiver
+           (RJ-45 connector) on the the adapter is
+           being used.\n
+           \n
+           On-board coax  -  The on-board
+           transceiver (BNC connector) on the
+           adapter is being used."
+        CHOICE = "On-board TP"
+                LINK
+                        INIT = IOPORT(1) LOC(15 14) 00
+        CHOICE = "On-board Coax"
+                LINK
+                        INIT = IOPORT(1) LOC(15 14) 11
+
+; %VER 3C509-TPC EISA Configuration File v5.0b
+

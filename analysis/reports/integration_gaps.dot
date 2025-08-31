@@ -1,0 +1,29 @@
+digraph IntegrationGaps {
+    rankdir=TB;
+    node [shape=box];
+    
+    subgraph cluster_current {
+        label="Current Implementation";
+        color=green;
+        
+        "3c515.c" -> "memory.c";
+        "3c515.c" -> "buffer_alloc.c";
+        "packet_ops.c" -> "hardware.c";
+    }
+    
+    subgraph cluster_missing {
+        label="Missing Integration";
+        color=red;
+        style=dashed;
+        
+        "dma_safety.c" [color=red];
+        "cache_coherency.c" [color=red];
+        "runtime_config.c" [color=red];
+    }
+    
+    // Show where integration should happen
+    "3c515.c" -> "dma_safety.c" [label="NEEDED", color=orange, style=dashed];
+    "packet_ops.c" -> "cache_coherency.c" [label="NEEDED", color=orange, style=dashed];
+    "config.c" -> "runtime_config.c" [label="UPGRADE", color=blue, style=dashed];
+    
+}

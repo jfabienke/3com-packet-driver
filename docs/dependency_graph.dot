@@ -1,0 +1,158 @@
+digraph "3Com Packet Driver Dependencies" {
+    graph [
+        rankdir="TB",
+        bgcolor="white",
+        fontname="Arial",
+        fontsize=12,
+        label="3Com DOS Packet Driver v1.0.0 - Active Code Dependencies\n(Green=Active, Red=Dead Code, Yellow=Test/Demo)",
+        labelloc="t"
+    ];
+    
+    node [
+        shape=box,
+        style=filled,
+        fontname="Arial",
+        fontsize=10
+    ];
+    
+    edge [
+        fontname="Arial",
+        fontsize=8
+    ];
+    
+    // Active Core Components
+    subgraph cluster_core {
+        label="Core Driver (Active)";
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "tsr_loader.asm" [fillcolor=darkgreen, fontcolor=white];
+        "init.c" [fillcolor=green, fontcolor=white];
+        "config.c" [fillcolor=green, fontcolor=white];
+        "api.c" [fillcolor=green, fontcolor=white];
+        "hardware.c" [fillcolor=green, fontcolor=white];
+    }
+    
+    // NIC Support (Active)
+    subgraph cluster_nic {
+        label="NIC Support (Active)";
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "3c509b.c" [fillcolor=green, fontcolor=white];
+        "3c515.c" [fillcolor=green, fontcolor=white];
+        "nic_init.c" [fillcolor=green, fontcolor=white];
+        "eeprom.c" [fillcolor=green, fontcolor=white];
+        "pnp.c" [fillcolor=green, fontcolor=white];
+    }
+    
+    // Memory Management (Active)
+    subgraph cluster_memory {
+        label="Memory Management (Active)";
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "memory.c" [fillcolor=green, fontcolor=white];
+        "buffer_alloc.c" [fillcolor=green, fontcolor=white];
+        "xms_detect.c" [fillcolor=green, fontcolor=white];
+        "umb_loader.c" [fillcolor=green, fontcolor=white];
+    }
+    
+    // Network Operations (Active)
+    subgraph cluster_network {
+        label="Network Operations (Active)";
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "packet_ops.c" [fillcolor=green, fontcolor=white];
+        "routing.c" [fillcolor=green, fontcolor=white];
+        "arp.c" [fillcolor=green, fontcolor=white];
+        "static_routing.c" [fillcolor=green, fontcolor=white];
+    }
+    
+    // SMC Optimization (Active)
+    subgraph cluster_smc {
+        label="SMC Optimization (Active)";
+        style=filled;
+        fillcolor=lightgreen;
+        
+        "smc_patches.c" [fillcolor=green, fontcolor=white];
+        "cpu_detect.asm" [fillcolor=green, fontcolor=white];
+        "packet_api_smc.asm" [fillcolor=green, fontcolor=white];
+        "nic_irq_smc.asm" [fillcolor=green, fontcolor=white];
+    }
+    
+    // Dead PCI Support
+    subgraph cluster_pci {
+        label="PCI Support (DEAD CODE)";
+        style=filled;
+        fillcolor=lightcoral;
+        
+        "3com_boomerang.c" [fillcolor=red, fontcolor=white];
+        "3com_vortex.c" [fillcolor=red, fontcolor=white];
+        "3com_init.c" [fillcolor=red, fontcolor=white];
+        "3com_windows.c" [fillcolor=red, fontcolor=white];
+        "3com_performance.c" [fillcolor=red, fontcolor=white];
+    }
+    
+    // Test/Demo Code
+    subgraph cluster_test {
+        label="Test/Demo (DEAD CODE)";
+        style=filled;
+        fillcolor=lightyellow;
+        
+        "busmaster_test.c" [fillcolor=yellow];
+        "ansi_demo.c" [fillcolor=yellow];
+        "dma_self_test.c" [fillcolor=yellow];
+    }
+    
+    // Unused Features
+    subgraph cluster_unused {
+        label="Unused Features (DEAD CODE)";
+        style=filled;
+        fillcolor=lightcoral;
+        
+        "cache_coherency.c" [fillcolor=red, fontcolor=white];
+        "dma_safety.c" [fillcolor=red, fontcolor=white];
+        "hw_checksum.c" [fillcolor=red, fontcolor=white];
+        "interrupt_mitigation.c" [fillcolor=red, fontcolor=white];
+    }
+    
+    // Active Dependencies
+    "tsr_loader.asm" -> "init.c" [color=darkgreen, penwidth=2];
+    "init.c" -> "config.c" [color=darkgreen, penwidth=2];
+    "init.c" -> "hardware.c" [color=darkgreen, penwidth=2];
+    "init.c" -> "nic_init.c" [color=darkgreen, penwidth=2];
+    "init.c" -> "memory.c" [color=darkgreen, penwidth=2];
+    
+    "hardware.c" -> "3c509b.c" [color=darkgreen, penwidth=2];
+    "hardware.c" -> "3c515.c" [color=darkgreen, penwidth=2];
+    "hardware.c" -> "pnp.c" [color=darkgreen, penwidth=2];
+    
+    "nic_init.c" -> "eeprom.c" [color=darkgreen, penwidth=2];
+    "nic_init.c" -> "buffer_alloc.c" [color=darkgreen, penwidth=2];
+    
+    "api.c" -> "packet_ops.c" [color=darkgreen, penwidth=2];
+    "packet_ops.c" -> "routing.c" [color=darkgreen, penwidth=2];
+    "routing.c" -> "arp.c" [color=darkgreen, penwidth=2];
+    
+    "memory.c" -> "xms_detect.c" [color=darkgreen, penwidth=2];
+    "memory.c" -> "umb_loader.c" [color=darkgreen, penwidth=2];
+    
+    "init.c" -> "smc_patches.c" [color=darkgreen, penwidth=2];
+    "smc_patches.c" -> "cpu_detect.asm" [color=darkgreen, penwidth=2];
+    
+    // Dead code has NO incoming edges from active code
+    // This visually shows isolation
+    
+    // Legend
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled;
+        fillcolor=white;
+        
+        "Active Code" [fillcolor=green, fontcolor=white];
+        "Dead Code" [fillcolor=red, fontcolor=white];
+        "Test Code" [fillcolor=yellow];
+    }
+}

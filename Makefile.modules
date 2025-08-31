@@ -1,0 +1,302 @@
+# Makefile.modules - Module Build System for 3Com Packet Driver
+# Phase 3A: Dynamic Module Loading - Stream 1 Build Infrastructure
+#
+# This Makefile builds individual .MOD files from source modules
+# and packages them with proper headers and verification.
+
+# Compiler and assembler settings
+CC = bcc
+AS = tasm
+LD = tlink
+
+# Module-specific compiler flags
+CFLAGS_MODULE = -ml -Ic:\tc\include -I../include -DMODULE_BUILD -O -G
+AFLAGS_MODULE = /ml /D__LARGE__ /DMODULE_BUILD
+LDFLAGS_MODULE = /t /c /L../lib
+
+# Module linker script
+MODULE_SCRIPT = module.ld
+
+# Output directories
+MODULE_DIR = modules
+DIST_DIR = dist
+TOOLS_DIR = tools
+
+# Source directories
+HARDWARE_SRC_DIR = src/modules/hardware
+FEATURE_SRC_DIR = src/modules/features
+CORE_SRC_DIR = src/core
+
+# Module verification tool
+MODVERIFY = $(TOOLS_DIR)/modverify.exe
+MODPACK = $(TOOLS_DIR)/modpack.exe
+
+# Hardware module targets
+HARDWARE_MODULES = $(MODULE_DIR)/ETHRLINK3.MOD $(MODULE_DIR)/CORKSCREW.MOD
+
+# Feature module targets  
+FEATURE_MODULES = $(MODULE_DIR)/ROUTING.MOD $(MODULE_DIR)/FLOWCTRL.MOD \
+                  $(MODULE_DIR)/STATS.MOD $(MODULE_DIR)/PROMISC.MOD \
+                  $(MODULE_DIR)/DIAG.MOD
+
+# All module targets
+ALL_MODULES = $(HARDWARE_MODULES) $(FEATURE_MODULES)
+
+# Distribution packages
+DIST_PACKAGES = $(DIST_DIR)/3CPD_MINIMAL.ZIP $(DIST_DIR)/3CPD_STANDARD.ZIP \
+                $(DIST_DIR)/3CPD_COMPLETE.ZIP
+
+.PHONY: all modules hardware features tools clean install dist verify
+
+# Default target
+all: tools modules
+
+# Build all modules
+modules: hardware features
+
+# Build hardware modules
+hardware: $(HARDWARE_MODULES)
+
+# Build feature modules  
+features: $(FEATURE_MODULES)
+
+# Build development tools
+tools: $(MODVERIFY) $(MODPACK)
+
+# Create directories
+$(MODULE_DIR):
+	mkdir $(MODULE_DIR)
+
+$(DIST_DIR):
+	mkdir $(DIST_DIR)
+
+$(TOOLS_DIR):
+	mkdir $(TOOLS_DIR)
+
+# ============================================================================
+# Hardware Module Build Rules
+# ============================================================================
+
+# ETHRLINK3.MOD - EtherLink III Family Module
+$(MODULE_DIR)/ETHRLINK3.MOD: $(HARDWARE_SRC_DIR)/ethrlink3.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building ETHRLINK3.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(HARDWARE_SRC_DIR)/ethrlink3.c -o ethrlink3.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) ethrlink3.obj, ethrlink3.exe
+	$(MODPACK) ethrlink3.exe $@ HARDWARE ETHERLINK3
+	del ethrlink3.obj ethrlink3.exe
+
+# CORKSCREW.MOD - Corkscrew Family Module (3C515)
+$(MODULE_DIR)/CORKSCREW.MOD: $(HARDWARE_SRC_DIR)/corkscrew.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building CORKSCREW.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(HARDWARE_SRC_DIR)/corkscrew.c -o corkscrew.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) corkscrew.obj, corkscrew.exe
+	$(MODPACK) corkscrew.exe $@ HARDWARE CORKSCREW
+	del corkscrew.obj corkscrew.exe
+
+# ============================================================================
+# Feature Module Build Rules
+# ============================================================================
+
+# ROUTING.MOD - Multi-NIC Routing Module
+$(MODULE_DIR)/ROUTING.MOD: $(FEATURE_SRC_DIR)/routing.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building ROUTING.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(FEATURE_SRC_DIR)/routing.c -o routing.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) routing.obj, routing.exe
+	$(MODPACK) routing.exe $@ FEATURE ROUTING
+	del routing.obj routing.exe
+
+# FLOWCTRL.MOD - 802.3x Flow Control Module
+$(MODULE_DIR)/FLOWCTRL.MOD: $(FEATURE_SRC_DIR)/flowctrl.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building FLOWCTRL.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(FEATURE_SRC_DIR)/flowctrl.c -o flowctrl.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) flowctrl.obj, flowctrl.exe
+	$(MODPACK) flowctrl.exe $@ FEATURE FLOWCTRL
+	del flowctrl.obj flowctrl.exe
+
+# STATS.MOD - Advanced Statistics Module
+$(MODULE_DIR)/STATS.MOD: $(FEATURE_SRC_DIR)/stats.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building STATS.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(FEATURE_SRC_DIR)/stats.c -o stats.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) stats.obj, stats.exe
+	$(MODPACK) stats.exe $@ FEATURE STATS
+	del stats.obj stats.exe
+
+# PROMISC.MOD - Promiscuous Mode Module
+$(MODULE_DIR)/PROMISC.MOD: $(FEATURE_SRC_DIR)/promisc.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building PROMISC.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(FEATURE_SRC_DIR)/promisc.c -o promisc.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) promisc.obj, promisc.exe
+	$(MODPACK) promisc.exe $@ FEATURE PROMISC
+	del promisc.obj promisc.exe
+
+# DIAG.MOD - Diagnostics Module (Init-only)
+$(MODULE_DIR)/DIAG.MOD: $(FEATURE_SRC_DIR)/diag.c $(MODULE_SCRIPT) | $(MODULE_DIR)
+	@echo Building DIAG.MOD...
+	$(CC) $(CFLAGS_MODULE) -c $(FEATURE_SRC_DIR)/diag.c -o diag.obj
+	$(LD) $(LDFLAGS_MODULE) /L$(MODULE_SCRIPT) diag.obj, diag.exe
+	$(MODPACK) diag.exe $@ FEATURE DIAG
+	del diag.obj diag.exe
+
+# ============================================================================
+# Core Loader Build Rule
+# ============================================================================
+
+3CPD.COM: $(CORE_SRC_DIR)/core_loader.c $(CORE_SRC_DIR)/module_manager.c $(CORE_SRC_DIR)/memory_manager.c
+	@echo Building 3CPD.COM core loader...
+	$(CC) $(CFLAGS_MODULE) -e3CPD.COM $(CORE_SRC_DIR)/core_loader.c $(CORE_SRC_DIR)/module_manager.c $(CORE_SRC_DIR)/memory_manager.c
+
+# ============================================================================
+# Module Tools Build Rules
+# ============================================================================
+
+# Module verification tool
+$(MODVERIFY): tools/modverify.c | $(TOOLS_DIR)
+	@echo Building module verification tool...
+	$(CC) -ms -Ic:\tc\include -I../include tools/modverify.c -e$(MODVERIFY)
+
+# Module packaging tool
+$(MODPACK): tools/modpack.c | $(TOOLS_DIR)
+	@echo Building module packaging tool...
+	$(CC) -ms -Ic:\tc\include -I../include tools/modpack.c -e$(MODPACK)
+
+# ============================================================================
+# Module Verification
+# ============================================================================
+
+verify: $(MODVERIFY) $(ALL_MODULES)
+	@echo Verifying all modules...
+	@for %m in ($(ALL_MODULES)) do $(MODVERIFY) %m
+
+# ============================================================================
+# Distribution Packages
+# ============================================================================
+
+dist: $(DIST_PACKAGES)
+
+# Minimal distribution (core + one hardware module)
+$(DIST_DIR)/3CPD_MINIMAL.ZIP: 3CPD.COM $(MODULE_DIR)/ETHRLINK3.MOD | $(DIST_DIR)
+	@echo Creating minimal distribution...
+	pkzip -a $@ 3CPD.COM $(MODULE_DIR)/ETHRLINK3.MOD README.md docs/user/installation.md
+
+# Standard distribution (core + hardware + basic features)  
+$(DIST_DIR)/3CPD_STANDARD.ZIP: 3CPD.COM $(HARDWARE_MODULES) $(MODULE_DIR)/ROUTING.MOD $(MODULE_DIR)/STATS.MOD | $(DIST_DIR)
+	@echo Creating standard distribution...
+	pkzip -a $@ 3CPD.COM $(HARDWARE_MODULES) $(MODULE_DIR)/ROUTING.MOD $(MODULE_DIR)/STATS.MOD README.md docs/user/*.md
+
+# Complete distribution (everything)
+$(DIST_DIR)/3CPD_COMPLETE.ZIP: 3CPD.COM $(ALL_MODULES) | $(DIST_DIR)
+	@echo Creating complete distribution...
+	pkzip -a $@ 3CPD.COM $(ALL_MODULES) README.md docs/user/*.md docs/development/*.md
+
+# ============================================================================
+# Installation
+# ============================================================================
+
+install: 3CPD.COM $(ALL_MODULES)
+	@echo Installing 3Com Packet Driver...
+	copy 3CPD.COM C:\DRIVERS\
+	copy $(MODULE_DIR)\*.MOD C:\DRIVERS\MODULES\
+	@echo Installation complete. Use: 3CPD /HELP for options
+
+# ============================================================================
+# Module Size Report
+# ============================================================================
+
+sizes: $(ALL_MODULES)
+	@echo Module Size Report:
+	@echo ==================
+	@echo Core Loader:
+	@dir 3CPD.COM | find "3CPD.COM"
+	@echo.
+	@echo Hardware Modules:
+	@dir $(MODULE_DIR)\ETHRLINK3.MOD | find ".MOD"
+	@dir $(MODULE_DIR)\CORKSCREW.MOD | find ".MOD"
+	@echo.
+	@echo Feature Modules:
+	@dir $(MODULE_DIR)\ROUTING.MOD | find ".MOD"
+	@dir $(MODULE_DIR)\FLOWCTRL.MOD | find ".MOD" 
+	@dir $(MODULE_DIR)\STATS.MOD | find ".MOD"
+	@dir $(MODULE_DIR)\PROMISC.MOD | find ".MOD"
+	@dir $(MODULE_DIR)\DIAG.MOD | find ".MOD"
+
+# ============================================================================
+# Testing Integration
+# ============================================================================
+
+test-modules: $(ALL_MODULES)
+	@echo Running module tests...
+	cd tests && make test-modules
+
+# ============================================================================
+# Memory Footprint Analysis
+# ============================================================================
+
+footprint: $(ALL_MODULES)
+	@echo Analyzing memory footprints...
+	@echo.
+	@echo Scenario 1 - Minimal (3C509 only):
+	@echo Core: ~30KB + ETHRLINK3: ~13KB = ~43KB total
+	@echo.
+	@echo Scenario 2 - Standard (3C509 + features):
+	@echo Core: ~30KB + ETHRLINK3: ~13KB + ROUTING+STATS: ~14KB = ~57KB total
+	@echo.
+	@echo Scenario 3 - Complete (both NICs + all features):
+	@echo Core: ~30KB + Hardware: ~30KB + Features: ~22KB = ~82KB total
+	@echo.
+	@echo Memory reduction vs. monolithic (65KB):
+	@echo Minimal: 34%% reduction, Standard: 12%% reduction
+
+# ============================================================================
+# Development Helpers
+# ============================================================================
+
+# Clean build artifacts
+clean:
+	del *.obj *.exe *.map 2>nul
+	del $(MODULE_DIR)\*.MOD 2>nul
+	del $(DIST_DIR)\*.ZIP 2>nul
+
+# Clean everything including tools
+clean-all: clean
+	del $(TOOLS_DIR)\*.exe 2>nul
+	rmdir $(MODULE_DIR) 2>nul
+	rmdir $(DIST_DIR) 2>nul
+
+# Development rebuild
+rebuild: clean all
+
+# Quick build for development
+quick: $(HARDWARE_MODULES) $(MODULE_DIR)/ROUTING.MOD $(MODULE_DIR)/STATS.MOD
+
+# Help target
+help:
+	@echo 3Com Packet Driver Module Build System
+	@echo =====================================
+	@echo.
+	@echo Available targets:
+	@echo   all          - Build tools and all modules
+	@echo   modules      - Build all modules
+	@echo   hardware     - Build hardware modules only
+	@echo   features     - Build feature modules only
+	@echo   tools        - Build development tools
+	@echo   3CPD.COM     - Build core loader
+	@echo   verify       - Verify all modules
+	@echo   dist         - Create distribution packages
+	@echo   install      - Install to C:\DRIVERS\
+	@echo   sizes        - Show module size report
+	@echo   footprint    - Show memory footprint analysis
+	@echo   test-modules - Run module tests
+	@echo   clean        - Clean build artifacts
+	@echo   clean-all    - Clean everything
+	@echo   rebuild      - Clean and rebuild all
+	@echo   quick        - Quick build (hardware + routing + stats)
+	@echo   help         - Show this help
+	@echo.
+	@echo Individual modules:
+	@echo   $(MODULE_DIR)/ETHRLINK3.MOD  - 3C509 family support
+	@echo   $(MODULE_DIR)/CORKSCREW.MOD  - 3C515 family support  
+	@echo   $(MODULE_DIR)/ROUTING.MOD    - Multi-NIC routing
+	@echo   $(MODULE_DIR)/FLOWCTRL.MOD   - 802.3x flow control
+	@echo   $(MODULE_DIR)/STATS.MOD      - Advanced statistics
+	@echo   $(MODULE_DIR)/PROMISC.MOD    - Promiscuous mode
+	@echo   $(MODULE_DIR)/DIAG.MOD       - Hardware diagnostics
