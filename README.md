@@ -393,18 +393,38 @@ src/
 ## Performance Analysis
 
 ### Throughput Measurements
-| Packet Size | 3C509B (10Mbps) | 3C515-TX (100Mbps) |
-|------------|-----------------|-------------------|
-| 64 bytes | 7.2 Mbps | 45 Mbps |
-| 256 bytes | 8.8 Mbps | 72 Mbps |
-| 1500 bytes | 9.6 Mbps | 94 Mbps |
+|| Packet Size | 3C509B (10Mbps) | 3C515-TX (100Mbps - PIO) | 3C515-TX (100Mbps - Bus Master) |
+||------------|------------------|--------------------------|----------------------------------|
+|| 64 bytes | 7.2 Mbps | 28 Mbps | 45 Mbps |
+|| 256 bytes | 8.8 Mbps | 50 Mbps | 72 Mbps |
+|| 1500 bytes | 9.6 Mbps | 60 Mbps | 94 Mbps |
 
 ### CPU Utilization
-| Activity | 286 @ 12MHz | 486 @ 66MHz | Pentium @ 200MHz |
-|---------|-------------|-------------|------------------|
-| Idle | 0% | 0% | 0% |
-| 10Mbps RX | 45% | 8% | 2% |
-| 100Mbps RX | N/A | 35% | 12% |
+
+#### 3C509B (10Mbps)
+|| Activity | 286 @ 12MHz | 486 @ 66MHz | Pentium @ 200MHz |
+||---------|-------------|-------------|------------------|
+|| Idle | 0% | 0% | 0% |
+|| 10Mbps RX | 45% | 8% | 2% |
+
+#### 3C515-TX (100Mbps - PIO mode)
+|| Activity | 286 @ 12MHz | 486 @ 66MHz | Pentium @ 200MHz |
+||---------|-------------|-------------|------------------|
+|| Idle | 0% | 0% | 0% |
+|| 100Mbps RX | 100% (not line-rate) | 65% | 30% |
+
+#### 3C515-TX (100Mbps - Bus Master mode)
+|| Activity | 286 @ 12MHz | 486 @ 66MHz | Pentium @ 200MHz |
+||---------|-------------|-------------|------------------|
+|| Idle | 0% | 0% | 0% |
+|| 100Mbps RX | 100% (not line-rate) | 35% | 12% |
+
+Note (286 @ 12MHz with 3C515):
+- “100% (not line-rate)” indicates the CPU saturates well below 100 Mbps.
+- Typical sustainable RX throughput (ballpark):
+  - PIO mode: ~4–8 Mbps
+  - Bus master mode: ~8–15 Mbps
+- Highly dependent on frame size and ISA chipset; small frames (e.g., 64B) imply very high packet rates and are not feasible at scale on a 286.
 
 ### SMC Performance Gains
 - **Eliminated Branches**: 19 runtime CPU checks removed
