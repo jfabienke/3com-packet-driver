@@ -177,9 +177,10 @@ macro CHECK_DOS_COMPLETELY_SAFE
     cmp word [cs:criterr_segment], 0
     jz %%safe                  ; No critical error support
     
-    mov ds, [cs:criterr_segment]
-    mov si, [cs:criterr_offset]
-    cmp byte [ds:si], 0
+    ; GPT-5 Critical Fix: Load offset BEFORE changing DS
+    mov si, [cs:criterr_offset]  ; Load offset while CS is still accessible
+    mov ds, [cs:criterr_segment] ; Now change DS to criterr segment
+    cmp byte [ds:si], 0          ; Check critical error flag
     
 %%not_safe:
 %%safe:

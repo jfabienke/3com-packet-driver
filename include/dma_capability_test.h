@@ -42,6 +42,14 @@ typedef struct {
     cache_mode_t cache_mode;       /* Detected cache mode */
     uint32_t max_dma_size;         /* Maximum single DMA transfer */
     uint32_t dma_latency_us;       /* DMA latency in microseconds */
+    
+    /* Additional test results for A+ grade */
+    uint32_t cache_flush_overhead_us; /* Cache flush overhead per KB */
+    int32_t dma_gain_256b;         /* DMA performance gain at 256B (%) */
+    int32_t dma_gain_1514b;        /* DMA performance gain at 1514B (%) */
+    uint16_t optimal_copybreak;    /* Optimal PIO/DMA threshold */
+    uint16_t adjusted_copybreak;   /* Adjusted for cache overhead */
+    bool misalignment_safe;        /* DMA safe with misaligned buffers */
 } dma_test_results_t;
 
 /* Refined DMA capabilities after testing */

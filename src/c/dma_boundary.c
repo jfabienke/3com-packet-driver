@@ -14,21 +14,22 @@
 #include "../../include/logging.h"
 #include "../../include/memory.h"
 #include "../../include/common.h"
+#include "../../include/memory_barriers.h"
 #include <string.h>
 #include <stdlib.h>
 #include <dos.h>
 
-/* Global bounce buffer pools */
+/* Global bounce buffer pools - accessed from ISR and main context */
 static bounce_pool_t g_tx_bounce_pool = {0};
 static bounce_pool_t g_rx_bounce_pool = {0};
 static bool g_bounce_pools_initialized = false;
 
-/* Statistics tracking */
+/* Statistics tracking - updated from ISR */
 static dma_boundary_stats_t g_boundary_stats = {0};
 
-/* Critical section protection */
-#define ENTER_CRITICAL() __asm { cli }
-#define EXIT_CRITICAL()  __asm { sti }
+/* Critical section protection - use proper save/restore */
+#define ENTER_CRITICAL() irq_flags_t _saved_flags = irq_save()
+#define EXIT_CRITICAL()  irq_restore(_saved_flags)
 
 /**
  * @brief Enhanced DMA buffer safety check - GPT-5 Implementation

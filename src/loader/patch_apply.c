@@ -19,6 +19,9 @@
 #include "../include/cpu_detect.h"
 #include "../include/logging.h"
 #include "../include/production.h"
+#include "../include/platform_probe.h"
+#include "../include/config.h"
+#include "../include/vds.h"
 
 /* Mark entire file for cold section */
 #pragma code_seg("COLD_TEXT", "CODE")
@@ -114,6 +117,86 @@ static int apply_single_patch(void far* dest, const uint8_t* patch, uint8_t size
     }
     
     patch_stats.patches_applied++;
+    return SUCCESS;
+}
+
+/**
+ * @brief Dynamically select DMA vs PIO for 3C515 and patch hot path
+ *
+ * Decision gates:
+ * - Global PIO override (global_force_pio_mode)
+ * - Platform policy (platform_allow_busmaster_dma)
+ * - Config.busmaster not OFF
+ * - If platform requires VDS, ensure vds_available()
+ */
+static int apply_dma_pio_selection(const config_t* cfg) {
+    int use_dma = 0;
+    uint8_t patch_bytes[5];
+    uint16_t rel;
+
+    /* Hard override to PIO if critical patches failed */
+    extern int global_force_pio_mode;
+    if (global_force_pio_mode) {
+        LOG_WARNING("Forcing PIO: global override active");
+        use_dma = 0;
+        goto do_patch;
+    }
+
+    /* Respect user configuration */
+    if (cfg && cfg->busmaster == BUSMASTER_OFF) {
+        LOG_INFO("Bus mastering disabled by configuration");
+        use_dma = 0;
+        goto do_patch;
+    }
+
+    /* Platform policy gate */
+    if (!platform_allow_busmaster_dma()) {
+        LOG_INFO("Platform policy forbids bus-master DMA; using PIO");
+        use_dma = 0;
+        goto do_patch;
+    }
+
+    /* If policy requires VDS, verify it's available */
+    if (g_platform.requires_vds && !vds_available()) {
+        LOG_INFO("VDS required but not available; using PIO");
+        use_dma = 0;
+        goto do_patch;
+    }
+
+    /* All gates passed: allow DMA */
+    use_dma = 1;
+
+do_patch:
+    /* Build 5-byte sled: E8 rel16, 90, 90 */
+    patch_bytes[0] = 0xE8;
+    patch_bytes[3] = 0x90;
+    patch_bytes[4] = 0x90;
+
+    /* Compute rel16 to transfer_{dma|pio} from PATCH_3c515_transfer+3 */
+    {
+        extern void far PATCH_3c515_transfer(void);
+        extern void transfer_dma(void);
+        extern void transfer_pio(void);
+
+        uint16_t target_off = (uint16_t)(use_dma ? FP_OFF(transfer_dma) : FP_OFF(transfer_pio));
+        uint16_t site_off = FP_OFF(PATCH_3c515_transfer);
+        rel = (uint16_t)(target_off - (site_off + 3));
+        patch_bytes[1] = (uint8_t)(rel & 0xFF);
+        patch_bytes[2] = (uint8_t)((rel >> 8) & 0xFF);
+    }
+
+    /* Apply patch atomically */
+    {
+        extern uint8_t far PATCH_3c515_transfer;
+        int rc = apply_single_patch(&PATCH_3c515_transfer, patch_bytes, 5);
+        if (rc == SUCCESS) {
+            LOG_INFO("3C515 transfer method: %s", use_dma ? "DMA" : "PIO");
+        } else {
+            LOG_ERROR("Failed to patch 3C515 transfer method");
+            return rc;
+        }
+    }
+
     return SUCCESS;
 }
 
@@ -261,15 +344,29 @@ int patch_init_and_apply(void) {
     printf("Optimizing for %s...\n", cpu_info->cpu_name);
     #endif
     
-    /* Example: Apply patches to packet API module */
+    /* Apply patches to packet API module */
     extern module_header_t packet_api_module_header;
     result = apply_module_patches(&packet_api_module_header, cpu_info);
     if (result != SUCCESS) {
+        LOG_ERROR("Failed to patch packet_api module");
         return result;
     }
     
-    /* Apply patches to other modules... */
-    /* (Would iterate through all loaded modules) */
+    /* CRITICAL FIX: Apply patches to NIC IRQ module (contains DMA/cache safety points) */
+    extern module_header_t nic_irq_module_header;
+    result = apply_module_patches(&nic_irq_module_header, cpu_info);
+    if (result != SUCCESS) {
+        LOG_ERROR("Failed to patch nic_irq module");
+        return result;
+    }
+    
+    /* Apply patches to hardware module */
+    extern module_header_t hardware_module_header;
+    result = apply_module_patches(&hardware_module_header, cpu_info);
+    if (result != SUCCESS) {
+        LOG_ERROR("Failed to patch hardware module");
+        return result;
+    }
     
     LOG_INFO("SMC patching complete: %d total patches applied", 
             patch_stats.patches_applied);
@@ -297,6 +394,63 @@ int validate_timing_constraints(void) {
     return SUCCESS;
 }
 
+/**
+ * @brief Verify critical patches were applied (not NOPs)
+ * @return SUCCESS if patches valid, error otherwise
+ * 
+ * CRITICAL: Checks that DMA/cache safety patches are active.
+ * If patches are still NOPs, forces PIO mode for safety.
+ */
+int verify_patches_applied(void) {
+    uint8_t far *patch_site;
+    int patches_valid = 1;
+    
+    /* Check critical patch points are not NOPs */
+    
+    /* Check DMA boundary check patch */
+    extern uint8_t far PATCH_dma_boundary_check;
+    patch_site = &PATCH_dma_boundary_check;
+    if (patch_site[0] == 0x90 && patch_site[1] == 0x90) {  /* NOPs */
+        LOG_ERROR("CRITICAL: DMA boundary check patch not applied!");
+        patches_valid = 0;
+    }
+    
+    /* Check cache flush pre patch */
+    extern uint8_t far PATCH_cache_flush_pre;
+    patch_site = &PATCH_cache_flush_pre;
+    if (patch_site[0] == 0x90 && patch_site[1] == 0x90) {  /* NOPs */
+        LOG_ERROR("CRITICAL: Cache flush pre patch not applied!");
+        patches_valid = 0;
+    }
+    
+    /* Check 3C515 transfer patch (should be PIO by default) */
+    extern uint8_t far PATCH_3c515_transfer;
+    patch_site = &PATCH_3c515_transfer;
+    if (patch_site[0] == 0xE8) {  /* CALL instruction */
+        LOG_INFO("3C515 transfer patch verified (CALL instruction present)");
+    } else if (patch_site[0] == 0x90) {  /* NOP */
+        LOG_ERROR("CRITICAL: 3C515 transfer patch not applied!");
+        patches_valid = 0;
+    }
+    
+    if (!patches_valid) {
+        LOG_ERROR("Safety patches missing - forcing PIO mode!");
+        
+        /* Set global flag to force PIO for all NICs */
+        extern int global_force_pio_mode;
+        global_force_pio_mode = 1;
+        
+        #ifdef PRODUCTION
+        printf("WARNING: Safety patches not active, using PIO mode\n");
+        #endif
+        
+        return -1;
+    }
+    
+    LOG_INFO("All critical patches verified as active");
+    return SUCCESS;
+}
+
 /* Assembly implementation of prefetch flush */
 void asm_flush_prefetch(void) {
     __asm {
@@ -307,3 +461,36 @@ void asm_flush_prefetch(void) {
 
 /* Restore default code segment */
 #pragma code_seg()
+
+/* Public entry to initialize and apply patches including DMA/PIO selection */
+int patch_init_and_apply(void) {
+    int result;
+    const cpu_info_t* cpu_info = cpu_get_info();
+    if (!cpu_info) return -1;
+
+    /* Apply CPU-class patches to all modules */
+    extern module_header_t packet_api_module_header;
+    extern module_header_t nic_irq_module_header;
+    extern module_header_t hardware_module_header;
+    result = apply_module_patches(&packet_api_module_header, cpu_info);
+    if (result != SUCCESS) return result;
+    result = apply_module_patches(&nic_irq_module_header, cpu_info);
+    if (result != SUCCESS) return result;
+    result = apply_module_patches(&hardware_module_header, cpu_info);
+    if (result != SUCCESS) return result;
+
+    /* Platform init (sets g_platform and policy) */
+    platform_init();
+
+    /* Verify critical patches present */
+    result = verify_patches_applied();
+    if (result != SUCCESS) {
+        /* Proceed with PIO enforced */
+    }
+
+    /* Apply DMA vs PIO selection (3C515 only) */
+    extern config_t g_config;
+    apply_dma_pio_selection(&g_config);
+
+    return SUCCESS;
+}

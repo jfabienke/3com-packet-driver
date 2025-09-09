@@ -26,6 +26,8 @@
 #include "../include/platform_probe.h" // Platform detection and VDS support
 #include "../include/vds.h"          // GPT-5 A+: Virtual DMA Services
 #include "../include/telemetry.h"    // GPT-5 A+: Production telemetry
+#include "../include/smc_safety_patches.h" // SMC safety detection and patching
+#include "../include/pci_integration.h"     // PCI subsystem integration
 
 /* Global initialization state */
 static init_state_t init_state = {0};
@@ -154,6 +156,27 @@ int hardware_init_all(const config_t *config) {
                 }
             }
         }
+    }
+    
+    /* Phase 3: Detect 3Com PCI NICs (Vortex, Boomerang, Cyclone, Tornado) */
+    log_info("Phase 3: Detecting 3Com PCI NICs");
+    
+    /* Check if PCI is available and enabled */
+    if (config->pci != PCI_DISABLED && is_pci_available()) {
+        int pci_nics = detect_and_init_pci_nics(config, MAX_NICS - num_nics);
+        if (pci_nics > 0) {
+            log_info("Initialized %d PCI NIC(s)", pci_nics);
+            num_nics += pci_nics;
+        } else if (pci_nics == 0) {
+            log_info("No 3Com PCI NICs detected");
+        } else {
+            log_warning("PCI detection failed with error: %d", pci_nics);
+        }
+    } else if (config->pci == PCI_REQUIRED) {
+        log_error("PCI support required but not available");
+        return INIT_ERR_NO_PCI;
+    } else {
+        log_info("PCI support disabled or not available");
     }
     
     /* Validate against configuration constraints and integrate with TSR */
@@ -432,6 +455,19 @@ int init_complete_sequence(const config_t *config) {
     }
     
     log_info("DMA safety framework initialized with 3Com device constraints");
+    
+    /* GPT-5 CRITICAL: Initialize SMC safety detection before hardware initialization */
+    /* This bridges the gap between "live" optimized code and "orphaned" safety modules */
+    extern int init_complete_safety_detection(void);
+    
+    log_info("Initializing SMC safety detection and patching system");
+    result = init_complete_safety_detection();
+    if (result < 0) {
+        log_error("SMC safety detection initialization failed: %d", result);
+        log_error("This is critical - optimized paths cannot be safely used");
+        return result;
+    }
+    log_info("SMC safety detection completed - hot paths patched successfully");
     
     /* Initialize hardware */
     result = hardware_init_all(config);

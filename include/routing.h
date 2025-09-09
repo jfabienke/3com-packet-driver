@@ -181,6 +181,17 @@ bool routing_mac_match_mask(const uint8_t *mac, const uint8_t *pattern,
 void routing_mac_copy(uint8_t *dest, const uint8_t *src);
 bool routing_is_local_mac(const uint8_t *mac);
 
+/* Multi-NIC Failover Support */
+int routing_configure_failover(uint8_t primary_nic, uint8_t secondary_nic);
+int routing_set_failover_thresholds(uint32_t link_check_ms, uint32_t loss_threshold,
+                                    uint32_t storm_ms, uint32_t failback_ms,
+                                    uint32_t link_stable_ms);
+int routing_monitor_failover(void);
+bool routing_get_failover_status(uint8_t *primary, uint8_t *secondary, uint8_t *active);
+void routing_get_failover_stats(uint32_t *failovers, uint32_t *failbacks, 
+                                uint32_t *link_losses, uint32_t *storms_prevented);
+bool routing_is_degraded(void);
+
 /* Flow control and rate limiting */
 int routing_set_rate_limit(uint8_t nic_index, uint32_t packets_per_sec);
 int routing_check_rate_limit(uint8_t nic_index);

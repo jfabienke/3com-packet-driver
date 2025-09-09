@@ -21,6 +21,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         align 16
 module_header:
+hardware_module_header:                  ; Export for C code
+        public  hardware_module_header   ; Make visible to patch_apply.c
         db      'PKTDRV',0              ; 7+1 bytes: Signature
         db      1, 0                    ; 2 bytes: Version 1.0
         dw      hot_section_start       ; 2 bytes: Hot start

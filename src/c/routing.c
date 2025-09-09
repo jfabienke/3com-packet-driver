@@ -13,6 +13,11 @@
 #include "../include/static_routing.h"
 #include "../include/common.h"
 #include "../include/cpu_detect.h"
+#include "../include/hardware.h"
+#include "../include/mii.h"
+#include "../include/3c515.h"
+#include "../include/atomic_time.h"
+#include "../include/arp.h"
 
 /* Global routing state */
 routing_table_t g_routing_table;
@@ -1300,6 +1305,531 @@ int routing_test_forwarding(uint8_t src_nic, uint8_t dest_nic) {
     
     log_info("Forwarding test: NIC %d -> NIC %d: OK", src_nic, dest_nic);
     return SUCCESS;
+}
+
+/* ============================================================================
+ * Multi-NIC Failover Support
+ * ============================================================================ */
+
+/* Failover state structure - explicit fields for portability */
+static volatile struct {
+    volatile uint8_t primary_nic;           /* Primary NIC index (0-7) */
+    volatile uint8_t secondary_nic;         /* Secondary NIC index (0-7) */
+    volatile uint8_t active_nic;            /* Currently active NIC */
+    volatile uint8_t failover_active;       /* Failover in progress (0/1) */
+    volatile uint8_t storm_prevention;      /* Storm prevention active (0/1) */
+    volatile uint8_t degraded_mode;         /* Both NICs down (0/1) */
+    uint8_t pad[2];                          /* Padding for alignment */
+} g_failover_state = {0, 1, 0, 0, 0, 0, {0, 0}};
+
+/* Failover statistics - accessed from ISR and main context */
+static volatile struct {
+    volatile uint32_t failover_count;       /* Total failovers */
+    volatile uint32_t failback_count;       /* Total failbacks */
+    volatile uint32_t link_loss_events;     /* Link loss detections */
+    volatile uint32_t storm_prevented;      /* Storm prevention activations */
+    volatile uint32_t last_failover_time;   /* Timestamp of last failover */
+    volatile uint32_t last_link_check;      /* Timestamp of last link check */
+} g_failover_stats = {0, 0, 0, 0, 0, 0};
+
+/* Failover configuration - configurable thresholds */
+static struct {
+    uint32_t link_check_interval_ms;   /* Check link interval (default 1000ms) */
+    uint32_t link_loss_threshold;      /* Consecutive failures before failover (default 3) */
+    uint32_t storm_prevention_ms;      /* Minimum time between failovers (default 5000ms) */
+    uint32_t failback_delay_ms;        /* Wait before failing back to primary (default 10000ms) */
+    uint32_t link_stable_ms;           /* Link must be stable this long before use (default 2000ms) */
+} g_failover_config = {1000, 3, 5000, 10000, 2000};
+
+/* Link monitoring state - accessed from timer ISR */
+static volatile uint8_t g_link_loss_count[MAX_NICS] = {0};
+static volatile uint32_t g_last_link_up_time[MAX_NICS] = {0};
+
+/**
+ * @brief Configure multi-NIC failover
+ * @param primary_nic Primary NIC index
+ * @param secondary_nic Secondary NIC index
+ * @return SUCCESS or error code
+ */
+int routing_configure_failover(uint8_t primary_nic, uint8_t secondary_nic) {
+    if (primary_nic >= MAX_NICS || secondary_nic >= MAX_NICS) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    if (primary_nic == secondary_nic) {
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Verify both NICs exist and are operational */
+    nic_info_t *primary = hardware_get_nic(primary_nic);
+    nic_info_t *secondary = hardware_get_nic(secondary_nic);
+    
+    if (!primary || !secondary) {
+        return ERROR_NOT_FOUND;
+    }
+    
+    if (!(primary->status & NIC_STATUS_PRESENT) || 
+        !(secondary->status & NIC_STATUS_PRESENT)) {
+        return ERROR_NOT_READY;
+    }
+    
+    /* Configure failover state */
+    g_failover_state.primary_nic = primary_nic;
+    g_failover_state.secondary_nic = secondary_nic;
+    g_failover_state.active_nic = primary_nic;
+    g_failover_state.failover_active = 0;
+    
+    /* Reset counters */
+    g_link_loss_count[primary_nic] = 0;
+    g_link_loss_count[secondary_nic] = 0;
+    
+    LOG_INFO("Failover configured: Primary=NIC%d, Secondary=NIC%d", 
+             primary_nic, secondary_nic);
+    
+    return SUCCESS;
+}
+
+/**
+ * @brief Configure failover thresholds
+ * @param link_check_ms Link check interval in milliseconds (0=use default)
+ * @param loss_threshold Consecutive link losses before failover (0=use default)
+ * @param storm_ms Storm prevention timeout in milliseconds (0=use default)
+ * @param failback_ms Failback delay in milliseconds (0=use default)
+ * @param link_stable_ms Link stability requirement in milliseconds (0=use default)
+ * @return SUCCESS or error code
+ */
+int routing_set_failover_thresholds(uint32_t link_check_ms, uint32_t loss_threshold,
+                                    uint32_t storm_ms, uint32_t failback_ms,
+                                    uint32_t link_stable_ms) {
+    /* Apply new thresholds (0 means keep existing value) */
+    if (link_check_ms > 0) {
+        if (link_check_ms < 100 || link_check_ms > 60000) {
+            return ERROR_INVALID_PARAM;  /* Range: 100ms to 60s */
+        }
+        g_failover_config.link_check_interval_ms = link_check_ms;
+    }
+    
+    if (loss_threshold > 0) {
+        if (loss_threshold < 1 || loss_threshold > 10) {
+            return ERROR_INVALID_PARAM;  /* Range: 1 to 10 failures */
+        }
+        g_failover_config.link_loss_threshold = loss_threshold;
+    }
+    
+    if (storm_ms > 0) {
+        if (storm_ms < 1000 || storm_ms > 300000) {
+            return ERROR_INVALID_PARAM;  /* Range: 1s to 5min */
+        }
+        g_failover_config.storm_prevention_ms = storm_ms;
+    }
+    
+    if (failback_ms > 0) {
+        if (failback_ms < 1000 || failback_ms > 600000) {
+            return ERROR_INVALID_PARAM;  /* Range: 1s to 10min */
+        }
+        g_failover_config.failback_delay_ms = failback_ms;
+    }
+    
+    if (link_stable_ms > 0) {
+        if (link_stable_ms < 100 || link_stable_ms > 30000) {
+            return ERROR_INVALID_PARAM;  /* Range: 100ms to 30s */
+        }
+        g_failover_config.link_stable_ms = link_stable_ms;
+    }
+    
+    LOG_INFO("Failover thresholds: check=%lums, loss=%lu, storm=%lums, failback=%lums, stable=%lums",
+             g_failover_config.link_check_interval_ms,
+             g_failover_config.link_loss_threshold,
+             g_failover_config.storm_prevention_ms,
+             g_failover_config.failback_delay_ms,
+             g_failover_config.link_stable_ms);
+    
+    return SUCCESS;
+}
+
+/**
+ * @brief Check NIC link status
+ * @param nic_index NIC to check
+ * @return true if link is up, false otherwise
+ */
+static bool check_nic_link_status(uint8_t nic_index) {
+    nic_info_t *nic = hardware_get_nic(nic_index);
+    if (!nic) return false;
+    
+    /* Check if NIC reports link up */
+    if (nic->link_status == NIC_LINK_UP) {
+        return true;
+    }
+    
+    /* For MII-capable NICs, check PHY status */
+    if (nic->mii_capable && nic->phy_address != PHY_ADDR_INVALID) {
+        uint16_t bmsr;
+        uint16_t flags;
+        int timeout;
+        
+        /* Select Window 4 for MII access */
+        _3C515_TX_SELECT_WINDOW(nic->io_base, 4);
+        
+        /* Double-read BMSR to clear latched bits */
+        for (int i = 0; i < 2; i++) {
+            timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+            
+            /* Wait for MII ready */
+            while (--timeout > 0) {
+                if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
+                nic_delay_microseconds(MII_POLL_DELAY_US);
+            }
+            
+            if (timeout > 0) {
+                /* Issue read command with brief interrupt disable */
+                _asm {
+                    pushf
+                    pop ax
+                    mov flags, ax
+                    cli
+                }
+                outw(nic->io_base + _3C515_MII_CMD,
+                     MII_CMD_READ | (nic->phy_address << MII_CMD_PHY_SHIFT) | 
+                     (MII_BMSR << MII_CMD_REG_SHIFT));
+                _asm {
+                    mov ax, flags
+                    push ax
+                    popf
+                }
+                
+                /* Wait for completion */
+                timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+                while (--timeout > 0) {
+                    if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
+                    nic_delay_microseconds(MII_POLL_DELAY_US);
+                }
+                
+                if (timeout > 0) {
+                    bmsr = inw(nic->io_base + _3C515_MII_DATA);
+                    /* On second read, check link status */
+                    if (i == 1) {
+                        nic->link_status = (bmsr & BMSR_LSTATUS) ? NIC_LINK_UP : NIC_LINK_DOWN;
+                        return (bmsr & BMSR_LSTATUS) ? true : false;
+                    }
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
+/**
+ * @brief Perform NIC failover
+ * @param from_nic NIC failing over from
+ * @param to_nic NIC failing over to
+ * @return SUCCESS or error code
+ */
+static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
+    uint32_t current_time = routing_get_timestamp();
+    
+    /* Storm prevention check */
+    if (g_failover_state.storm_prevention) {
+        if ((current_time - g_failover_stats.last_failover_time) < g_failover_config.storm_prevention_ms) {
+            g_failover_stats.storm_prevented++;
+            LOG_WARNING("Failover storm prevention active - skipping failover");
+            return ERROR_BUSY;
+        }
+    }
+    
+    /* Verify target NIC has stable link */
+    if (!check_nic_link_status(to_nic)) {
+        LOG_ERROR("Cannot failover to NIC%d - no link", to_nic);
+        return ERROR_NOT_READY;
+    }
+    
+    /* Check link stability - must be up for configured period */
+    if (g_last_link_up_time[to_nic] > 0) {
+        uint32_t link_up_duration = current_time - g_last_link_up_time[to_nic];
+        if (link_up_duration < g_failover_config.link_stable_ms) {
+            LOG_WARNING("NIC%d link not stable yet (%lums < %lums required)", 
+                       to_nic, link_up_duration, g_failover_config.link_stable_ms);
+            return ERROR_NOT_READY;
+        }
+    }
+    
+    /* Get NIC handles */
+    nic_info_t *from_nic_info = hardware_get_nic(from_nic);
+    nic_info_t *to_nic_info = hardware_get_nic(to_nic);
+    
+    if (!from_nic_info || !to_nic_info) {
+        LOG_ERROR("Invalid NIC handles during failover");
+        return ERROR_INVALID_PARAM;
+    }
+    
+    /* Stop the failing NIC to ensure clean state */
+    LOG_INFO("Stopping NIC%d before failover", from_nic);
+    if (from_nic_info->ops && from_nic_info->ops->stop) {
+        from_nic_info->ops->stop(from_nic_info);
+    }
+    
+    /* Ensure target NIC is started and ready */
+    LOG_INFO("Starting NIC%d for failover", to_nic);
+    if (to_nic_info->ops && to_nic_info->ops->start) {
+        int result = to_nic_info->ops->start(to_nic_info);
+        if (result != SUCCESS) {
+            LOG_ERROR("Failed to start NIC%d: %d", to_nic, result);
+            /* Try to restart the original NIC */
+            if (from_nic_info->ops && from_nic_info->ops->start) {
+                from_nic_info->ops->start(from_nic_info);
+            }
+            return result;
+        }
+    }
+    
+    /* Perform failover with atomic state update */
+    {
+        uint16_t flags;
+        
+        /* Disable interrupts for atomic state transition */
+        _asm {
+            pushf
+            pop ax
+            mov flags, ax
+            cli
+        }
+        
+        /* Update all state atomically */
+        g_failover_state.active_nic = to_nic;
+        g_failover_state.failover_active = 1;
+        g_failover_stats.failover_count++;
+        g_failover_stats.last_failover_time = current_time;
+        g_routing_table.default_nic = to_nic;
+        
+        /* Restore interrupts */
+        _asm {
+            mov ax, flags
+            push ax
+            popf
+        }
+    }
+    
+    /* Clear bridge table to force relearning */
+    bridge_entry_t *entry = g_bridge_table.entries;
+    while (entry) {
+        bridge_entry_t *next = entry->next;
+        if (entry->nic_index == from_nic) {
+            bridge_remove_entry(entry);
+        }
+        entry = next;
+    }
+    
+    LOG_INFO("FAILOVER: NIC%d -> NIC%d (link loss on primary)", from_nic, to_nic);
+    
+    /* Send gratuitous ARPs to update neighbor caches with new NIC's MAC */
+    if (to_nic_info && to_nic_info->ip_configured) {
+        ip_addr_t local_ip;
+        local_ip.addr = to_nic_info->ip_addr;
+        
+        /* Send burst of 3 gratuitous ARPs with 100ms spacing for reliability */
+        int arp_result = arp_send_gratuitous_burst(&local_ip, to_nic, 3, 100);
+        if (arp_result != SUCCESS) {
+            LOG_WARNING("Failed to send gratuitous ARP burst: %d", arp_result);
+        } else {
+            LOG_DEBUG("Sent gratuitous ARP burst for IP %08lX on NIC%d", 
+                     local_ip.addr, to_nic);
+        }
+    }
+    
+    /* Enable storm prevention for next interval */
+    g_failover_state.storm_prevention = 1;
+    
+    return SUCCESS;
+}
+
+/**
+ * @brief Monitor link status and handle failover
+ * @return SUCCESS or error code
+ * 
+ * This should be called periodically (e.g., from timer interrupt or main loop)
+ */
+int routing_monitor_failover(void) {
+    uint32_t current_time = routing_get_timestamp();
+    uint32_t last_check = atomic_time_read(&g_failover_stats.last_link_check);
+    
+    /* Rate limit link checks */
+    if ((current_time - last_check) < g_failover_config.link_check_interval_ms) {
+        return SUCCESS;
+    }
+    
+    /* UPDATE the last check time atomically */
+    atomic_time_write(&g_failover_stats.last_link_check, current_time);
+    
+    /* Clear storm prevention after timeout */
+    if (g_failover_state.storm_prevention) {
+        uint32_t last_failover = atomic_time_read(&g_failover_stats.last_failover_time);
+        if ((current_time - last_failover) >= g_failover_config.storm_prevention_ms) {
+            g_failover_state.storm_prevention = 0;
+        }
+    }
+    
+    /* Check BOTH NICs link status for proper failback timing */
+    uint8_t active = g_failover_state.active_nic;
+    uint8_t primary = g_failover_state.primary_nic;
+    uint8_t secondary = g_failover_state.secondary_nic;
+    
+    /* Update link status for both NICs */
+    bool active_link_up = check_nic_link_status(active);
+    bool primary_link_up = check_nic_link_status(primary);
+    bool secondary_link_up = check_nic_link_status(secondary);
+    
+    /* Check for degraded state (both NICs down) */
+    if (!primary_link_up && !secondary_link_up) {
+        if (!g_failover_state.degraded_mode) {
+            uint16_t flags;
+            
+            /* Atomic transition to degraded mode */
+            _asm {
+                pushf
+                pop ax
+                mov flags, ax
+                cli
+            }
+            
+            g_failover_state.degraded_mode = 1;
+            g_routing_table.default_decision = ROUTE_DECISION_DROP;
+            
+            _asm {
+                mov ax, flags
+                push ax
+                popf
+            }
+            
+            LOG_ERROR("DEGRADED MODE: Both primary and secondary NICs have no link!");
+        }
+        return SUCCESS;  /* Nothing more we can do */
+    } else if (g_failover_state.degraded_mode) {
+        uint16_t flags;
+        uint8_t selected_nic = primary_link_up ? primary : secondary;
+        
+        /* Atomic recovery from degraded mode */
+        _asm {
+            pushf
+            pop ax
+            mov flags, ax
+            cli
+        }
+        
+        g_failover_state.degraded_mode = 0;
+        g_failover_state.active_nic = selected_nic;
+        g_routing_table.default_decision = ROUTE_DECISION_FORWARD;
+        g_routing_table.default_nic = selected_nic;
+        
+        _asm {
+            mov ax, flags
+            push ax
+            popf
+        }
+        
+        LOG_INFO("RECOVERY: Exiting degraded mode - using %s NIC%d", 
+                 primary_link_up ? "primary" : "secondary", selected_nic);
+    }
+    
+    /* Track up-time for both NICs regardless of which is active */
+    if (primary_link_up) {
+        if (g_link_loss_count[primary] > 0) {
+            g_last_link_up_time[primary] = current_time;
+            g_link_loss_count[primary] = 0;
+        }
+    } else {
+        g_link_loss_count[primary]++;
+    }
+    
+    if (active_link_up) {
+        /* Active link is up - reset loss counter */
+        g_link_loss_count[active] = 0;
+        
+        /* Check if we should fail back to primary */
+        if (g_failover_state.failover_active && 
+            active == g_failover_state.secondary_nic) {
+            
+            /* Check if primary has been up long enough (already checked above) */
+            if (primary_link_up) {
+                uint32_t primary_up_time = current_time - 
+                    g_last_link_up_time[primary];
+                
+                if (primary_up_time >= g_failover_config.failback_delay_ms) {
+                    /* Fail back to primary */
+                    g_failover_state.active_nic = g_failover_state.primary_nic;
+                    g_failover_state.failover_active = 0;
+                    g_routing_table.default_nic = g_failover_state.primary_nic;
+                    g_failover_stats.failback_count++;
+                    
+                    LOG_INFO("FAILBACK: NIC%d -> NIC%d (primary restored)",
+                             g_failover_state.secondary_nic, 
+                             g_failover_state.primary_nic);
+                }
+            }
+        }
+    } else {
+        /* Link is down - increment loss counter */
+        g_link_loss_count[active]++;
+        g_failover_stats.link_loss_events++;
+        
+        /* Check if we should failover */
+        if (g_link_loss_count[active] >= g_failover_config.link_loss_threshold) {
+            uint8_t target_nic;
+            
+            /* Determine failover target */
+            if (active == g_failover_state.primary_nic) {
+                target_nic = g_failover_state.secondary_nic;
+            } else {
+                target_nic = g_failover_state.primary_nic;
+            }
+            
+            /* Attempt failover */
+            int result = perform_failover(active, target_nic);
+            
+            /* Only reset loss counter if failover succeeded */
+            if (result == SUCCESS) {
+                g_link_loss_count[active] = 0;
+            } else {
+                /* Failover failed - try again next interval with backoff */
+                LOG_WARNING("Failover failed: %d", result);
+            }
+        }
+    }
+    
+    return SUCCESS;
+}
+
+/**
+ * @brief Get failover status
+ * @param primary Output: primary NIC index
+ * @param secondary Output: secondary NIC index
+ * @param active Output: active NIC index
+ * @return true if failover is configured
+ */
+bool routing_get_failover_status(uint8_t *primary, uint8_t *secondary, uint8_t *active) {
+    if (primary) *primary = g_failover_state.primary_nic;
+    if (secondary) *secondary = g_failover_state.secondary_nic;
+    if (active) *active = g_failover_state.active_nic;
+    
+    return (g_failover_state.primary_nic != g_failover_state.secondary_nic);
+}
+
+/**
+ * @brief Get failover statistics
+ */
+void routing_get_failover_stats(uint32_t *failovers, uint32_t *failbacks, 
+                                uint32_t *link_losses, uint32_t *storms_prevented) {
+    if (failovers) *failovers = g_failover_stats.failover_count;
+    if (failbacks) *failbacks = g_failover_stats.failback_count;
+    if (link_losses) *link_losses = g_failover_stats.link_loss_events;
+    if (storms_prevented) *storms_prevented = g_failover_stats.storm_prevented;
+}
+
+/**
+ * @brief Check if system is in degraded mode
+ * @return true if both NICs are down
+ */
+bool routing_is_degraded(void) {
+    return g_failover_state.degraded_mode != 0;
 }
 
 /* Additional MAC address utility functions */

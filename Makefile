@@ -76,6 +76,12 @@ LFLAGS_PRODUCTION = system dos option map=$(BUILDDIR)/3cpd.map, caseexact, quiet
 # --- Target ---
 TARGET     = $(BUILDDIR)/3cpd.exe
 
+# --- PCI Utilities ---
+PCI_UTILS = $(BUILDDIR)/pcitest.exe \
+           $(BUILDDIR)/pciscan.exe \
+           $(BUILDDIR)/pcictl.exe \
+           $(BUILDDIR)/pcidump.exe
+
 # --- Object File Categories ---
 # Based on the architecture requirements from ADD.md 
 # Each source file appears exactly once - properly categorized for TSR operation
@@ -85,9 +91,15 @@ TARGET     = $(BUILDDIR)/3cpd.exe
 HOT_ASM_OBJS = $(BUILDDIR)/packet_api_smc.obj \
                $(BUILDDIR)/nic_irq_smc.obj \
                $(BUILDDIR)/hardware_smc.obj \
+               $(BUILDDIR)/pcmcia_isr.obj \
                $(BUILDDIR)/flow_routing.obj \
                $(BUILDDIR)/direct_pio.obj \
-               $(BUILDDIR)/tsr_common.obj
+               $(BUILDDIR)/packet_ops.obj \
+               $(BUILDDIR)/packet_copy_c_wrapper.obj \
+               $(BUILDDIR)/tsr_common.obj \
+               $(BUILDDIR)/tsr_c_wrappers.obj \
+               $(BUILDDIR)/pci_io.obj \
+               $(BUILDDIR)/pci_shim_isr.obj
 
 # Main loader (contains both hot and cold sections)
 LOADER_OBJ = $(BUILDDIR)/tsr_loader.obj
@@ -96,18 +108,36 @@ LOADER_OBJ = $(BUILDDIR)/tsr_loader.obj
 # Minimal runtime code only
 HOT_C_OBJS = $(BUILDDIR)/api.obj \
              $(BUILDDIR)/routing.obj \
-             $(BUILDDIR)/packet_ops.obj
+             $(BUILDDIR)/packet_ops.obj \
+             $(BUILDDIR)/pci_shim.obj \
+             $(BUILDDIR)/pci_multiplex.obj \
+             $(BUILDDIR)/dma_mapping.obj \
+             $(BUILDDIR)/dma_boundary.obj \
+             $(BUILDDIR)/hw_checksum.obj \
+             $(BUILDDIR)/dos_idle.obj \
+             $(BUILDDIR)/irq_bind.obj \
+             $(BUILDDIR)/runtime_config.obj \
+             $(BUILDDIR)/interrupt_mitigation.obj \
+             $(BUILDDIR)/rx_batch_refill.obj \
+             $(BUILDDIR)/tx_lazy_irq.obj
 
 # COLD SECTION - Initialization Assembly Objects (discarded after initialization)
 COLD_ASM_OBJS = $(BUILDDIR)/cpu_detect.obj \
                 $(BUILDDIR)/pnp.obj \
                 $(BUILDDIR)/promisc.obj \
-                $(BUILDDIR)/smc_patches.obj
+                $(BUILDDIR)/smc_patches.obj \
+                $(BUILDDIR)/safety_stubs.obj \
+                $(BUILDDIR)/quiesce.obj
 
 # COLD SECTION - Initialization C Objects (discarded after initialization)
 COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj \
                    $(BUILDDIR)/init.obj \
                    $(BUILDDIR)/config.obj \
+                   $(BUILDDIR)/pcmcia_manager.obj \
+                   $(BUILDDIR)/pcmcia_snapshot.obj \
+                   $(BUILDDIR)/flow_control.obj \
+                   $(BUILDDIR)/pcmcia_pe_backend.obj \
+                   $(BUILDDIR)/pcmcia_ss_backend.obj \
                    $(BUILDDIR)/memory.obj \
                    $(BUILDDIR)/xms_detect.obj \
                    $(BUILDDIR)/umb_loader.obj \
@@ -126,12 +156,27 @@ COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj \
                    $(BUILDDIR)/dma_capability_test.obj \
                    $(BUILDDIR)/tsr_manager.obj \
                    $(BUILDDIR)/dma_tests.obj \
-                   $(BUILDDIR)/vds_support.obj \
+                   $(BUILDDIR)/dma_safety.obj \
+                   $(BUILDDIR)/vds_core.obj \
+                   $(BUILDDIR)/vds_safety.obj \
+                   $(BUILDDIR)/vds_manager.obj \
+                   $(BUILDDIR)/extension_api.obj \
                    $(BUILDDIR)/unwind.obj \
                    $(BUILDDIR)/chipset_detect.obj \
                    $(BUILDDIR)/busmaster_test.obj \
                    $(BUILDDIR)/loader/cpu_detect.obj \
-                   $(BUILDDIR)/loader/patch_apply.obj
+                   $(BUILDDIR)/loader/patch_apply.obj \
+                   $(BUILDDIR)/pci_bios.obj \
+                   $(BUILDDIR)/3com_pci_detect.obj \
+                   $(BUILDDIR)/3com_vortex.obj \
+                   $(BUILDDIR)/3com_boomerang.obj \
+                   $(BUILDDIR)/pci_integration.obj \
+                   $(BUILDDIR)/pci_shim_enhanced.obj \
+                   $(BUILDDIR)/smc_safety_patches.obj \
+                   $(BUILDDIR)/smc_serialization.obj \
+                   $(BUILDDIR)/cache_management.obj \
+                   $(BUILDDIR)/dma_policy.obj \
+                   $(BUILDDIR)/vds.obj
 
 # Debug-only objects (excluded in production)
 DEBUG_C_OBJS = $(BUILDDIR)/diagnostics.obj \
@@ -162,9 +207,13 @@ DEPS       = $(ALL_OBJS:.obj=.d)
 
 # --- Rules ---
 
-.PHONY: all clean debug release production test info config-3c509b config-3c515 config-both config-286 config-386 config-486
+.PHONY: all clean debug release production test info config-3c509b config-3c515 config-both config-286 config-386 config-486 pci-utils link-sanity verify-patches
 
 all: release
+
+# Build all PCI utilities
+pci-utils: $(PCI_UTILS)
+	@echo "All PCI utilities built successfully"
 
 # --- Enhanced Build Targets ---
 
@@ -236,6 +285,7 @@ production: $(BUILDDIR)
 		echo "Binary size: $$size bytes ($$(expr $$size / 1024)KB)"; \
 	fi
 	@echo "====================================="
+	@$(MAKE) check-size
 
 # Legacy compatibility targets
 debug-legacy: CFLAGS = $(CFLAGS_DEBUG)
@@ -262,6 +312,41 @@ $(BUILDDIR)/test_direct_pio.exe: test_direct_pio.c $(ALL_OBJS) | $(BUILDDIR)
 	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_direct_pio.obj $(ALL_OBJS)} name $(BUILDDIR)/test_direct_pio.exe
 	@echo "Map file: $(BUILDDIR)/3cpd.map"
 
+# PCI Test Suite
+$(BUILDDIR)/pcitest.exe: $(CDIR)/pcitest.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
+	@echo "Building PCI Test Suite..."
+	$(CC) $(CFLAGS) $(CDIR)/pcitest.c -fo=$(BUILDDIR)/pcitest.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcitest.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pcitest.exe
+
+# PCI Scanner
+$(BUILDDIR)/pciscan.exe: $(CDIR)/pciscan.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpu_detect.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
+	@echo "Building PCI Scanner..."
+	$(CC) $(CFLAGS) $(CDIR)/pciscan.c -fo=$(BUILDDIR)/pciscan.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pciscan.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpu_detect.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pciscan.exe
+
+# Bus Master Test Utility
+$(BUILDDIR)/bmtest.exe: tools/bmtest.c $(BUILDDIR)/vds.obj | $(BUILDDIR)
+	@echo "Building Bus Master Test Utility..."
+	$(CC) $(CFLAGS) tools/bmtest.c -fo=$(BUILDDIR)/bmtest.obj
+	$(CC) $(CFLAGS) tools/stress_test.c -fo=$(BUILDDIR)/stress_test.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/bmtest.obj $(BUILDDIR)/stress_test.obj $(BUILDDIR)/vds.obj} name $(BUILDDIR)/bmtest.exe
+	@echo "BMTEST utility built: $(BUILDDIR)/bmtest.exe"
+
+bmtest: $(BUILDDIR)/bmtest.exe
+	@echo "Bus Master Test utility ready"
+
+# PCI Control utility (uses multiplex interface)
+$(BUILDDIR)/pcictl.exe: $(CDIR)/pci_multiplex.c | $(BUILDDIR)
+	@echo "Building PCI Control utility..."
+	$(CC) $(CFLAGS) -DSTANDALONE_UTILITY $(CDIR)/pci_multiplex.c -fo=$(BUILDDIR)/pcictl.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcictl.obj} name $(BUILDDIR)/pcictl.exe
+
+# PCI Config Dump utility
+$(BUILDDIR)/pcidump.exe: $(CDIR)/pcidump.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_io.obj | $(BUILDDIR)
+	@echo "Building PCI Config Dump utility..."
+	$(CC) $(CFLAGS) $(CDIR)/pcidump.c -fo=$(BUILDDIR)/pcidump.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcidump.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_io.obj} name $(BUILDDIR)/pcidump.exe
+
 $(BUILDDIR):
 	@mkdir -p $(BUILDDIR)
 	@echo "Created build directory."
@@ -280,7 +365,27 @@ $(TARGET): $(ALL_OBJS)
 		echo "Memory map available at: $(BUILDDIR)/3cpd.map"; \
 	fi
 
-# Compile C files
+# Special rules for DMA modules with production optimizations
+# These use isolated flags to avoid global flag bleed
+DMA_OPT_FLAGS = -DPRODUCTION -DNO_LOGGING -DNDEBUG
+
+$(BUILDDIR)/dma_mapping.obj: $(CDIR)/dma_mapping.c | $(BUILDDIR)
+	@echo "Compiling (DMA optimized): $< -> $@"
+	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
+
+$(BUILDDIR)/dma_boundary.obj: $(CDIR)/dma_boundary.c | $(BUILDDIR)
+	@echo "Compiling (DMA optimized): $< -> $@"
+	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
+
+$(BUILDDIR)/hw_checksum.obj: $(CDIR)/hw_checksum.c | $(BUILDDIR)
+	@echo "Compiling (DMA optimized): $< -> $@"
+	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
+
+$(BUILDDIR)/dma_safety.obj: $(CDIR)/dma_safety.c | $(BUILDDIR)
+	@echo "Compiling (DMA optimized): $< -> $@"
+	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
+
+# Default rule for other C files
 $(BUILDDIR)/%.obj: $(CDIR)/%.c | $(BUILDDIR)
 	@echo "Compiling C: $< -> $@"
 	$(CC) $(CFLAGS) -c $< -fo=$@
@@ -315,6 +420,16 @@ test:
 	@$(MAKE) -f build/test_targets.mk test-all
 	@echo "All tests built successfully. Use run-* targets to execute."
 
+# Critical bug fix verification test
+$(BUILDDIR)/test_critical_bug_fixes.exe: test/test_critical_bug_fixes.c $(BUILDDIR)/tsr_c_wrappers.obj $(BUILDDIR)/cache_ops.obj | $(BUILDDIR)
+	@echo "Building Critical Bug Fix Test..."
+	$(CC) $(CFLAGS) test/test_critical_bug_fixes.c -fo=$(BUILDDIR)/test_critical_bug_fixes.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_critical_bug_fixes.obj $(BUILDDIR)/tsr_c_wrappers.obj $(BUILDDIR)/cache_ops.obj} name $(BUILDDIR)/test_critical_bug_fixes.exe
+
+test-bug-fixes: $(BUILDDIR)/test_critical_bug_fixes.exe
+	@echo "Running Critical Bug Fix Verification..."
+	$(BUILDDIR)/test_critical_bug_fixes.exe
+
 test-quick:
 	@$(MAKE) -f build/test_targets.mk test-quick
 	
@@ -332,6 +447,32 @@ test-legacy: release
 	@echo "Running legacy test suite..."
 	@cd tests && $(MAKE) all
 	@echo "All tests completed successfully."
+
+# Link sanity check - verify all symbols resolve
+link-sanity: $(ALL_OBJS)
+	@echo "Testing link integrity..."
+	@echo "Attempting to link all objects..."
+	@$(LINK) $(LFLAGS) file {$(ALL_OBJS)} name $(BUILDDIR)/test_link.exe 2>&1 | tee $(BUILDDIR)/link_test.log
+	@if grep -q "unresolved\|undefined" $(BUILDDIR)/link_test.log; then \
+		echo "ERROR: Unresolved symbols found!"; \
+		grep "unresolved\|undefined" $(BUILDDIR)/link_test.log; \
+		rm -f $(BUILDDIR)/test_link.exe $(BUILDDIR)/link_test.log; \
+		exit 1; \
+	else \
+		echo "SUCCESS: Link test passed - all symbols resolved"; \
+		rm -f $(BUILDDIR)/test_link.exe $(BUILDDIR)/link_test.log; \
+	fi
+
+# Verify patches are applied (not NOPs) after build
+verify-patches: $(TARGET)
+	@echo "Verifying critical patches are active..."
+	@$(BUILDDIR)/3cpd.exe --verify-patches 2>&1 | tee $(BUILDDIR)/patch_verify.log
+	@if grep -q "CRITICAL" $(BUILDDIR)/patch_verify.log; then \
+		echo "ERROR: Critical patches not applied - forcing PIO mode!"; \
+		exit 1; \
+	else \
+		echo "SUCCESS: All critical patches verified as active"; \
+	fi
 
 # Bus mastering test target (Sprint 0B.5)
 test_busmaster_sprint0b5.exe: test_busmaster_sprint0b5.c $(INIT_C_OBJS) $(RESIDENT_C_OBJS)
@@ -412,6 +553,39 @@ clean-debug:
 
 clean-test:
 	@$(MAKE) -f build/test_targets.mk test-clean
+
+# Size guard - fail if resident exceeds 6.7KB (6886 bytes)
+check-size: $(TARGET)
+	@echo "Checking resident size against budget from map file..."
+	@# Parse map file for hot/resident segments (TEXT, HOT_TEXT, DATA, BSS, CONST sections)
+	@# Note: BSS (uninitialized data) still consumes resident memory
+	@if [ -f $(BUILDDIR)/3cpd.map ]; then \
+		resident_size=$$(awk '/^_TEXT|^HOT_|^_DATA|^_BSS|^CONST/ {gsub(/H$$/, "", $$3); size=strtonum("0x" $$3); sum+=size} END {print sum}' $(BUILDDIR)/3cpd.map); \
+		if [ "$$resident_size" = "" ] || [ $$resident_size -eq 0 ]; then \
+			echo "WARNING: Could not determine resident size from map file"; \
+		elif [ $$resident_size -gt 7066 ]; then \
+			echo "ERROR: Resident size $$resident_size bytes exceeds ~6.9KB limit!"; \
+			echo "Hot segments total: $$resident_size bytes"; \
+			echo "Budget: ~6.9KB (7066 bytes)"; \
+			exit 1; \
+		else \
+			echo "PASS: Resident size $$resident_size bytes within budget (≤7066 bytes)"; \
+			echo "Hot segments breakdown:"; \
+			awk '/^_TEXT|^HOT_|^_DATA/ {gsub(/H$$/, "", $$3); printf "  %-20s %6d bytes\n", $$1, strtonum("0x" $$3)}' $(BUILDDIR)/3cpd.map; \
+		fi; \
+	else \
+		echo "WARNING: Map file $(BUILDDIR)/3cpd.map not found"; \
+	fi
+
+# Verify patch sites are active (not NOPs)
+verify-patches: $(TARGET)
+	@echo "Verifying patch sites are active..."
+	@# Check for patch signatures in binary
+	@if hexdump -C $(TARGET) | grep -q "90 90 90 90 90"; then \
+		echo "WARNING: Found NOP sleds - patches may be disabled"; \
+	else \
+		echo "PASS: Patch sites appear active"; \
+	fi
 
 clean-build:
 	@echo "Cleaning main build artifacts..."

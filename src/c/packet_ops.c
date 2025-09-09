@@ -209,6 +209,7 @@ static struct {
     volatile uint8_t head;      /* ISR writes here (SPSC producer) */
     volatile uint8_t tail;      /* Bottom-half reads here (SPSC consumer) */
     volatile uint8_t seq;       /* GPT-5 A+: Sequence counter for seqlock */
+    volatile bool pending;      /* New: bottom-half has work pending */
     volatile bool overflow;     /* Queue overflow flag for recovery */
     uint32_t overflow_count;    /* Statistics - overflow events */
     uint32_t completed_count;   /* Statistics - successful completions */
@@ -431,7 +432,8 @@ bool packet_queue_tx_completion(uint8_t nic_index, uint8_t desc_index, dma_mappi
     
     /* GPT-5 A+: Complete seqlock update - increment sequence again */
     g_tx_completion_queue.seq++;
-    
+    g_tx_completion_queue.pending = true;  /* Signal bottom-half */
+
     return true;
 }
 
@@ -455,7 +457,7 @@ void packet_process_tx_completions(void) {
     /* Process normal queue entries (lock-free SPSC) */
     while (g_tx_completion_queue.tail != g_tx_completion_queue.head && 
            processed < max_batch) {
-        
+
         /* Get next completion from queue */
         t = g_tx_completion_queue.tail;
         entry = &g_tx_completion_queue.queue[t];
@@ -480,6 +482,13 @@ void packet_process_tx_completions(void) {
         /* Advance tail (consumer) */
         g_tx_completion_queue.tail = (t + 1) & TX_QUEUE_MASK;
         processed++;
+
+        /* If queue becomes empty during processing, clear pending immediately.
+         * Use a compiler barrier to avoid reordering with the tail publish. */
+        if (g_tx_completion_queue.tail == g_tx_completion_queue.head && !g_tx_completion_queue.overflow) {
+            memory_barrier();
+            g_tx_completion_queue.pending = false;
+        }
     }
     
     /* Handle overflow recovery if needed */
@@ -489,7 +498,7 @@ void packet_process_tx_completions(void) {
         packet_recover_tx_overflow();
         g_tx_completion_queue.overflow = false;
     }
-    
+
     if (processed > 0) {
         log_debug("Processed %u TX completions", processed);
     }
@@ -503,20 +512,22 @@ void packet_process_tx_completions(void) {
 static void packet_recover_tx_overflow(void) {
     uint16_t recovered = 0;
     nic_info_t *nic;
-    
+    uint32_t now_ticks = get_bios_ticks();
+    const uint32_t stale_threshold = TX_TIMEOUT_TICKS; /* reuse TX timeout */
+
     /* Scan all NICs for completed descriptors with mappings */
     for (int n = 0; n < hardware_get_nic_count(); n++) {
         nic = hardware_get_nic(n);
         if (!nic || nic->type != NIC_TYPE_3C515_TX) {
             continue;
         }
-        
+
         /* Check all TX descriptors in this NIC's ring */
         for (int i = 0; i < TX_RING_SIZE; i++) {
             /* Look for completed descriptors that still have mappings */
             if ((nic->tx_desc_ring[i].status & _3C515_TX_TX_DESC_COMPLETE) &&
                 nic->tx_desc_ring[i].mapping != NULL) {
-                
+
                 /* Found orphaned completion - unmap it now */
                 log_debug("Recovering orphaned TX mapping: nic=%d desc=%d", n, i);
                 dma_unmap_tx(nic->tx_desc_ring[i].mapping);
@@ -526,7 +537,28 @@ static void packet_recover_tx_overflow(void) {
             }
         }
     }
-    
+
+    /* Also walk the software queue for entries that have become stale without hardware flag.
+     * This covers cases where head/tail wrap caused visible overflow without proper hardware completion. */
+    if (g_tx_completion_queue.tail != g_tx_completion_queue.head) {
+        uint16_t idx = g_tx_completion_queue.tail;
+        while (idx != g_tx_completion_queue.head) {
+            tx_completion_t *e = &g_tx_completion_queue.queue[idx];
+            if (e->mapping) {
+                uint32_t elapsed = (now_ticks + 0x1800B0UL - e->timestamp) % 0x1800B0UL;
+                if (elapsed > stale_threshold) {
+                    log_warning("Unmapping stale TX completion entry: nic=%u desc=%u (elapsed=%lu)",
+                                e->nic_index, e->desc_index, (unsigned long)elapsed);
+                    dma_unmap_tx(e->mapping);
+                    e->mapping = NULL;
+                    e->error = true;
+                    recovered++;
+                }
+            }
+            idx = (idx + 1) & TX_QUEUE_MASK;
+        }
+    }
+
     if (recovered > 0) {
         log_info("Recovered %u orphaned TX completions", recovered);
         packet_statistics.tx_completed += recovered;
@@ -1194,8 +1226,8 @@ int packet_isr_receive(uint8_t *packet_data, uint16_t packet_size, uint8_t nic_i
         return PACKET_ERR_INVALID_SIZE;
     }
     
-    /* Copy packet to staging buffer */
-    memory_copy_optimized(staging->data, packet_data, packet_size);
+    /* Copy packet to staging buffer using ASM fast path (ISR-safe) */
+    asm_packet_copy_fast(staging->data, packet_data, packet_size);
     staging->packet_size = packet_size;
     staging->used = packet_size;
     staging->nic_index = nic_index;  /* Preserve NIC identity! */
@@ -3112,29 +3144,45 @@ int packet_get_queue_stats(packet_queue_management_stats_t *stats) {
  * to avoid ISR reentrancy issues
  */
 static uint32_t get_bios_ticks(void) {
+    /* ISR-safe BIOS tick read with stable pattern and day rollover extension. */
+    static uint32_t last_ticks = 0;
+    static uint32_t day_count = 0; /* Count of midnights/wraps observed */
     uint32_t ticks;
-    
+
 #ifdef __WATCOMC__
     /* Read BIOS timer tick count at 0040:006C */
     /* GPT-5 FIX: Mark as volatile and use stable read without CLI/STI */
     volatile uint16_t __far *tick_ptr = (volatile uint16_t __far *)MK_FP(0x0040, 0x006C);
+    volatile uint8_t  __far *midnight_flag = (volatile uint8_t  __far *)MK_FP(0x0040, 0x0070);
     uint16_t hi1, hi2, lo;
-    
+
     /* Stable read: read high, low, high until high matches */
     do {
         hi1 = tick_ptr[1];
         lo = tick_ptr[0];
         hi2 = tick_ptr[1];
     } while (hi1 != hi2);
-    
+
     ticks = ((uint32_t)hi1 << 16) | lo;
+
+    /* Observe midnight flag (do not clear here, avoid BIOS calls in ISR). */
+    if (*midnight_flag) {
+        day_count++;
+    }
 #else
     /* Fallback for testing */
     static uint32_t test_ticks = 0;
     ticks = test_ticks++;
 #endif
-    
-    return ticks;
+
+    /* Extend across wrap: if ticks decreased since last read, count a day. */
+    if (ticks < last_ticks) {
+        day_count++;
+    }
+    last_ticks = ticks;
+
+    /* 0x1800B0 ticks per day (24h at 18.2 Hz) */
+    return day_count * 0x1800B0UL + ticks;
 }
 
 /**
@@ -3233,4 +3281,3 @@ static void packet_check_tx_timeouts(void) {
 
 /* Restore default code segment */
 #pragma code_seg()
-

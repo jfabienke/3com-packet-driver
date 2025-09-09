@@ -624,6 +624,13 @@ static bool eeprom_is_valid_mac(const uint8_t *mac) {
         /* Allow it but warn */
     }
     
+    /* Check for LAA (Locally Administered Address) bit */
+    if (mac[0] & 0x02) {
+        LOG_WARNING("MAC address is locally administered (LAA bit set): %02X:%02X:%02X:%02X:%02X:%02X",
+                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        /* LAA addresses are valid but unusual - warn but allow */
+    }
+    
     return true;
 }
 

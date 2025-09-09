@@ -28,6 +28,22 @@ typedef struct nic_context nic_context_t;
 #define CONFIG_ERR_INVALID_VALUE -2
 #define CONFIG_ERR_MEMORY        -3
 #define CONFIG_ERR_IO_CONFLICT   -4
+
+/* CRITICAL SAFETY: Force 3C515 to PIO mode until DMA validated */
+#ifndef FORCE_3C515_PIO_SAFETY
+#define FORCE_3C515_PIO_SAFETY 1  /* Default: Force PIO for safety */
+#endif
+
+#if FORCE_3C515_PIO_SAFETY
+    #define USE_3C515_DMA 0       /* Disabled until bus mastering validated */
+    #define USE_3C515_PIO 1       /* Use safe PIO mode */
+#else
+    #define USE_3C515_DMA 1       /* Can be enabled after validation */
+    #define USE_3C515_PIO 0       /* Use faster DMA mode */
+#endif
+
+/* Global flag for runtime PIO enforcement */
+extern int global_force_pio_mode;
 #define CONFIG_ERR_IRQ_CONFLICT  -5
 #define CONFIG_ERR_CPU_REQUIRED  -6
 #define CONFIG_ERR_ROUTE_SYNTAX  -7
@@ -49,6 +65,13 @@ typedef enum {
     BUSMASTER_ON = 1,
     BUSMASTER_AUTO = 2
 } busmaster_mode_t;
+
+/* PCI support mode enumeration */
+typedef enum {
+    PCI_DISABLED = 0,    /* PCI support disabled */
+    PCI_ENABLED = 1,     /* PCI support enabled if available */
+    PCI_REQUIRED = 2     /* PCI support required (fail if not available) */
+} pci_mode_t;
 
 /* Route entry structure */
 typedef struct {
@@ -94,6 +117,7 @@ typedef struct {
     uint8_t irq2;               /* Second NIC IRQ */
     network_speed_t speed;      /* Network speed setting */
     busmaster_mode_t busmaster; /* Bus mastering mode */
+    pci_mode_t pci;            /* PCI support mode */
     bool log_enabled;           /* Logging enabled */
     route_entry_t routes[MAX_ROUTES]; /* Static routes */
     uint8_t route_count;        /* Number of configured routes */

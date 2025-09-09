@@ -37,6 +37,8 @@ typedef struct {
     size_t cache_line_size;              /* Detected cache line size */
     bool allow_batching;                 /* Allow operation batching optimization */
     uint32_t batch_timeout_microseconds; /* Batching timeout */
+    dma_disable_reason_t dma_disabled_reason; /* Why DMA was disabled (if applicable) */
+    uint16_t config_flags;               /* Configuration flags (PREFER_PIO_ON_486_ISA, etc) */
 } cache_management_config_t;
 
 /* Cache management performance metrics */

@@ -67,6 +67,22 @@
 #define BOOM_RX_RING_SIZE     16
 
 /**
+ * @brief Initialize Boomerang/Cyclone/Tornado generation NIC
+ * 
+ * Wrapper for boomerang_init_dma to match the vtable interface.
+ * 
+ * @param ctx 3Com PCI context
+ * @return 0 on success, negative error code on failure
+ */
+/* Forward declaration for init function */
+int boomerang_init_dma(pci_3com_context_t *ctx);
+
+int boomerang_init(pci_3com_context_t *ctx)
+{
+    return boomerang_init_dma(ctx);
+}
+
+/**
  * @brief Initialize TX descriptor ring
  */
 static int boomerang_init_tx_ring(pci_3com_context_t *ctx)

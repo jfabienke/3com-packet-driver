@@ -9,7 +9,7 @@ The 3Com Enterprise DOS Packet Driver has achieved **100/100 production readines
 - 14 enterprise feature modules (WOL, VLAN, MII, HWSTATS, diagnostics, etc.)
 - Linux 3c59x feature parity (~95% compatibility)
 - Professional diagnostic suite and enterprise monitoring
-- Modular architecture with intelligent memory management (43-88KB)
+- Unified driver with hot/cold segmentation (≈6.9 KB resident budget)
 - 72-hour stability testing and zero memory leaks validated
 
 ## Future Enhancements

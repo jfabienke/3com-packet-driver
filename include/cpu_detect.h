@@ -87,6 +87,10 @@ typedef struct {
     bool        has_wbinvd;      /* WBINVD available (486+) */
     bool        has_cpuid;       /* CPUID instruction available */
     bool        in_v86_mode;     /* Running in V86 mode */
+    /* GPT-5 Critical: Privilege level detection for WBINVD safety */
+    uint8_t     current_cpl;     /* Current Privilege Level (0-3) */
+    bool        in_ring0;        /* Convenient boolean for CPL == 0 */
+    bool        can_wbinvd;      /* CPL 0 AND family >= 4 AND not V86 */
     bool        has_cyrix_ext;   /* Cyrix CPU extensions detected */
     bool        is_hypervisor;   /* Running under hypervisor/VM */
 } cpu_info_t;
@@ -105,6 +109,7 @@ extern uint32_t asm_get_cpu_flags(void);
 extern uint8_t asm_get_cpu_family(void);
 extern uint32_t asm_get_cpuid_max_level(void);
 extern int asm_is_v86_mode(void);
+extern int asm_get_interrupt_flag(void);
 extern uint16_t asm_check_cpu_flags(void);
 extern int asm_has_cpuid(void);
 extern void asm_get_cpuid_info(uint32_t level, uint32_t* eax, uint32_t* ebx, 

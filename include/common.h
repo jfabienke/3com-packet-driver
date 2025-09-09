@@ -88,6 +88,24 @@ void io_delay(void);                    /* Short I/O delay */
 void udelay(unsigned int microseconds); /* Microsecond delay */
 void mdelay(unsigned int milliseconds); /* Millisecond delay */
 
+/*
+ * Compiler memory barrier
+ * Ensures the compiler does not reorder memory accesses across this point.
+ * Does not emit CPU serialization; intended as a lightweight ordering fence
+ * for producer/consumer queues used between ISR and bottom-half.
+ */
+#if defined(__WATCOMC__)
+/* Open Watcom: declare an empty function that the compiler treats as a call site
+ * with no memory side effects; the pragma prevents register allocation side
+ * effects and serves as a compiler barrier in practice. */
+extern void memory_barrier(void);
+#pragma aux memory_barrier = "" parm [] modify exact []
+#elif defined(__GNUC__)
+#define memory_barrier() __asm__ __volatile__("" ::: "memory")
+#else
+static inline void memory_barrier(void) { /* best-effort portable no-op */ }
+#endif
+
 /* Timestamp functions */
 uint32_t get_system_timestamp_ticks(void);      /* Get BIOS timer ticks since midnight */
 uint32_t get_system_timestamp_ms(void);         /* Get timestamp in milliseconds */

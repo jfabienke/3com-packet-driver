@@ -1,6 +1,6 @@
 /**
  * @file arp.h
- * @brief ARP Protocol Implementation (RFC 826)
+ * @brief ARP Protocol Implementation (RFC 826) with Gratuitous ARP
  *
  * 3Com Packet Driver - Support for 3C515-TX and 3C509B NICs
  *
@@ -141,6 +141,7 @@ int arp_send_request(const ip_addr_t *target_ip, uint8_t nic_index);
 int arp_send_reply(const ip_addr_t *target_ip, const uint8_t *target_mac,
                    const ip_addr_t *sender_ip, uint8_t nic_index);
 int arp_send_gratuitous(const ip_addr_t *ip, uint8_t nic_index);
+int arp_send_gratuitous_burst(const ip_addr_t *ip, uint8_t nic_index, int count, int delay_ms);
 int arp_build_packet(arp_packet_t *arp_pkt, uint16_t operation,
                      const uint8_t *sender_hw, const ip_addr_t *sender_ip,
                      const uint8_t *target_hw, const ip_addr_t *target_ip);

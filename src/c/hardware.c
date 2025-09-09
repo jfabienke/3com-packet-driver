@@ -174,8 +174,12 @@ void hardware_cleanup(void) {
     if (!g_hardware_initialized) {
         return;
     }
-    
+
     LOG_INFO("Shutting down hardware layer");
+
+    /* Restore original IRQ vector before tearing down NICs */
+    extern void nic_irq_uninstall(void);
+    nic_irq_uninstall();
     
     /* Cleanup all NICs */
     for (int i = 0; i < g_num_nics; i++) {
@@ -3784,4 +3788,60 @@ uint32_t hardware_get_last_error_time(uint8_t nic_index) {
         return 0;
     }
     return g_error_recovery_state.last_error_time[nic_index];
+}
+/* Attach a 3C589-like PCMCIA NIC using 3C509B PIO ops */
+int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket)
+{
+    if (g_num_nics >= MAX_NICS) {
+        LOG_ERROR("Cannot attach PCMCIA NIC: max NICs reached");
+        return -1;
+    }
+    nic_info_t *nic = &g_nics[g_num_nics];
+    memset(nic, 0, sizeof(*nic));
+    nic->type = NIC_TYPE_3C509B; /* Reuse 3C509B ops for 3C589 PCMCIA */
+    nic->io_base = io_base;
+    nic->irq = irq;
+    nic->status = NIC_STATUS_PRESENT | NIC_STATUS_INITIALIZED;
+
+    /* Get 3C509B ops and initialize */
+    extern nic_ops_t* get_3c509b_ops(void);
+    nic->ops = get_3c509b_ops();
+    if (nic->ops && nic->ops->init) {
+        int rc = nic->ops->init(nic);
+        if (rc != SUCCESS) {
+            LOG_ERROR("PCMCIA NIC init failed: %d", rc);
+            memset(nic, 0, sizeof(*nic));
+            return rc;
+        }
+    }
+    /* Register with buffer system */
+    buffer_register_nic(g_num_nics, nic->type, "3C589 PCMCIA");
+    LOG_INFO("Attached PCMCIA NIC #%d at IO=0x%04X IRQ=%u (socket %u)", g_num_nics, io_base, irq, socket);
+    return g_num_nics++;
+}
+
+/* Find NIC by I/O and IRQ */
+int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq)
+{
+    for (int i = 0; i < g_num_nics; i++) {
+        if (g_nics[i].io_base == io_base && g_nics[i].irq == irq) return i;
+    }
+    return -1;
+}
+
+/* Detach and remove NIC by index */
+int hardware_detach_nic_by_index(int index)
+{
+    if (index < 0 || index >= g_num_nics) return -1;
+    nic_info_t *nic = &g_nics[index];
+    LOG_INFO("Detaching NIC #%d (IO=0x%04X IRQ=%u)", index, nic->io_base, nic->irq);
+    if (nic->ops && nic->ops->cleanup) nic->ops->cleanup(nic);
+    buffer_unregister_nic(index);
+    /* Compact array */
+    for (int i = index; i < g_num_nics - 1; i++) {
+        g_nics[i] = g_nics[i + 1];
+    }
+    memset(&g_nics[g_num_nics - 1], 0, sizeof(nic_info_t));
+    g_num_nics--;
+    return 0;
 }

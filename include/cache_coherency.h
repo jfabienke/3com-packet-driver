@@ -31,6 +31,33 @@ typedef enum {
     TIER_DISABLE_BUS_MASTER = 0  /* Disable DMA, use PIO only */
 } cache_tier_t;
 
+/* DMA disabled reasons - based on GPT-5 analysis */
+typedef enum {
+    DMA_ENABLED = 0,              /* DMA is enabled and safe */
+    DMA_DISABLED_V86_MODE,        /* V86 mode prevents WBINVD execution */
+    DMA_DISABLED_CACHE_OVERHEAD,  /* Cache management overhead exceeds PIO */
+    DMA_DISABLED_ISA_486,         /* 486 on ISA: DMA worse than PIO */
+    DMA_DISABLED_USER_REQUEST,    /* User explicitly requested PIO */
+    DMA_DISABLED_SAFETY_FAIL      /* Safety tests failed */
+} dma_disable_reason_t;
+
+/* Configuration flags for 486 optimization - based on GPT-5 guidance */
+#define PREFER_PIO_ON_486_ISA     0x0001  /* DMA uses MORE CPU than PIO on 486/ISA */
+#define DISABLE_DMA_IN_V86        0x0002  /* Never use DMA in V86 mode on 486 */
+#define FORCE_PIO_MODE            0x0004  /* User override: always use PIO */
+#define ALLOW_TIER3_ON_486        0x0008  /* UNSAFE: Allow software barriers on 486 */
+
+/* Centralized DMA policy structure */
+typedef struct {
+    bool dma_enabled;                    /* Final DMA enable/disable decision */
+    cache_tier_t cache_tier;            /* Selected cache management tier */
+    dma_disable_reason_t disable_reason; /* Reason for DMA disable (if applicable) */
+    bool requires_vds;                   /* Must use Virtual DMA Services */
+    bool requires_bounce;                /* Must use bounce buffers */
+    uint8_t confidence_level;           /* 0-100% confidence in decision */
+    const char* explanation;            /* Human-readable explanation */
+} dma_policy_t;
+
 /* Bus master functionality test results */
 typedef enum {
     BUS_MASTER_OK,        /* DMA works correctly */
@@ -137,6 +164,16 @@ snooping_result_t test_hardware_snooping(void);
 
 /* Main analysis function */
 coherency_analysis_t perform_complete_coherency_analysis(void);
+
+/* Centralized DMA policy resolution */
+dma_policy_t resolve_dma_policy(void);
+
+/* Complete policy matrix for all CPU families */
+dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode, 
+                                         bool has_hardware_snooping, bool is_isa_bus);
+
+/* Policy matrix debugging and analysis */
+void print_complete_policy_matrix(void);
 
 /* Enhanced analysis with VDS and device awareness - GPT-5 recommendation */
 enhanced_coherency_analysis_t perform_enhanced_coherency_analysis(device_caps_t* device_caps);

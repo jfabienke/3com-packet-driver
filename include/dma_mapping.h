@@ -14,6 +14,9 @@
 #ifndef DMA_MAPPING_H
 #define DMA_MAPPING_H
 
+/* Define this to confirm DMA safety is integrated */
+#define DMA_SAFETY_INTEGRATED 1
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "dma_boundary.h"

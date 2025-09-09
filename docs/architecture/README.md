@@ -2,57 +2,57 @@
 
 This directory contains comprehensive architecture documentation for the 3Com Enterprise DOS Packet Driver, covering design principles, technical specifications, and implementation details.
 
-## Core Architecture Documents
+## Document Organization
 
-### Requirements and Design (01-04)
-- `01-requirements.md` - Architecture requirements specification
-- `02-design.md` - Comprehensive design documentation 
-- `03-overview.md` - High-level architecture overview and design principles
-- `04-roadmap.md` - Future enhancements and development roadmap
+### Core Architecture (00-09)
+- **01-requirements.md** - System requirements and capabilities
+- **02-design.md** - High-level design principles and philosophy
+- **03-overview.md** - Current unified driver architecture overview
+- **04-roadmap.md** - Implementation roadmap and future enhancements
+- **05-unified-architecture.md** - Detailed unified driver architecture
+- **06-vtable-hal.md** - Hardware abstraction layer vtable specification
+- **07-boot-sequence.md** - Driver boot and initialization sequence
 
-### Memory and Modular Architecture (10-11)
-- `10-memory-model.md` - Three-tier memory system architecture
-- `11-modular-architecture.md` - Dynamic module loading system
+### Memory & Performance (10-19)
+- **10-memory-model.md** - Three-tier memory management system
+- **11-performance-optimizations.md** - Self-modifying code and optimization techniques
 
-### Cache Management and Hardware (20-22)
-- `20-cache-coherency.md` - Four-tier cache management system
-- `21-cache-management-design.md` - Cache management design rationale
-- `22-runtime-coherency-testing.md` - Runtime hardware testing approach
+### Cache Management (20-29)
+- **20-cache-coherency.md** - Four-tier cache coherency management
+- **21-cache-management-design.md** - Cache management implementation details
+- **22-runtime-coherency-testing.md** - Runtime hardware coherency validation
 
-### Performance and CPU Optimization (30, 40-41)
-- `30-performance.md` - Performance characteristics and optimizations
-- `40-cpu-detection.md` - CPU-aware optimization system
-- `41-chipset-database.md` - Comprehensive chipset compatibility
+### Implementation Details (30-39)
+- **30-performance-analysis.md** - Performance characteristics and benchmarks
+- **31-cpu-detection.md** - CPU detection and optimization strategies
+- **32-chipset-database.md** - Chipset compatibility and workarounds
+- **33-rx-copybreak.md** - RX copybreak memory optimization
 
-### DOS-Specific Implementation (50-60)
-- `50-dos-complexity.md` - DOS-specific implementation challenges
-- `60-rx-copybreak-guide.md` - Memory optimization techniques
+### DOS Environment (40-49)
+- **40-dos-environment.md** - DOS-specific programming complexities
+- **41-tsr-implementation.md** - TSR survival and defensive programming
 
-### References (90)
-- `90-references.md` - Technical references and standards
+### Reference (90-99)
+- **90-references.md** - Technical references and specifications
 
-## Documentation Overview
+## Current Architecture Status (Canonical)
 
-This architecture documentation covers the complete technical implementation of the world's first 100/100 production-ready DOS packet driver with enterprise features.
+The driver uses a **unified .EXE architecture** with:
+- Single executable with hot/cold code separation
+- ≈6.9 KB resident memory footprint after initialization (map-enforced)
+- HAL vtable-based hardware abstraction
+- Support for 3C509B (ISA) and 3C515-TX (PCI) NICs
+- Three-tier memory management (Conventional/UMB/XMS)
 
-### Key Architectural Innovations
-- **Phase 3B Modular Architecture**: Intelligent loader supporting 65 3Com NICs across four hardware generations
-- **14 Enterprise Modules**: Complete Linux 3c59x feature parity with Wake-on-LAN, VLAN, diagnostics, and more
-- **Runtime Cache Coherency**: Revolutionary 4-tier cache management without OS kernel support
-- **Memory Optimization**: 43-88KB scalable footprint with three-tier memory management
-- **8.3 DOS Compliance**: All module names and filenames comply with DOS limitations
+## Quick Reference
 
-### Target Audience
-- **System Architects**: High-level design and principles (01-04)
-- **Kernel Developers**: Memory management and hardware abstraction (10-22)
-- **Performance Engineers**: Optimization techniques and CPU-specific enhancements (30-41)
-- **DOS System Programmers**: DOS-specific implementation challenges (50-60)
-- **Hardware Engineers**: Chipset compatibility and hardware testing (41, 22)
+For understanding the current implementation:
+1. Start with **03-overview.md** for the big picture
+2. Review **05-unified-architecture.md** for detailed design
+3. Check **06-vtable-hal.md** for hardware abstraction
+4. Consult **10-memory-model.md** for memory management
 
-### Production Status
-**Current Status**: 100/100 Production Complete
-- ✅ 65 Network Interface Cards supported
-- ✅ 14 Enterprise feature modules
-- ✅ 72-hour stability testing passed
-- ✅ Zero memory leaks validated
-- ✅ Linux 3c59x feature parity achieved
+For specific topics:
+- Performance: See **11-performance-optimizations.md** and **30-performance-analysis.md**
+- Hardware support: See **31-cpu-detection.md** and **32-chipset-database.md**
+- DOS specifics: See **40-dos-environment.md** and **41-tsr-implementation.md**

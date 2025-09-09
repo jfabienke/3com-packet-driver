@@ -1,159 +1,87 @@
-# Documentation
+# Documentation Index and Guidelines
 
-Welcome to the comprehensive documentation for the 3Com Enterprise DOS Packet Driver. This documentation is organized by audience to help you quickly find the information you need.
+Last Updated: 2025-09-04
+Status: canonical
 
-## 📁 Documentation Structure
+Purpose: Provide a simple, world-class structure for driver docs with clear navigation, ownership, and status.
 
-### 👤 User Documentation (`user/`)
-**For end users installing, configuring, and using the driver.**
+Legend
+- Status: canonical = source of truth; supplemental = supporting; archived = historical
 
-- [**quickstart.md**](user/quickstart.md) - **Start here!** Get your 3Com NIC working in under 5 minutes
-- [**installation.md**](user/installation.md) - Complete installation and setup guide
-- [**configuration.md**](user/configuration.md) - Configuration parameters and advanced options
-- [**troubleshooting.md**](user/troubleshooting.md) - Problem diagnosis and solutions
-- [**compatibility.md**](user/compatibility.md) - Hardware and software compatibility information
-- [**deployment.md**](user/deployment.md) - Enterprise deployment strategies and best practices
+Folder Index
+- overview/: End-user docs (User Manual, Configuration, Troubleshooting)
+- architecture/: Design and boot flow (subfolders: memory/, hardware/, cpu_detection/)
+- api/: API reference and vendor extensions
+- development/: Engineering plans, migration, releases, tuning
+- performance/: Optimization techniques and SMC safety
+- reference/: Schemas and technical summaries
+- archive/: Historical documents and reports
+- graphs/: Diagrams and dependency graphs
+- build/: Generated-docs tooling (e.g., doxygen) and scripts
+- testing/: Symlink to tests/docs
 
-### 👨‍💻 Developer Documentation (`developer/`)
-**For contributors, module developers, and advanced users.**
+Quick Navigation
+- Overview
+  - canonical: overview/USER_MANUAL.md — End-user guide and quickstart
+  - canonical: overview/CONFIGURATION.md — Options, parameters, examples
+  - canonical: overview/TROUBLESHOOTING.md — Common issues and fixes
+- Architecture
+  - canonical: architecture/UNIFIED_DRIVER_ARCHITECTURE.md — Unified design and capability model
+  - canonical: architecture/DRIVER_BOOT_SEQUENCE.md — Cold→hot init, TSR, and constraints
+  - supplemental: architecture/memory/DMA_VS_PIO_ON_ISA.md — Trade-offs and policy
+  - supplemental: architecture/memory/DMA_CONSTRAINTS.md — Alignment, 64KB crossings, VDS
+  - supplemental: architecture/hardware/PCI_SUPPORT_PLAN.md — PCI families, scope
+  - supplemental: architecture/hardware/PCI_DATAPATH_ARCHITECTURE.md — PCI datapath specifics
+- API
+  - canonical: api/API_REFERENCE.md — Packet Driver + vendor extensions
+  - supplemental: api/VENDOR_EXTENSION_API.md — INT 60h extension set
+  - supplemental: api/EXTENSION_INTEGRATION_GUIDE.md — Using extensions safely
+- Development
+  - supplemental: development/IMPLEMENTATION_PLAN.md — Project plan overview
+  - supplemental: development/MIGRATION_GUIDE.md — Moving to unified core
+  - supplemental: development/RELEASE_NOTES.md — Version changes
+  - canonical: development/PERFORMANCE_TUNING.md — Performance guide (PCI tuning merged)
+  - testing/: See tests/docs (symlink) for runners and guides
+- Performance
+  - supplemental: performance/SMC_SAFETY_PERFORMANCE.md — SMC/JIT and safety
+  - supplemental: performance/OPTIMIZATION_ROADMAP.md — Priorities and phases
+  - supplemental: performance/OPTIMIZATION_TECHNIQUES.md — Techniques catalog
+- Reference
+  - supplemental: BMTEST_SCHEMA_V1.2.md — JSON schema
+  - supplemental: NIC_IRQ_IMPLEMENTATION_SUMMARY.md — IRQ approach
+  - supplemental: PCMCIA_IMPLEMENTATION_SUMMARY.md — Scope & notes
+- Archive (historical)
+  - archive/: BOOT_SEQUENCE_* analyses, GPT5_* and STAGE_* reports, weekly/phase summaries, legacy implementation trackers
 
-- [**01-contributing.md**](developer/01-contributing.md) - Contribution guidelines and standards
-- [**02-building.md**](developer/02-building.md) - Build system and compilation instructions
-- [**03-api-reference.md**](developer/03-api-reference.md) - **Core Services API** - Complete reference for module development
-- [**04-module-development.md**](developer/04-module-development.md) - Guide to developing custom modules
-- [**10-testing-strategy.md**](developer/10-testing-strategy.md) - Testing approaches and frameworks
-- [**11-nic-testing.md**](developer/11-nic-testing.md) - Hardware testing procedures
-- [**12-busmaster-testing.md**](developer/12-busmaster-testing.md) - Bus mastering capability testing
-- [**20-debugging.md**](developer/20-debugging.md) - Debugging tools and techniques
-- [**30-config-demo.md**](developer/30-config-demo.md) - Configuration system demonstrations
-- [**31-config-tools.md**](developer/31-config-tools.md) - Configuration utilities and tools
-- [**40-hardware-fixes.md**](developer/40-hardware-fixes.md) - Hardware detection fixes and workarounds
+Status Tags and Headers
+- Every doc should start with: Title, Last Updated, Version (optional), Status
+- Canonical docs must link to relevant supplemental docs and back
 
-### 🏗️ Architecture Documentation (`architecture/`)
-**For system architects, advanced developers, and technical specifications.**
+Style and Format
+- Keep docs concise: short sections, clear scope/out-of-scope
+- Prefer present tense; avoid duplication across files
+- Cross-link related topics (architecture ↔ API ↔ configuration)
+- See STYLE.md for template and conventions
 
-- [**overview.md**](architecture/overview.md) - **High-level architecture** overview and design principles
-- [**memory-model.md**](architecture/memory-model.md) - **Three-tier memory system** - Comprehensive memory architecture
-- [**design.md**](architecture/design.md) - Detailed system design and implementation
-- [**modular-architecture.md**](architecture/modular-architecture.md) - Modular loading architecture
-- [**performance.md**](architecture/performance.md) - Performance characteristics and optimizations
-- [**requirements.md**](architecture/requirements.md) - Architecture requirements specification
-- [**references.md**](architecture/references.md) - Technical references and standards
+Migration Plan (lightweight)
+1) Consolidate overlaps
+   - USER_GUIDE.md → merge into overview/USER_MANUAL.md (then archive donor)
+   - api_documentation.md → merge into api/API_REFERENCE.md (then archive donor)
+   - Choose development/PERFORMANCE_TUNING.md vs DRIVER_TUNING.md; merge into one
+   - UNIFIED_DRIVER_IMPLEMENTATION.md → fold unique bits into architecture/UNIFIED_DRIVER_ARCHITECTURE.md or development/, then archive
+2) Rationalize boot docs
+   - Keep architecture/DRIVER_BOOT_SEQUENCE.md as canonical
+   - Move BOOT_SEQUENCE_ARCHITECTURE.md, BOOT_SEQUENCE_IMPLEMENTATION.md, BOOT_SEQUENCE_GAPS.md to archive/ with a pointer
+3) PCI documentation
+   - Keep PCI_SUPPORT_PLAN.md and PCI_DATAPATH_ARCHITECTURE.md as supplemental under architecture/hardware/
+4) Memory documentation
+   - Ensure DMA_VS_PIO_ON_ISA.md and DMA_CONSTRAINTS.md are linked from boot sequence and architecture
+5) Update headers
+   - Add Status: canonical/supplemental/archived to top of each document
 
-#### Cache Coherency & Hardware Architecture
-- [**cache-coherency.md**](architecture/cache-coherency.md) - Four-tier cache management system
-- [**cache-management-design.md**](architecture/cache-management-design.md) - Design rationale for cache handling
-- [**runtime-coherency-testing.md**](architecture/runtime-coherency-testing.md) - Runtime testing instead of chipset detection
-- [**cpu-detection.md**](architecture/cpu-detection.md) - CPU-aware optimization
+Ownership
+- Canonical owners: Architecture lead for architecture/UNIFIED_DRIVER_ARCHITECTURE.md and architecture/DRIVER_BOOT_SEQUENCE.md; API lead for api/API_REFERENCE.md; Release lead for development/RELEASE_NOTES.md; Docs lead for overview/USER_MANUAL.md and overview/CONFIGURATION.md
 
-#### Hardware & Compatibility
-- [**chipset-database.md**](architecture/chipset-database.md) - Comprehensive chipset compatibility database
-- [**dos-complexity.md**](architecture/dos-complexity.md) - DOS-specific implementation challenges
-- [**rx-copybreak-guide.md**](architecture/rx-copybreak-guide.md) - Memory optimization implementation
-
-### 📚 Archive (`archive/`)
-**Historical development documentation and completed project phases.**
-
-- [**01-enhancement-roadmap.md**](archive/01-enhancement-roadmap.md) - Original enhancement planning document
-- [**02-implementation-plan.md**](archive/02-implementation-plan.md) - Original phased implementation strategy
-- [**03-implementation-tracker.md**](archive/03-implementation-tracker.md) - Sprint-by-sprint progress tracking
-- [**10-project-history.md**](archive/10-project-history.md) - **Complete development history** - Chronicles the journey to 100/100 production readiness
-
-#### Historical Sprint Documentation
-The archive also contains detailed sprint reports and phase completion documents that chronicle the systematic development process that achieved 100/100 production readiness.
-
-## 🚀 Getting Started
-
-### New Users
-1. **Start with [quickstart.md](user/quickstart.md)** - Get running in 5 minutes
-2. **Check [compatibility.md](user/compatibility.md)** - Verify your hardware is supported
-3. **Use [troubleshooting.md](user/troubleshooting.md)** - If you encounter any issues
-
-### Developers & Contributors
-1. **Read [03-api-reference.md](developer/03-api-reference.md)** - Understanding the Core Services API
-2. **Review [04-module-development.md](developer/04-module-development.md)** - Learn to create custom modules
-3. **Follow [01-contributing.md](developer/01-contributing.md)** - Contribution guidelines and workflow
-
-### System Architects
-1. **Start with [overview.md](architecture/overview.md)** - High-level system architecture
-2. **Understand [memory-model.md](architecture/memory-model.md)** - Three-tier memory management
-3. **Review [design.md](architecture/design.md)** - Detailed technical specifications
-
-## 📈 Project Status
-
-**Current Status: Production Complete (100/100)**
-- ✅ **65 Network Interface Cards** supported across four hardware generations
-- ✅ **14 Enterprise Feature Modules** with Linux 3c59x feature parity  
-- ✅ **72-hour stability testing** passed with zero memory leaks
-- ✅ **Professional diagnostic suite** and enterprise monitoring
-- ✅ **Modular architecture** with intelligent memory management (43-88KB)
-
-## 🔍 Finding Information
-
-### By Task
-- **Installing the driver**: [user/quickstart.md](user/quickstart.md) or [user/installation.md](user/installation.md)
-- **Configuring enterprise features**: [user/configuration.md](user/configuration.md)
-- **Troubleshooting problems**: [user/troubleshooting.md](user/troubleshooting.md)
-- **Developing modules**: [developer/03-api-reference.md](developer/03-api-reference.md)
-- **Understanding architecture**: [architecture/overview.md](architecture/overview.md)
-- **Memory management**: [architecture/memory-model.md](architecture/memory-model.md)
-
-### By Audience
-- **End Users**: Focus on `user/` directory documentation
-- **System Administrators**: `user/deployment.md` and `user/configuration.md`
-- **Developers**: `developer/` directory with emphasis on API reference
-- **Contributors**: `developer/01-contributing.md` and build documentation
-- **Researchers**: `architecture/` directory and project history
-
-## 🆘 Getting Help
-
-### Documentation Issues
-- **Missing information**: [Open an issue](https://github.com/yourusername/3com-packet-driver/issues) requesting documentation improvements
-- **Unclear instructions**: Help us improve by reporting confusing sections
-- **Errors or typos**: Pull requests welcome for documentation fixes
-
-### Technical Support
-- **Hardware problems**: Check [troubleshooting.md](user/troubleshooting.md) first
-- **Configuration questions**: See [configuration.md](user/configuration.md) and [compatibility.md](user/compatibility.md)  
-- **Bug reports**: Use our [issue template](https://github.com/yourusername/3com-packet-driver/issues/new)
-- **Feature requests**: Start a [discussion](https://github.com/yourusername/3com-packet-driver/discussions)
-
-### Community Resources
-- **GitHub Discussions**: General questions and design discussions
-- **Issue Tracker**: Bug reports and feature requests
-- **Documentation Wiki**: Community-contributed guides and tips
-
-## 📝 Documentation Standards
-
-### Writing Guidelines
-- **Clear and Concise**: Write for your target audience
-- **Step-by-Step**: Provide actionable instructions
-- **Code Examples**: Include working code samples
-- **Cross-References**: Link to related documentation
-- **Testing**: All instructions tested on real hardware
-
-### Contributing to Documentation
-1. **Follow the audience-based structure** (user/developer/architecture)
-2. **Use consistent Markdown formatting** and heading levels
-3. **Include code examples** with proper syntax highlighting
-4. **Test all instructions** on actual hardware when possible
-5. **Update cross-references** when adding new content
-
----
-
-## 🎯 Quick Navigation
-
-| Need to... | Go to... |
-|------------|----------|
-| **Install quickly** | [user/quickstart.md](user/quickstart.md) |
-| **Solve problems** | [user/troubleshooting.md](user/troubleshooting.md) |
-| **Configure features** | [user/configuration.md](user/configuration.md) |
-| **Develop modules** | [developer/03-api-reference.md](developer/03-api-reference.md) |
-| **Contribute code** | [developer/01-contributing.md](developer/01-contributing.md) |
-| **Understand design** | [architecture/overview.md](architecture/overview.md) |
-| **Memory architecture** | [architecture/memory-model.md](architecture/memory-model.md) |
-| **View history** | [archive/10-project-history.md](archive/10-project-history.md) |
-
----
-
-*This documentation represents the collective effort to create the industry's first 100/100 production-ready DOS packet driver with enterprise features and Linux feature parity.*
+Notes
+- Do not delete archived documents; keep for traceability with a pointer to the canonical replacement
+- Prefer linking to tests/docs for detailed runner instructions instead of duplicating content

@@ -262,3 +262,17 @@ This packet driver has been **fully implemented and deployed** supporting **65 3
 Offering **PnP** support, manual configuration options, diagnostic logging, and advanced features like integrated multiplexing, simple static routing, and flow-aware routing for outgoing traffic, it enables seamless multi-homing under a single interrupt. This allows a single application instance, such as **mTCP**, to leverage multiple NICs of either type with subnet-based routing, an Internet default route, and flow symmetry, adhering to the Packet Driver Specification for compatibility with DOS-based networking software.
 
 **Ready for Production Deployment** - All requirements have been met and validated.
+# Architecture Requirements (Unified Driver)
+
+Last Updated: 2025-09-04
+Status: supplemental
+Purpose: Capture architecture requirements aligned to the unified .EXE driver (no runtime .MOD modules).
+
+Unified Driver Constraints
+- Crynwr compliance: INT 60h–7Fh, signature at vector+3 ("PKT DRVR"), AH/BX/DS:SI/ES:DI, AX result; CF set on error.
+- Hot code: 8086/286-safe; 16-bit instructions only; no DOS/BIOS from ISR; bounded ISR work.
+- Vectors: Install/uninstall via INT 21h AH=35h/25h with AL=vector; mask across get/set; restore ES:BX.
+- PIC/EOI: Save/restore both PIC masks; unmask only NIC IRQ (+cascade); correct EOIs; IRQ2↔9 alias handling.
+- ELCR: Do not touch by default; program only the device IRQ if required; never modify system IRQs (0,1,2,8).
+- DMA/XMS: No ISA 8237; NIC bus mastering (3C515/PCI) is VDS-gated; conventional memory only for DMA; XMS is copy-only.
+- Residency: Hot path ≈6.9 KB budget (map-enforced); cold init discarded or copied down (TSR copy‑down or shrink‑in‑place).

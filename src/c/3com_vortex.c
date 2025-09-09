@@ -52,6 +52,22 @@
 #define RX_FIFO_THRESHOLD       1514    /* Maximum packet size */
 
 /**
+ * @brief Initialize Vortex generation NIC
+ * 
+ * Wrapper for vortex_init_pio to match the vtable interface.
+ * 
+ * @param ctx 3Com PCI context
+ * @return 0 on success, negative error code on failure
+ */
+/* Forward declaration for init function */
+int vortex_init_pio(pci_3com_context_t *ctx);
+
+int vortex_init(pci_3com_context_t *ctx)
+{
+    return vortex_init_pio(ctx);
+}
+
+/**
  * @brief Start packet transmission using Vortex PIO
  * 
  * Transmits a packet using programmed I/O through the TX FIFO.

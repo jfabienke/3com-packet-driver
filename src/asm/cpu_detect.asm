@@ -159,6 +159,7 @@ PUBLIC asm_get_cpu_flags
 PUBLIC asm_get_cpu_family
 PUBLIC asm_get_cpuid_max_level
 PUBLIC asm_is_v86_mode
+PUBLIC asm_get_interrupt_flag
 PUBLIC asm_get_cpu_model
 PUBLIC asm_get_cpu_stepping
 PUBLIC asm_get_cpu_vendor
@@ -2736,6 +2737,27 @@ asm_is_v86_mode PROC
         mov     ah, 0
         ret
 asm_is_v86_mode ENDP
+
+;-----------------------------------------------------------------------------
+; asm_get_interrupt_flag - C-callable wrapper to check IF flag status
+;
+; Input:  None
+; Output: AX = 1 if interrupts enabled (IF=1), 0 if disabled (IF=0)
+; Uses:   AX, Flags
+;
+; CRITICAL: Used by VDS safety layer for ISR context detection
+;-----------------------------------------------------------------------------
+asm_get_interrupt_flag PROC
+        pushf                   ; Push flags register onto stack
+        pop     ax              ; Pop flags into AX
+        and     ax, 0200h       ; Isolate IF flag (bit 9)
+        jz      .ints_disabled
+        mov     ax, 1           ; Interrupts enabled
+        ret
+.ints_disabled:
+        xor     ax, ax          ; Interrupts disabled (return 0)
+        ret
+asm_get_interrupt_flag ENDP
 
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_vendor - C-callable wrapper to get CPU vendor

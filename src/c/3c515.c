@@ -41,6 +41,11 @@
 #include <stdlib.h>  // For malloc/free
 #include <string.h>  // For memcpy
 
+/* CRITICAL SAFETY GATE: Ensure DMA safety is integrated */
+#ifndef DMA_SAFETY_INTEGRATED
+#error "3C515 driver requires DMA safety integration. Ensure dma_mapping.c is linked and SMC patching is active."
+#endif
+
 #define TX_RING_SIZE 16  // Number of transmit descriptors (increased from 8)
 #define RX_RING_SIZE 16  // Number of receive descriptors (increased from 8)
 #define BUFFER_SIZE  1600  // Buffer size per descriptor

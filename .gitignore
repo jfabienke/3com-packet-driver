@@ -1,30 +1,119 @@
-# Build artifacts
+# =========================
+# Build Artifacts
+# =========================
 build/
 *.obj
 *.com
 *.map
 *.exe
 *.err
+*.lst
+*.sym
+*.dbg
+*.pdb
 
-# Test artifacts
+# =========================
+# Test Artifacts
+# =========================
 tests/build/
+test/build/
+test_output.txt
 test_coverage_report.txt
 test_profile_report.txt
 TEST_SUITE_DOCS.md
+*.test
+test_safety_integration
 
-# Editor and IDE files
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.rej
+~*
+*~
+
+# =========================
+# Editor and IDE Files
+# =========================
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+*.sublime-project
+*.sublime-workspace
+.project
+.cproject
+.settings/
+*.code-workspace
 
-# OS generated files
+# =========================
+# OS Generated Files
+# =========================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Crush directory
-.crush/
-
-# Generated documentation
+# =========================
+# Documentation Build
+# =========================
 docs/doxygen/
+docs/html/
+docs/latex/
+*.pdf
+
+# =========================
+# Development/Testing
+# =========================
+86box_test/
+baseline/
+.crush/
+.claude/
+analysis/cscope/
+analysis/scripts/*.log
+analysis/scripts/*.tmp
+
+# =========================
+# Personal/Local Files
+# =========================
+AGENTS.md
+GEMINI.md
+*.local
+*.private
+local_notes.txt
+TODO.txt
+
+# =========================
+# Archives and Packages
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+*.err.txt
+*.out.txt
+
+# =========================
+# DOS/Assembly Specific
+# =========================
+*.SYS
+*.DRV
+*.BIN
+*.ROM

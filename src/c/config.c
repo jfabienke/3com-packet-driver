@@ -45,6 +45,7 @@ static const config_t default_config = {
     CONFIG_DEFAULT_IRQ2,        /* irq2 */
     CONFIG_DEFAULT_SPEED,       /* speed */
     CONFIG_DEFAULT_BUSMASTER,   /* busmaster */
+    PCI_ENABLED,                /* pci (enabled if available) */
     CONFIG_DEFAULT_LOG_ENABLED, /* log_enabled */
     {{0}},                      /* routes (initialized to zero) */
     0,                          /* route_count */
@@ -87,6 +88,7 @@ static int handle_irq1(config_t *config, const char *value);
 static int handle_irq2(config_t *config, const char *value);
 static int handle_speed(config_t *config, const char *value);
 static int handle_busmaster(config_t *config, const char *value);
+static int handle_pci(config_t *config, const char *value);
 static int handle_log(config_t *config, const char *value);
 static int handle_route(config_t *config, const char *value);
 
@@ -130,6 +132,7 @@ static const config_param_t config_params[] = {
     {"IRQ2", handle_irq2, "Second NIC IRQ (3,5,7,9,10,11,12,15)"},
     {"SPEED", handle_speed, "Network speed (10, 100, AUTO)"},
     {"BUSMASTER", handle_busmaster, "Bus mastering (ON, OFF, AUTO)"},
+    {"PCI", handle_pci, "PCI support (ON, OFF, REQUIRED)"},
     {"LOG", handle_log, "Diagnostic logging (ON, OFF)"},
     {"ROUTE", handle_route, "Static route (network/mask,nic)"},
     
@@ -583,6 +586,19 @@ static int handle_busmaster(config_t *config, const char *value) {
         config->busmaster = BUSMASTER_OFF;
     } else if (stricmp(value, "AUTO") == 0) {
         config->busmaster = BUSMASTER_AUTO;
+    } else {
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+    return 0;
+}
+
+static int handle_pci(config_t *config, const char *value) {
+    if (stricmp(value, "ON") == 0 || stricmp(value, "ENABLED") == 0) {
+        config->pci = PCI_ENABLED;
+    } else if (stricmp(value, "OFF") == 0 || stricmp(value, "DISABLED") == 0) {
+        config->pci = PCI_DISABLED;
+    } else if (stricmp(value, "REQUIRED") == 0) {
+        config->pci = PCI_REQUIRED;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
     }

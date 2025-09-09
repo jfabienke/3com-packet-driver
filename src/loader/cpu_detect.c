@@ -188,6 +188,52 @@ static const cpu_model_entry_t transmeta_cpus[] = {
     {0, 0, NULL, NULL}
 };
 
+/**
+ * @brief Detect Current Privilege Level (CPL)
+ * @return Current CPL (0-3), where 0 = ring 0 (kernel)
+ * 
+ * GPT-5 Critical: WBINVD requires CPL 0, not just real mode
+ */
+static uint8_t detect_current_cpl(void) {
+    uint16_t cs_selector;
+    
+    __asm__ volatile (
+        "mov %%cs, %0"
+        : "=r" (cs_selector)
+        :
+        : 
+    );
+    
+    /* CPL is in the bottom 2 bits of CS selector */
+    return (uint8_t)(cs_selector & 3);
+}
+
+/**
+ * @brief Detect V86 mode by checking EFLAGS VM bit
+ * @return true if running in Virtual 8086 mode
+ * 
+ * GPT-5 Critical: V86 mode prevents privileged instructions on 486
+ */
+static bool detect_v86_mode(void) {
+    uint32_t eflags;
+    
+    /* Only meaningful on 386+ */
+    if (g_cpu_info.cpu_type < CPU_TYPE_80386) {
+        return false;
+    }
+    
+    __asm__ volatile (
+        "pushfl\n\t"        /* Push EFLAGS onto stack */
+        "popl %0"           /* Pop into variable */
+        : "=r" (eflags)
+        :
+        : 
+    );
+    
+    /* VM bit is bit 17 (0x20000) */
+    return (eflags & 0x20000) != 0;
+}
+
 /* Global CPU info structure */
 cpu_info_t g_cpu_info = {0};
 
@@ -303,6 +349,19 @@ int cpu_detect_init(void) {
     g_cpu_info.has_wbinvd = (g_cpu_info.features & CPU_FEATURE_WBINVD) != 0;
     /* V86 detection removed - VDS presence is better indicator */
     g_cpu_info.in_v86_mode = false;  /* Deprecated field */
+    
+    /* GPT-5 Critical: Detect Current Privilege Level for WBINVD safety */
+    g_cpu_info.current_cpl = detect_current_cpl();
+    g_cpu_info.in_ring0 = (g_cpu_info.current_cpl == 0);
+    
+    /* V86 mode detection - check EFLAGS VM bit */
+    g_cpu_info.in_v86_mode = detect_v86_mode();
+    
+    /* Determine if WBINVD can be safely used */
+    g_cpu_info.can_wbinvd = (g_cpu_info.cpu_family >= 4) &&          /* 486+ */
+                            g_cpu_info.in_ring0 &&                   /* CPL 0 */ 
+                            !g_cpu_info.in_v86_mode &&               /* Not V86 */
+                            g_cpu_info.has_wbinvd;                    /* Instruction available */
 
     /* Set address bits based on CPU type */
     switch (g_cpu_info.cpu_type) {

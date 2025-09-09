@@ -225,3 +225,20 @@ Several potential challenges and risks have been identified:
 *   **XMS Memory Management:** Dependency on XMS for optimal performance introduces potential compatibility issues. *Mitigation:* Robust fallback mechanisms and thorough testing with various memory managers.
 
 This Architecture Design Document provides a detailed blueprint for the development of the DOS packet driver for the 3Com 3C515-TX and 3C509B NICs. The document's comprehensive coverage of the design, implementation strategies, and potential challenges ensures a well-structured and robust solution.
+# Architecture Design (Unified Driver)
+
+Last Updated: 2025-09-04
+Status: supplemental
+Purpose: Consolidated design for the unified .EXE driver, replacing legacy .MOD modular approaches.
+
+Unified Driver Constraints (Summary)
+- Crynwr INT 60h semantics with CF-on-error; signature at vector+3.
+- 8086/286-safe ISR and resident code; no DOS/BIOS from ISR; bounded work.
+- Proper vector install/uninstall and PIC/EOI/IRQ2↔9 alias discipline.
+- Conservative ELCR policy; device IRQ only when required.
+- DMA/XMS: no 8237; VDS-gated bus mastering; XMS copy-only.
+- Residency budget: ≈6.9 KB hot (map-enforced); TSR copy‑down or shrink‑in‑place.
+
+Hardware Abstraction Layer
+- Vtable (`nic_ops_t`) as in `include/hardware.h`; datapaths reside in `src/datapath/el3_pio.c` and `src/datapath/el3_dma.c`.
+- ISA/EISA/PCI probers populate capabilities; PCI via INT 1Ah BIOS first.

@@ -36,6 +36,8 @@ extern "C" {
 #define INIT_ERR_ROUTING       -5
 #define INIT_ERR_STATS         -6
 #define INIT_ERR_CPU_DETECT    -7
+#define INIT_ERR_HARDWARE      -8
+#define INIT_ERR_NO_PCI        -9
 
 /* Initialization state structure */
 typedef struct {

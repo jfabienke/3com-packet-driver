@@ -10,6 +10,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../include/common.h"
+#include "../include/hardware.h"
 #include "../include/dma_capability_test.h"
 #include "../include/dma_mapping.h"
 #include "../include/logging.h"
@@ -37,6 +39,7 @@ static void free_test_buffer(void *buffer);
 static bool verify_pattern(uint8_t *buffer, uint8_t pattern, size_t size);
 static void fill_pattern(uint8_t *buffer, uint8_t pattern, size_t size);
 static uint32_t get_timestamp_us(void);
+static int hardware_wait_tx_complete(nic_info_t *nic, uint32_t timeout_ms);
 
 /**
  * @brief Run comprehensive DMA capability tests
@@ -539,6 +542,267 @@ void print_dma_test_results(dma_test_results_t *results) {
     }
 }
 
+/**
+ * @brief Test cache coherency with misalignment edge cases
+ * @param nic NIC information structure  
+ * @param results Test results structure to update
+ * @param offset Misalignment offset to test cache line edges
+ * @return SUCCESS or error code
+ */
+static int test_coherency_with_offset(nic_info_t *nic, dma_test_results_t *results, 
+                                      uint16_t offset) {
+    uint8_t *test_buf = NULL;
+    uint8_t *verify_buf = NULL;
+    int ret = ERROR_GENERAL;
+    const size_t ALLOC_SIZE = 1024 + 64;  /* Extra for alignment */
+    const size_t TEST_SIZE = 1024;
+    
+    /* Allocate with extra space for offset */
+    test_buf = (uint8_t*)allocate_test_buffer(ALLOC_SIZE, 16);
+    verify_buf = (uint8_t*)allocate_test_buffer(ALLOC_SIZE, 16);
+    
+    if (!test_buf || !verify_buf) {
+        LOG_ERROR("Failed to allocate misaligned test buffers");
+        goto cleanup;
+    }
+    
+    /* Apply offset to stress cache line boundaries */
+    test_buf += offset;
+    verify_buf += offset;
+    
+    LOG_DEBUG("Testing with offset %u (addr & 0x1F = 0x%02X)", 
+              offset, ((uintptr_t)test_buf & 0x1F));
+    
+    /* Run coherency test with misaligned buffer */
+    fill_pattern(test_buf, TEST_PATTERN_D, TEST_SIZE);
+    cache_flush_range(test_buf, TEST_SIZE);
+    
+    if (hardware_dma_write(nic, test_buf, TEST_SIZE) != SUCCESS) {
+        LOG_ERROR("Misaligned DMA write failed");
+        goto cleanup;
+    }
+    
+    memset(verify_buf, 0, TEST_SIZE);
+    if (hardware_dma_read(nic, verify_buf, TEST_SIZE) != SUCCESS) {
+        LOG_ERROR("Misaligned DMA read failed");
+        goto cleanup;
+    }
+    
+    if (!verify_pattern(verify_buf, TEST_PATTERN_D, TEST_SIZE)) {
+        LOG_WARNING("Misalignment offset %u failed coherency", offset);
+        results->misalignment_safe = false;
+    }
+    
+    ret = SUCCESS;
+    
+cleanup:
+    /* Free original pointers */
+    if (test_buf) free_test_buffer(test_buf - offset);
+    if (verify_buf) free_test_buffer(verify_buf - offset);
+    return ret;
+}
+
+/**
+ * @brief Test DMA across 64KB boundaries with real transfers
+ * @param nic NIC information structure
+ * @param results Test results structure to update
+ * @return SUCCESS or error code
+ */
+static int test_64kb_boundary_transfer(nic_info_t *nic, dma_test_results_t *results) {
+    uint8_t huge *test_buf = NULL;
+    uint32_t phys_addr;
+    const size_t HUGE_SIZE = 128 * 1024;  /* 128KB to ensure crossing */
+    int ret = ERROR_GENERAL;
+    
+    /* Try to allocate huge buffer */
+    test_buf = (uint8_t huge *)halloc(HUGE_SIZE, 1);
+    if (!test_buf) {
+        LOG_WARNING("Cannot allocate 128KB for boundary test");
+        return ERROR_NO_MEMORY;
+    }
+    
+    /* Find a 64KB boundary within the buffer */
+    phys_addr = ((uint32_t)FP_SEG(test_buf) << 4) + FP_OFF(test_buf);
+    uint32_t boundary = (phys_addr + 0xFFFF) & 0xFFFF0000;
+    uint32_t offset_to_boundary = boundary - phys_addr;
+    
+    if (offset_to_boundary < HUGE_SIZE - 1024) {
+        /* Position buffer to straddle the boundary */
+        uint8_t huge *boundary_buf = test_buf + offset_to_boundary - 512;
+        
+        LOG_INFO("Testing 1KB transfer across 64KB boundary at 0x%08lX", boundary);
+        
+        /* Fill with pattern */
+        fill_pattern((uint8_t far *)boundary_buf, TEST_PATTERN_A, 1024);
+        
+        /* Try DMA transfer */
+        if (nic->type == NIC_TYPE_3C515_TX) {
+            /* 3C515 should handle this as bus master */
+            if (hardware_dma_write(nic, boundary_buf, 1024) == SUCCESS) {
+                LOG_INFO("3C515 successfully crossed 64KB boundary");
+                results->can_cross_64k = true;
+            } else {
+                LOG_WARNING("3C515 failed 64KB crossing (unexpected)");
+                results->can_cross_64k = false;
+            }
+        }
+    }
+    
+    hfree(test_buf);
+    return SUCCESS;
+}
+
+/**
+ * @brief Test cache coherency using NIC internal loopback
+ * @param nic NIC information structure
+ * @param results Test results structure to update
+ * @return SUCCESS or error code
+ */
+int test_cache_coherency_loopback(nic_info_t *nic, dma_test_results_t *results) {
+    uint8_t *test_buf = NULL;
+    uint8_t *verify_buf = NULL;
+    int ret = ERROR_GENERAL;
+    const size_t TEST_SIZE = 1024;
+    
+    LOG_INFO("Testing cache coherency with internal loopback...");
+    
+    /* Allocate test buffers */
+    test_buf = (uint8_t*)allocate_test_buffer(TEST_SIZE, 16);
+    verify_buf = (uint8_t*)allocate_test_buffer(TEST_SIZE, 16);
+    
+    if (!test_buf || !verify_buf) {
+        LOG_ERROR("Failed to allocate test buffers");
+        goto cleanup;
+    }
+    
+    /* Enable internal loopback mode */
+    if (hardware_set_loopback_mode(nic, true) != SUCCESS) {
+        LOG_WARNING("Failed to enable loopback mode");
+        goto cleanup;
+    }
+    
+    /* Test A: Without cache flush */
+    LOG_INFO("  Test A: DMA without cache flush...");
+    fill_pattern(test_buf, TEST_PATTERN_A, TEST_SIZE);
+    
+    /* Perform DMA write to NIC */
+    if (hardware_dma_write(nic, test_buf, TEST_SIZE) != SUCCESS) {
+        LOG_ERROR("DMA write failed");
+        goto disable_loopback;
+    }
+    
+    /* Clear verify buffer */
+    memset(verify_buf, 0, TEST_SIZE);
+    
+    /* Perform DMA read from NIC */
+    if (hardware_dma_read(nic, verify_buf, TEST_SIZE) != SUCCESS) {
+        LOG_ERROR("DMA read failed");
+        goto disable_loopback;
+    }
+    
+    /* Check if data matches */
+    if (verify_pattern(verify_buf, TEST_PATTERN_A, TEST_SIZE)) {
+        LOG_INFO("    Cache coherent - no flush needed");
+        results->cache_coherent = true;
+        results->bus_snooping = true;
+    } else {
+        LOG_INFO("    Cache not coherent - testing with flush...");
+        results->cache_coherent = false;
+        results->bus_snooping = false;
+        
+        /* Test B: With cache flush - FIXED: actually write PATTERN_B */
+        LOG_INFO("  Test B: DMA with cache flush...");
+        fill_pattern(test_buf, TEST_PATTERN_B, TEST_SIZE);  /* Write PATTERN_B */
+        
+        /* Flush cache before DMA write */
+        cache_flush_range(test_buf, TEST_SIZE);
+        
+        /* Perform DMA write with PATTERN_B */
+        if (hardware_dma_write(nic, test_buf, TEST_SIZE) != SUCCESS) {
+            LOG_ERROR("DMA write failed");
+            goto disable_loopback;
+        }
+        
+        /* Clear and prepare verify buffer */
+        memset(verify_buf, TEST_PATTERN_C, TEST_SIZE);  /* Use different pattern for contrast */
+        cache_flush_range(verify_buf, TEST_SIZE);
+        
+        /* Perform DMA read */
+        if (hardware_dma_read(nic, verify_buf, TEST_SIZE) != SUCCESS) {
+            LOG_ERROR("DMA read failed");
+            goto disable_loopback;
+        }
+        
+        /* Check if we received PATTERN_B with flush */
+        if (verify_pattern(verify_buf, TEST_PATTERN_B, TEST_SIZE)) {
+            LOG_INFO("    Cache flush successful - DMA viable with overhead");
+            results->cache_mode = CACHE_MODE_WRITE_BACK;
+        } else {
+            LOG_ERROR("    Data corruption even with cache flush - DMA unsafe");
+            LOG_ERROR("    Expected pattern 0x%02X, got first byte 0x%02X", 
+                     TEST_PATTERN_B, verify_buf[0]);
+            results->cache_mode = CACHE_MODE_UNKNOWN;
+            ret = ERROR_DMA_UNSAFE;
+            goto disable_loopback;
+        }
+    }
+    
+    /* Test C: Measure cache flush overhead if needed */
+    if (!results->cache_coherent) {
+        uint32_t start_time, flush_time;
+        
+        LOG_INFO("  Test C: Measuring cache flush overhead...");
+        
+        start_time = get_timestamp_us();
+        for (int i = 0; i < 100; i++) {
+            cache_flush_range(test_buf, TEST_SIZE);
+        }
+        flush_time = get_timestamp_us() - start_time;
+        
+        results->cache_flush_overhead_us = flush_time / 100;
+        LOG_INFO("    Cache flush overhead: %lu us per KB", 
+                 results->cache_flush_overhead_us);
+    }
+    
+    /* Test D: Edge case - misaligned buffers */
+    LOG_INFO("  Test D: Testing misaligned buffer coherency...");
+    results->misalignment_safe = true;  /* Assume safe until proven otherwise */
+    
+    /* Test various offsets to stress cache line boundaries */
+    uint16_t test_offsets[] = {2, 4, 8, 14, 31};
+    for (int i = 0; i < 5; i++) {
+        if (test_coherency_with_offset(nic, results, test_offsets[i]) != SUCCESS) {
+            LOG_WARNING("    Misalignment test failed at offset %u", test_offsets[i]);
+            results->misalignment_safe = false;
+            break;
+        }
+    }
+    
+    if (results->misalignment_safe) {
+        LOG_INFO("    All misalignment tests passed");
+    }
+    
+    /* Test E: 64KB boundary crossing (if enough memory) */
+    LOG_INFO("  Test E: Testing 64KB boundary crossing...");
+    if (test_64kb_boundary_transfer(nic, results) == SUCCESS) {
+        LOG_INFO("    64KB boundary test completed");
+    } else {
+        LOG_INFO("    64KB boundary test skipped (insufficient memory)");
+    }
+    
+    ret = SUCCESS;
+    
+disable_loopback:
+    /* Disable loopback mode */
+    hardware_set_loopback_mode(nic, false);
+    
+cleanup:
+    if (test_buf) free_test_buffer(test_buf);
+    if (verify_buf) free_test_buffer(verify_buf);
+    
+    return ret;
+}
+
 /* Helper functions */
 
 static void* allocate_test_buffer(size_t size, uint16_t alignment) {
@@ -597,6 +861,198 @@ static uint32_t get_timestamp_us(void) {
     
     /* Convert to microseconds (very rough) */
     return ticks * 54945; /* ~55ms per tick */
+}
+
+/**
+ * @brief Benchmark PIO vs DMA performance with end-to-end timing
+ * @param nic NIC information structure
+ * @param results Test results structure to update
+ * @return SUCCESS or error code
+ */
+int benchmark_pio_vs_dma(nic_info_t *nic, dma_test_results_t *results) {
+    uint16_t test_sizes[] = {64, 128, 256, 512, 1024, 1514};
+    uint32_t pio_times[6] = {0};
+    uint32_t dma_times[6] = {0};
+    uint32_t pio_rx_times[6] = {0};
+    uint32_t dma_rx_times[6] = {0};
+    uint8_t *test_buf = NULL;
+    uint8_t *rx_buf = NULL;
+    int ret = ERROR_GENERAL;
+    const int ITERATIONS = 32;  /* Reduced for RX timing */
+    
+    LOG_INFO("Benchmarking PIO vs DMA performance with end-to-end timing...");
+    
+    /* Allocate test buffers for largest size */
+    test_buf = (uint8_t*)allocate_test_buffer(1514, 16);
+    rx_buf = (uint8_t*)allocate_test_buffer(1514, 16);
+    if (!test_buf || !rx_buf) {
+        LOG_ERROR("Failed to allocate benchmark buffers");
+        if (test_buf) free_test_buffer(test_buf);
+        if (rx_buf) free_test_buffer(rx_buf);
+        return ERROR_NO_MEMORY;
+    }
+    
+    /* Enable loopback for consistent testing */
+    if (hardware_set_loopback_mode(nic, true) != SUCCESS) {
+        LOG_WARNING("Failed to enable loopback for benchmark");
+        free_test_buffer(test_buf);
+        return ERROR_GENERAL;
+    }
+    
+    /* Test each packet size */
+    for (int i = 0; i < 6; i++) {
+        uint16_t size = test_sizes[i];
+        uint32_t start_time, elapsed;
+        
+        LOG_INFO("  Testing %u byte packets...", size);
+        
+        /* Fill buffer with test pattern */
+        fill_pattern(test_buf, TEST_PATTERN_C, size);
+        memset(rx_buf, 0, size);
+        
+        /* Benchmark PIO TX+RX end-to-end */
+        start_time = get_timestamp_us();
+        for (int j = 0; j < ITERATIONS; j++) {
+            /* TX */
+            if (hardware_pio_write(nic, test_buf, size) != SUCCESS) {
+                LOG_ERROR("PIO write failed");
+                goto cleanup;
+            }
+            /* RX (loopback should make packet available) */
+            if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                hardware_pio_read(nic, rx_buf, size);
+            }
+        }
+        elapsed = get_timestamp_us() - start_time;
+        pio_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
+        
+        /* Brief delay between tests */
+        delay_ms(10);
+        
+        /* Benchmark DMA TX+RX end-to-end */
+        start_time = get_timestamp_us();
+        for (int j = 0; j < ITERATIONS; j++) {
+            /* TX with completion wait */
+            if (hardware_dma_write(nic, test_buf, size) != SUCCESS) {
+                LOG_ERROR("DMA write failed");
+                goto cleanup;
+            }
+            if (hardware_wait_tx_complete(nic, 1000) != SUCCESS) {
+                LOG_WARNING("TX completion timeout");
+            }
+            /* RX with DMA */
+            if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                hardware_dma_read(nic, rx_buf, size);
+            }
+        }
+        elapsed = get_timestamp_us() - start_time;
+        dma_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
+        
+        LOG_INFO("    PIO: %lu us, DMA: %lu us (end-to-end)", pio_times[i], dma_times[i]);
+    }
+    
+    /* Calculate optimal copybreak threshold */
+    uint16_t copybreak = 64;  /* Default to smallest size */
+    
+    for (int i = 0; i < 6; i++) {
+        /* Find crossover point where DMA becomes faster */
+        if (dma_times[i] < pio_times[i]) {
+            /* DMA is faster for this size */
+            if (i > 0) {
+                /* Interpolate between previous and current size */
+                copybreak = (test_sizes[i-1] + test_sizes[i]) / 2;
+            } else {
+                /* DMA faster even at smallest size */
+                copybreak = test_sizes[0];
+            }
+            break;
+        }
+    }
+    
+    /* Calculate performance gain for specific sizes */
+    if (pio_times[2] > 0) {  /* 256 byte index */
+        results->dma_gain_256b = ((int32_t)pio_times[2] - (int32_t)dma_times[2]) * 100 / pio_times[2];
+    }
+    
+    if (pio_times[5] > 0) {  /* 1514 byte index */
+        results->dma_gain_1514b = ((int32_t)pio_times[5] - (int32_t)dma_times[5]) * 100 / pio_times[5];
+    }
+    
+    results->optimal_copybreak = copybreak;
+    
+    LOG_INFO("  Optimal copybreak threshold: %u bytes", copybreak);
+    LOG_INFO("  DMA gain at 256B: %d%%", results->dma_gain_256b);
+    LOG_INFO("  DMA gain at 1514B: %d%%", results->dma_gain_1514b);
+    
+    /* Check if we need cache flush overhead adjustment */
+    if (!results->cache_coherent && results->cache_flush_overhead_us > 0) {
+        /* Adjust copybreak for cache flush overhead */
+        uint32_t flush_penalty = results->cache_flush_overhead_us;
+        
+        /* Recalculate with overhead */
+        for (int i = 0; i < 6; i++) {
+            uint32_t dma_with_flush = dma_times[i] + (flush_penalty * test_sizes[i] / 1024);
+            
+            if (dma_with_flush < pio_times[i]) {
+                copybreak = (i > 0) ? (test_sizes[i-1] + test_sizes[i]) / 2 : test_sizes[0];
+                break;
+            }
+        }
+        
+        results->adjusted_copybreak = copybreak;
+        LOG_INFO("  Adjusted copybreak (with cache overhead): %u bytes", copybreak);
+    }
+    
+    ret = SUCCESS;
+    
+cleanup:
+    hardware_set_loopback_mode(nic, false);
+    if (test_buf) free_test_buffer(test_buf);
+    if (rx_buf) free_test_buffer(rx_buf);
+    
+    return ret;
+}
+
+/**
+ * @brief Wait for TX completion with timeout
+ * @param nic NIC information structure
+ * @param timeout_ms Timeout in milliseconds
+ * @return SUCCESS if TX completed, ERROR_TIMEOUT if timed out
+ */
+static int hardware_wait_tx_complete(nic_info_t *nic, uint32_t timeout_ms) {
+    uint32_t start_time = get_timestamp_us();
+    uint32_t timeout_us = timeout_ms * 1000;
+    
+    while ((get_timestamp_us() - start_time) < timeout_us) {
+        if (hardware_check_tx_complete(nic) == SUCCESS) {
+            return SUCCESS;
+        }
+        /* Brief yield to avoid spinning */
+        _asm { nop }
+    }
+    
+    return ERROR_TIMEOUT;
+}
+
+/**
+ * @brief Wait for RX packet availability
+ * @param nic NIC information structure
+ * @param timeout_ms Timeout in milliseconds
+ * @return SUCCESS if RX ready, ERROR_TIMEOUT if timed out
+ */
+static int hardware_wait_rx_ready(nic_info_t *nic, uint32_t timeout_ms) {
+    uint32_t start_time = get_timestamp_us();
+    uint32_t timeout_us = timeout_ms * 1000;
+    
+    while ((get_timestamp_us() - start_time) < timeout_us) {
+        if (hardware_check_rx_ready(nic) == SUCCESS) {
+            return SUCCESS;
+        }
+        /* Brief yield to avoid spinning */
+        _asm { nop }
+    }
+    
+    return ERROR_TIMEOUT;
 }
 
 /* Public accessors */

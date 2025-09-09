@@ -4,111 +4,60 @@
 
 The 3Com Packet Driver is a revolutionary DOS TSR (Terminate and Stay Resident) program that provides network connectivity for vintage DOS systems. This **world's first 100/100 production-ready DOS packet driver** features a breakthrough modular architecture that achieves 25-45% memory reduction while supporting complete 3Com NIC families through intelligent dynamic loading.
 
-**Key Architectural Innovations**:
-- **Phase 3A Modular Architecture**: Intelligent loader with family-based hardware modules
-- **Phase 4 Runtime Testing**: Revolutionary cache coherency management without OS support
-- **Unified .MOD Extension**: All modules use consistent format with intelligent type detection
-- **Family-Based Coverage**: PTASK.MOD (3C509 family), BOOMTEX.MOD (3C515 family)
+**Key Architectural Tenets**:
+- **Unified Driver**: Single executable with vtable-based HAL for ISA + PCI families
+- **Hot/Cold Segmentation**: ISR/API hot path minimized; cold init discarded/copied down
+- **Cache Coherency**: Tiered policy applied in cold patching; ISR-safe
+- **Memory Policy**: Three-tier buffers; DMA-safe conventional only; XMS copy-only; VDS-gated bus mastering
 
-## High-Level Architecture (Phase 3A Modular Design)
+## High-Level Architecture (Unified)
 
 ```
-┌─────────────────────────────────────────┐
-│                    DOS Applications                              │
-│              (mTCP, Trumpet TCP/IP, etc.)                       │
-└─────────────────┬───────────────────────┘
+            ┌─────────────────────────────────────────┐
+            │           DOS Applications              │
+            │      (mTCP, Trumpet TCP/IP, etc.)       │
+            └─────────────────┬───────────────────────┘
                               │ INT 60h Packet Driver API
                               │
-┌─────────────────▼───────────────────────┐
-│               Core Loader (3CPD.COM - ~30KB)                    │
+┌─────────────────────────────▼───────────────────────────────────┐
+│               Unified Driver (3CPD.EXE)                         │
 │                                                                 │
 │ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
-│ │ Packet API   │ │ Module Mgr   │ │ Buffer Mgr   │ │ Cache Mgr   │ │
-│ │ (Always)     │ │ (Always)     │ │ (Always)     │ │ (Phase 4)   │ │
+│ │ Packet API  │ │ Module Mgr  │ │ Buffer Mgr  │ │ Cache Mgr   │ │
+│ │ (Always)    │ │ (Always)    │ │ (Always)    │ │ (Phase 4)   │ │
 │ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘ │
-└─────────────────┬───────────────────────┘
-                              │ Dynamic Module Loading
+└─────────────────────────────┬───────────────────────────────────┘
+                              │ HAL and Datapaths
                               │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-┌────────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
-│ Hardware Modules │  │ Feature Modules  │  │  Future Modules  │
-│  (Family-Based)  │  │   (Optional)     │  │  (Extensible)   │
-│                  │  │                  │  │                 │
-│ PTASK.MOD        │  │ ROUTING.MOD      │  │ VORTEX.MOD      │
-│ • 3C509 family   │  │ • Multi-NIC      │  │ • 3C590 family  │
-│ • PIO transfers  │  │ • Flow routing   │  │ • Future NICs   │
-│ • ~13KB          │  │ • ~9KB           │  │ • Expandable    │
-│                  │  │                  │  │                 │
-│ BOOMTEX.MOD      │  │ FLOWCTRL.MOD     │  │ TCPIP.MOD       │
-│ • 3C515 family   │  │ • 802.3x flow    │  │ • Protocol      │
-│ • Bus mastering  │  │ • ~8KB           │  │ • Stack modules │
-│ • ~17KB          │  │                  │  │                 │
-│                  │  │ STATS.MOD        │  │                 │
-│                  │  │ • Statistics     │  │                 │
-│                  │  │ • ~5KB           │  │                 │
-│                  │  │                  │  │                 │
-│                  │  │ DIAG.MOD         │  │                 │
-│                  │  │ • Diagnostics    │  │                 │
-│                  │  │ • Init-only      │  │                 │
-│                  │  │                  │  │                 │
-│                  │  │ PROMISC.MOD      │  │                 │
-│                  │  │ • Promiscuous    │  │                 │
-│                  │  │ • ~2KB           │  │                 │
-└──────────────────┘  └──────────────────┘  └─────────────────┘
+         ┌────────────────────┼───────────────────────┐
+         │                    │                       │
+┌────────▼────────┐  ┌─────────▼─────────┐  ┌─────────▼─────────┐
+│ ISA Families    │  │ Common HAL        │  │ PCI Families      │
+│ (3C509B/3C515)  │  │ (vtable ops)      │  │ (Vortex/Boomerang │
+│ PIO/Bus Master  │  │ el3_pio / el3_dma │  │ Cyclone/Tornado)  │
+└─────────────────┘  └───────────────────┘  └───────────────────┘
 
-Memory Footprint Examples:
-• Minimalist:            43KB (Core + PTASK only)
-• Standard Enterprise:   ~59KB (Core + 8 enterprise modules)
-• Advanced Enterprise:   ~69KB (Core + 11 critical modules)
-• Maximum Configuration: ~88KB (Core + All 14 enterprise modules)
+Resident (hot) target: ≈6.9 KB (map-enforced); cold init discarded/copied down; no runtime .MOD modules
 ```
 
 ## Core Design Principles
 
-### 1. **Revolutionary Modular Architecture (Phase 3A)**
-The driver employs a breakthrough modular design that transforms from monolithic to intelligent loading:
-- **Core Loader (3CPD.COM)**: Minimal 30KB resident component with essential services
-- **Family-Based Hardware Modules**: Load only detected NIC families (PTASK.MOD, BOOMTEX.MOD)
-- **14 Enterprise Feature Modules**: Complete Linux 3c59x feature parity with enterprise capabilities
-- **Unified .MOD Extension**: All modules use consistent format with header-based type identification
+### 1. **Unified Core + HAL**
+The driver uses a single executable with a vtable-based HAL and unified datapaths:
+- **Unified Driver (3CPD.EXE)**: ISR/API hot code minimized; cold init discarded/copied down
+- **Families via HAL**: ISA + PCI probers populate capabilities and select datapaths
+- **Feature Flags**: Optional capabilities without runtime module payloads
 
 ### 2. **Family-Based Hardware Abstraction**
-Rather than supporting individual models, the driver supports complete NIC families:
-- **PTASK.MOD**: Complete 3C509 family (3C509, 3C509B, all variants) 
-- **BOOMTEX.MOD**: Complete 3C515 "Corkscrew" family (3C515-TX and variants)
-- **Extensible Design**: New families via simple module addition (VORTEX.MOD for 3C590, etc.)
+ISA (3C509B/3C515) and PCI (Vortex/Boomerang/Cyclone/Tornado) families are supported via a common HAL and capability flags. New families extend probers and HAL ops; hot paths remain unchanged.
 
-### 3. **Enterprise Module Architecture (14 Modules)**
-The driver includes 14 enterprise feature modules achieving Linux 3c59x feature parity:
-
-**Core Enterprise Features (5 modules, ~22KB):**
-- **WOL.MOD** (~4KB) - Wake-on-LAN with APM/ACPI integration
-- **ANSIUI.MOD** (~8KB) - Professional color interface with real-time monitoring
-- **VLAN.MOD** (~3KB) - IEEE 802.1Q VLAN tagging with hardware acceleration
-- **MCAST.MOD** (~5KB) - Advanced multicast filtering with IGMP support
-- **JUMBO.MOD** (~2KB) - Jumbo frame support up to 9KB
-
-**Enterprise Critical Features (3 modules, ~9KB):**
-- **MII.MOD** (~3KB) - Media Independent Interface with PHY management
-- **HWSTATS.MOD** (~3KB) - Hardware statistics collection with SNMP compatibility
-- **PWRMGMT.MOD** (~3KB) - Advanced power management with D0-D3 state transitions
-
-**Advanced Network Features (3 modules, ~12KB):**
-- **NWAY.MOD** (~2KB) - IEEE 802.3 auto-negotiation with flow control
-- **DIAGUTIL.MOD** (~6KB) - Comprehensive diagnostic suite with register access
-- **MODPARAM.MOD** (~4KB) - Runtime configuration framework for enterprise deployment
-
-**Performance Optimizations (3 modules, ~5KB):**
-- **MEDFAIL.MOD** (~2KB) - Automatic media failover with configurable timeouts
-- **DEFINT.MOD** (~2KB) - Deferred interrupt processing for high CPU load scenarios
-- **WINCACHE.MOD** (~1KB) - Register window caching for ~40% I/O reduction
+### 3. **Enterprise Features (Flags)**
+Enterprise features are included as compile-time or runtime flags without module payloads. Diagnostics and advanced tools are external (Stage 2) and do not add to the resident footprint.
 
 ### 4. **Intelligent Memory Optimization**
 The modular design achieves dramatic memory efficiency improvements:
 - **25-45% Memory Reduction**: Typical single-NIC scenarios use significantly less memory
-- **Pay-for-Features**: Users load only needed capabilities (43-88KB range)
-- **Enterprise Configurations**: Standard (59KB), Advanced (69KB), Maximum (88KB)
+- **Feature Flags**: Optional capabilities via compile-/run-time flags without .MOD payloads
 - **Smart Allocation**: Modules loaded in optimal memory locations (UMB/XMS)
 
 ### 5. **Runtime Hardware Testing (Phase 4)**
@@ -134,9 +83,9 @@ The revolutionary modular design separates the driver into distinct, loadable co
 
 #### Core Loader (3CPD.COM - Always Resident ~30KB)
 ```
-┌─────────────────────────────────────────┐
-│                  Core Loader (3CPD.COM)                        │
-├─────────────────┬─────────────────┬─────────────────┬─────────┤
+┌──────────────────────────────────────────────────────────────────┐
+│                  Core Loader (3CPD.COM)                          │
+├──────────────────┬──────────────────┬──────────────────┬─────────┤
 │   Packet Driver  │   Module Manager │   Buffer Manager │ Cache   │
 │       API        │                  │                  │ Manager │
 │                  │                  │                  │         │
@@ -144,30 +93,30 @@ The revolutionary modular design separates the driver into distinct, loadable co
 │ • Handle mgmt    │ • Family mapping │ • UMB management │   4     │
 │ • Multiplexing   │ • Vtable binding │ • Conventional   │ • 4-Tier│
 │ • Type filtering │ • Integrity chk  │ • Buffer pools   │ • CPU   │
-└─────────────────┴─────────────────┴─────────────────┴─────────┘
+└──────────────────┴──────────────────┴──────────────────┴─────────┘
 ```
 
 #### Hardware Modules (Family-Based, Load on Detection)
 ```
-┌─────────────────────────────────────────┐
-│               PTASK.MOD (~13KB)                             │
-├─────────────────────────────────────────┤
+┌────────────────────────────────────────┐
+│               PTASK.MOD (~13KB)        │
+├────────────────────────────────────────┤
 │ • Complete 3C509 family support        │
 │ • PIO data transfers                   │
 │ • Media detection (10Base-T/2, AUI)    │
 │ • EEPROM reading                       │
 │ • CPU-optimized operations             │
-└─────────────────────────────────────────┘
+└────────────────────────────────────────┘
 
-┌─────────────────────────────────────────┐
-│               BOOMTEX.MOD (~17KB)                           │
-├─────────────────────────────────────────┤
+┌────────────────────────────────────────┐
+│               BOOMTEX.MOD (~17KB)      │
+├────────────────────────────────────────┤
 │ • Complete 3C515 family support        │
 │ • Bus mastering DMA                    │
 │ • Cache coherency integration          │
 │ • Ring buffer management               │
 │ • 100Mbps Fast Ethernet                │
-└─────────────────────────────────────────┘
+└────────────────────────────────────────┘
 ```
 
 #### Feature Modules (Optional, Load on Request)
@@ -184,7 +133,7 @@ The revolutionary modular design separates the driver into distinct, loadable co
 └──────────────┴──────────────┴──────────────┴──────────────┘
 
 ┌─────────────────────────────────────────┐
-│              DIAG.MOD (Init-only)                           │
+│              DIAG.MOD (Init-only)       │
 ├─────────────────────────────────────────┤
 │ • Cache coherency tests                 │
 │ • Hardware diagnostics                  │
@@ -206,30 +155,30 @@ The revolutionary modular design separates the driver into distinct, loadable co
 
 #### Routing Engine
 ```
-┌───────────────────────────────────────┐
-│                        Routing Engine                           │
-├──────────┬───────────┬────────────────┤
+┌────────────────────────────────────────────────────────────────┐
+│                        Routing Engine                          │
+├─────────────────┬──────────────────┬───────────────────────────┤
 │  Static Routes  │  Flow-Aware      │    Load Balancing         │
 │                 │  Routing         │                           │
 │                 │                  │                           │
 │ • Subnet-based  │ • Connection     │ • Round-robin             │
 │ • Manual rules  │   tracking       │ • Failover support        │
 │ • Default route │ • Reply symmetry │ • Performance monitoring  │
-└──────────┴───────────┴────────────────┘
+└─────────────────┴──────────────────┴───────────────────────────┘
 ```
 
 #### Memory Management System
 ```
-┌───────────────────────────────────────┐
-│                   Three-Tier Memory System                      │
-├───────────┬──────────┬────────────────┤
+┌────────────────────────────────────────────────────────────────┐
+│                   Three-Tier Memory System                     │
+├──────────────────┬─────────────────┬───────────────────────────┤
 │ XMS Extended     │ UMB Upper       │ Conventional Memory       │
 │ Memory           │ Memory Blocks   │                           │
 │                  │                 │                           │
 │ • Packet buffers │ • Driver code   │ • Critical structures     │
 │ • Large data     │ • Static data   │ • Minimal usage (<6KB)    │
 │ • Performance    │ • Configuration │ • Emergency fallback      │
-└───────────┴──────────┴────────────────┘
+└──────────────────┴─────────────────┴───────────────────────────┘
 ```
 
 #### Packet Operations Pipeline
@@ -268,16 +217,16 @@ This vtable approach allows identical high-level code to work with both NICs whi
 The driver includes sophisticated capability testing to optimize performance while ensuring reliability:
 
 ```
-┌─────────────────────────────────────┐
-│                 Bus Mastering Test Framework                 │
-├──────────┬───────────┬──────────────┤
+┌────────────────────────────────────────────────────────────┐
+│                 Bus Mastering Test Framework               │
+├─────────────────┬──────────────────┬───────────────────────┤
 │   Phase 1:      │   Phase 2:       │   Phase 3:            │
 │   Basic Tests   │   Stress Tests   │   Stability Tests     │
 │                 │                  │                       │
 │ • DMA Detection │ • Pattern Tests  │ • Long Duration       │
 │ • Memory Access │ • Burst Timing   │ • Error Rate Analysis │
 │ • Timing Tests  │ • Error Recovery │ • Confidence Scoring  │
-└──────────┴───────────┴──────────────┘
+└─────────────────┴──────────────────┴───────────────────────┘
 ```
 
 **Testing Process:**

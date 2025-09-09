@@ -602,3 +602,29 @@ int flow_control_self_test(void);
 #endif
 
 #endif /* _FLOW_CONTROL_H_ */
+
+/* -------------------------------------------------------------------------- */
+/* Compatibility wrappers used by packet_ops.c (software PAUSE implementation) */
+/* These lightweight APIs provide NIC-index based flow control suitable for    */
+/* DOS real-mode drivers without per-NIC heap allocations.                     */
+/* -------------------------------------------------------------------------- */
+
+/* Initialize software flow control (global/per-NIC state) */
+int flow_control_init(void);
+
+/* RX path: detect and process PAUSE frame; returns 1 if handled */
+int flow_control_process_received_packet(int nic_index,
+                                         const uint8_t *packet,
+                                         uint16_t length);
+
+/* TX path: check if transmission should be paused for NIC */
+bool flow_control_should_pause_transmission(int nic_index);
+
+/* TX path: remaining pause time in milliseconds (0 if none) */
+uint32_t flow_control_get_pause_duration(int nic_index);
+
+/* Busy-wait resume helper (bounded, DOS-safe) */
+void flow_control_wait_for_resume(int nic_index, uint32_t pause_ms);
+
+/* Update buffer usage percentage to drive high/low watermarks */
+void flow_control_update_buffer_status(int nic_index, uint16_t usage_percent);

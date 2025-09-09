@@ -294,6 +294,9 @@ int packet_ops_cleanup(void);
 
 /* GPT-5: Deferred processing functions */
 void packet_process_deferred_work(void);  /* Process TX completions and other deferred work */
+/* ISR -> bottom-half handoff */
+int packet_isr_receive(uint8_t *packet_data, uint16_t packet_size, uint8_t nic_index);
+int packet_bottom_half_init(bool enable_xms, uint32_t staging_count, uint32_t xms_count);
 
 /* Loopback testing functions */
 int packet_test_internal_loopback(int nic_index, const uint8_t *test_pattern, uint16_t pattern_size);

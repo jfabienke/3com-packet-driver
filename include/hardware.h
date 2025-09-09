@@ -170,6 +170,11 @@ typedef struct nic_info {
     bool full_duplex;                       /* Duplex mode */
     bool autoneg;                           /* Auto-negotiation enabled */
     
+    /* DMA coherency information */
+    bool bus_snooping_verified;             /* Bus snooping has been verified */
+    void *tx_descriptor_ring;               /* TX descriptor ring for DMA */
+    void *rx_descriptor_ring;               /* RX descriptor ring for DMA */
+    
     /* Error tracking (legacy) */
     uint32_t last_error;                    /* Last error code */
     uint32_t error_count;                   /* Total error count */
@@ -214,6 +219,10 @@ int hardware_test_nic(nic_info_t *nic);
 int hardware_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len);
 int hardware_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len);
 int hardware_check_tx_complete(nic_info_t *nic);
+int hardware_check_rx_ready(nic_info_t *nic);
+int hardware_pio_read(nic_info_t *nic, void far *buffer, uint16_t size);
+int hardware_dma_read(nic_info_t *nic, void far *buffer, uint16_t size);
+int hardware_set_loopback_mode(nic_info_t *nic, bool enable);
 int hardware_check_rx_available(nic_info_t *nic);
 
 /* Interrupt handling */
@@ -345,3 +354,7 @@ int nic_detect_vlb(void);              /* Returns 1 if VLB NIC found but unsuppo
 
 #endif /* _HARDWARE_H_ */
 uint32_t hardware_get_last_error_time(uint8_t nic_index);
+/* Dynamic attach/detach for hot-plug (PCMCIA/CardBus) */
+int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
+int hardware_detach_nic_by_index(int index);
+int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq);

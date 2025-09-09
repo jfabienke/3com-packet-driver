@@ -9,10 +9,13 @@
 .model small
 .386
 
+include 'patch_macros.inc'
+
 .code
 
 public cache_clflush_line
 public cache_clflush_safe
+public cache_flush_range
 public cache_wbinvd
 public cache_wbinvd_safe
 public cache_invd
@@ -36,17 +39,20 @@ public get_current_timestamp
 cache_clflush_line proc
     push bp
     mov bp, sp
-    push eax
+    push di
+    push es
     
-    ; Get address parameter (far pointer in 16-bit mode)
-    mov eax, [bp+4]
+    ; Get address parameter as segment:offset (far pointer in 16-bit mode)
+    ; Stack layout: [bp+6] = segment, [bp+4] = offset
+    mov es, [bp+6]          ; Load segment
+    mov di, [bp+4]          ; Load offset
     
-    ; Execute CLFLUSH instruction for the address
-    ; Proper encoding: CLFLUSH [eax]
-    db 0x0F, 0xAE
-    db 0x38        ; ModR/M byte for [eax]
+    ; Execute CLFLUSH instruction for ES:[DI] 
+    ; GPT-5 fix: Use ES segment override with [DI] addressing (16-bit safe)
+    db 0x26, 0x0F, 0xAE, 0x3D  ; CLFLUSH ES:[DI] - fits perfectly in 5-byte SMC sled
     
-    pop eax
+    pop es
+    pop di
     pop bp
     ret
 cache_clflush_line endp
@@ -64,7 +70,8 @@ cache_clflush_buffer proc
     push ebx
     push ecx
     push edx
-    push esi
+    push di
+    push es
     
     ; Check if CLFLUSH is supported (from cached flag)
     extern cpuid_available:byte
@@ -76,9 +83,10 @@ cache_clflush_buffer proc
     test dword ptr [cpu_features], FEATURE_CLFLUSH
     jz .no_clflush
     
-    ; Get parameters
-    mov esi, [bp+4]     ; Buffer address
-    mov ecx, [bp+8]     ; Buffer size
+    ; Get parameters as segment:offset (16-bit far pointer)
+    mov es, [bp+8]      ; Buffer segment
+    mov di, [bp+4]      ; Buffer offset  
+    mov ecx, [bp+12]    ; Buffer size
     
     ; Get cache line size (default 64 if not detected)
     extern cache_line_size:byte
@@ -88,20 +96,27 @@ cache_clflush_buffer proc
     mov ebx, 64         ; Default cache line size
     
 .has_line_size:
-    ; Flush loop - iterate through buffer by cache line
+    ; Flush loop - iterate through buffer by cache line with segment wrapping
 .flush_loop:
     cmp ecx, 0
     jle .flush_done
     
-    ; CLFLUSH current cache line
-    mov eax, esi
-    db 0x0F, 0xAE
-    db 0x38             ; CLFLUSH [eax]
+    ; CLFLUSH current cache line at ES:[DI]
+    ; GPT-5 fix: Use ES segment override with [DI] addressing (16-bit safe)
+    db 0x26, 0x0F, 0xAE, 0x3D  ; CLFLUSH ES:[DI]
     
-    ; Advance to next cache line
-    add esi, ebx        ; Next cache line
+    ; Advance to next cache line with segment wrapping support
+    add di, bx          ; Move to next cache line
+    jnc .no_wrap        ; Check for segment wrap
+    
+    ; Handle segment wrap - advance ES by 64KB
+    mov ax, es
+    add ax, 1000h       ; 64KB = 0x1000 paragraphs
+    mov es, ax
+    
+.no_wrap:
     sub ecx, ebx        ; Decrease remaining size
-    jmp .flush_loop
+    jg .flush_loop      ; Continue if more to flush
     
 .flush_done:
     ; Critical: Memory fence after all CLFLUSHes
@@ -113,7 +128,8 @@ cache_clflush_buffer proc
     mov ax, 1           ; CLFLUSH not available
     
 .done:
-    pop esi
+    pop es
+    pop di
     pop edx
     pop ecx
     pop ebx
@@ -132,6 +148,72 @@ cache_clflush_safe proc
     ; Simply call the buffer function which has all safety checks
     jmp cache_clflush_buffer
 cache_clflush_safe endp
+
+;-----------------------------------------------------------------------------
+; cache_flush_range - Optimized range-based cache flushing for SMC integration
+; 
+; Input: ES:DI = Start Address, CX = Byte Count
+; Output: None
+; Registers: Preserves all registers except flags
+; Note: Designed for SMC patch point integration - compact and fast
+; Note: Caller must ensure CLFLUSH is supported before calling
+;-----------------------------------------------------------------------------
+cache_flush_range proc
+    pusha                       ; Save all general-purpose registers
+    push es
+    
+    ; Get cache line size (64 bytes default for Pentium 4+)
+    extern cache_line_size:byte
+    mov bl, byte ptr [cache_line_size]
+    test bl, bl
+    jnz .has_line_size
+    mov bl, 64                  ; Default cache line size
+    
+.has_line_size:
+    ; Align DI down to cache line boundary
+    mov ax, di
+    and al, bl                  ; Get misalignment
+    dec al                      ; bl-1 mask (assumes bl is power of 2)
+    not al
+    and di, ax                  ; Align DI down
+    
+    ; Calculate number of cache lines to flush
+    ; Lines = (byte_count + cache_line_size - 1) / cache_line_size
+    mov ax, cx
+    add al, bl                  ; Add cache line size
+    dec ax                      ; Subtract 1 for rounding
+    movzx dx, bl
+    div dl                      ; AX / DL, result in AL
+    mov cl, al                  ; Number of lines to flush
+    
+.flush_loop:
+    test cl, cl
+    jz .flush_done
+    
+    ; CLFLUSH current cache line at ES:[DI] - GPT-5 validated encoding
+    db 0x26, 0x0F, 0xAE, 0x3D  ; CLFLUSH ES:[DI] - perfect for 5-byte SMC sled
+    
+    ; Advance to next cache line with segment wrap handling
+    add di, bx                  ; Move to next cache line
+    jnc .no_wrap                ; Check for segment wrap
+    
+    ; Handle segment wrap - advance ES by 64KB
+    mov ax, es
+    add ax, 1000h               ; 64KB = 0x1000 paragraphs  
+    mov es, ax
+    
+.no_wrap:
+    dec cl                      ; Decrement line count
+    jnz .flush_loop
+    
+.flush_done:
+    ; Memory fence after all CLFLUSHes (required by Intel specification)  
+    call memory_fence_after_clflush  ; Proper serialization for 16-bit mode
+    
+    pop es
+    popa
+    ret
+cache_flush_range endp
 
 ;-----------------------------------------------------------------------------
 ; cache_wbinvd - Write-back and invalidate cache (486+)
@@ -523,5 +605,89 @@ test_done:
     pop bp
     ret
 test_cache_coherency_asm endp
+
+;=============================================================================
+; SMC PATCH TEMPLATES - GPT-5 Validated 5-byte Patch Points
+;=============================================================================
+
+;-----------------------------------------------------------------------------
+; Cache flush patch points for hot path integration
+; These are 5-byte NOP sleds that get patched with CPU-specific code
+;-----------------------------------------------------------------------------
+
+; Patch point for CLFLUSH cache line flush
+PATCH_POINT cache_flush_patch_clflush
+
+; Patch point for WBINVD full cache flush  
+PATCH_POINT cache_flush_patch_wbinvd
+
+; Patch point for software cache barriers
+PATCH_POINT cache_flush_patch_barrier
+
+; Patch point for NOP (no cache management needed)
+PATCH_POINT cache_flush_patch_nop
+
+;-----------------------------------------------------------------------------
+; Cache policy selection patch points
+;-----------------------------------------------------------------------------
+
+; DMA prepare patch point (select cache management strategy)
+PATCH_POINT dma_prepare_patch_point
+
+; DMA complete patch point (invalidate cache if needed)  
+PATCH_POINT dma_complete_patch_point
+
+; RX buffer allocation patch point (ensure cache alignment)
+PATCH_POINT rx_alloc_cache_patch
+
+; TX buffer preparation patch point (flush cache if needed)
+PATCH_POINT tx_prep_cache_patch
+
+;-----------------------------------------------------------------------------
+; Patch table for linker and initialization code
+;-----------------------------------------------------------------------------
+.data
+PUBLIC patch_table_cache_ops
+
+patch_table_cache_ops:
+    ; CLFLUSH patches
+    PATCH_TABLE_ENTRY cache_flush_patch_clflush, PATCH_TYPE_COPY
+    PATCH_TABLE_ENTRY cache_flush_patch_wbinvd, PATCH_TYPE_COPY  
+    PATCH_TABLE_ENTRY cache_flush_patch_barrier, PATCH_TYPE_COPY
+    PATCH_TABLE_ENTRY cache_flush_patch_nop, PATCH_TYPE_NOP
+    
+    ; DMA cache management patches
+    PATCH_TABLE_ENTRY dma_prepare_patch_point, PATCH_TYPE_COPY
+    PATCH_TABLE_ENTRY dma_complete_patch_point, PATCH_TYPE_COPY
+    PATCH_TABLE_ENTRY rx_alloc_cache_patch, PATCH_TYPE_COPY
+    PATCH_TABLE_ENTRY tx_prep_cache_patch, PATCH_TYPE_COPY
+    
+    ; End marker
+    dw 0, 0
+
+;-----------------------------------------------------------------------------
+; CPU-specific patch templates (code to patch into hot path)
+;-----------------------------------------------------------------------------
+
+; Template: CLFLUSH ES:[DI] + RET (5 bytes total)
+clflush_template:
+    db 0x26, 0x0F, 0xAE, 0x3D      ; CLFLUSH ES:[DI] - 4 bytes
+    db 0xC3                         ; RET - 1 byte
+
+; Template: WBINVD + NOP (5 bytes total)  
+wbinvd_template:
+    db 0x0F, 0x09                   ; WBINVD - 2 bytes
+    db 0x90, 0x90, 0x90             ; NOP padding - 3 bytes
+
+; Template: Memory barriers (5 bytes total)
+barrier_template:
+    db 0x9B                         ; FWAIT (serialize) - 1 byte  
+    db 0x90, 0x90, 0x90, 0x90       ; NOP padding - 4 bytes
+
+; Template: Pure NOP sled (5 bytes total)
+nop_template:
+    db 0x90, 0x90, 0x90, 0x90, 0x90 ; 5x NOP
+
+.code
 
 end

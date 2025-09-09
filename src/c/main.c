@@ -29,6 +29,7 @@
 #include "../include/busmaster_test.h"
 #include "../include/vds.h"
 #include "../include/unwind.h"
+#include "../include/packet_ops.h"
 
 /* Global driver state */
 static driver_state_t driver_state = {0};
@@ -380,6 +381,15 @@ int driver_init(const char *config_params) {
     }
     MARK_PHASE_COMPLETE(UNWIND_PHASE_HARDWARE);
     
+    /* Initialize interrupt mitigation and batching systems */
+    extern int interrupt_mitigation_global_init(void);
+    extern int tx_lazy_global_init(void);
+    
+    log_info("Initializing interrupt mitigation and batching");
+    interrupt_mitigation_global_init();
+    tx_lazy_global_init();
+    /* Note: RX batch refill is initialized per-NIC in hardware_init */
+    
     /* Get primary NIC for DMA testing */
     primary_nic = hardware_get_primary_nic();
     
@@ -396,7 +406,14 @@ int driver_init(const char *config_params) {
         return MAIN_ERR_MEMORY;
     }
     MARK_PHASE_COMPLETE(UNWIND_PHASE_MEMORY_DMA);
-    
+
+    /* PHASE 9.5: Initialize bottom-half (deferred) processing without XMS */
+    /* Keep XMS disabled until migration is implemented; use staging only. */
+    log_info("Phase 9.5: Initializing deferred bottom-half processing (no XMS)");
+    if (packet_bottom_half_init(false, 64, 0) < 0) {
+        log_warning("Bottom-half init failed; deferred processing unavailable");
+    }
+
     /* =================================================================
      * PHASE 10: TSR Relocation (BEFORE hooking vectors)
      * Move driver to final memory location before installing any hooks
@@ -426,7 +443,17 @@ int driver_init(const char *config_params) {
         return MAIN_ERR_API;
     }
     MARK_PHASE_COMPLETE(UNWIND_PHASE_API_HOOKS);
-    
+
+    /* PHASE 11.5: Bind NIC IRQ to ISR and install vector (PIC stays masked) */
+    if (primary_nic) {
+        extern void nic_irq_bind_and_install(const nic_info_t *nic);
+        log_info("Phase 11.5: Binding IRQ %u @ I/O 0x%04X to ISR (NIC %u)",
+                 primary_nic->irq, primary_nic->io_base, primary_nic->index);
+        nic_irq_bind_and_install(primary_nic);
+    } else {
+        log_warning("No primary NIC available for IRQ binding");
+    }
+
     /* =================================================================
      * PHASE 12: Enable Interrupts (precise control)
      * Enable only necessary interrupts at precise points
@@ -454,6 +481,15 @@ int driver_init(const char *config_params) {
         return MAIN_ERR_API;
     }
     MARK_PHASE_COMPLETE(UNWIND_PHASE_API_ACTIVE);
+
+    /* Optional: Initialize PCMCIA/CardBus detection (cold-only manager) */
+    {
+        extern int pcmcia_init(void);
+        int sockets = pcmcia_init();
+        if (sockets > 0) {
+            log_info("PCMCIA subsystem initialized: %d socket(s) ready", sockets);
+        }
+    }
     
     /* =================================================================
      * PHASE 14: Complete Boot
@@ -701,4 +737,3 @@ int main(int argc, char *argv[]) {
     logging_cleanup();
     return 0;
 }
-

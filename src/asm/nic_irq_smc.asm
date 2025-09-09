@@ -5,11 +5,20 @@
 ;; Implements optimized interrupt handlers for 3C509B and 3C515 NICs with
 ;; CPU-specific patches applied during initialization.
 ;;
+;; Design Decisions:
+;; - packet_buffer defined in _DATA segment for proper segment management
+;; - DS and ES both set to _DATA for consistent access to variables and buffers
+;; - Direction flag (DF) explicitly cleared before string operations
+;; - 16-bit word transfers (rep insw) used for optimal FIFO performance
+;; - Mitigation loop checks FIFO empty status for early exit
+;; - NIC interrupt acknowledged before PIC EOI to prevent re-triggering
+;;
 ;; Constraints:
 ;; - ISR execution <100μs
 ;; - No reentrancy (protected)
-;; - Proper EOI to PIC
-;; - All segment registers preserved
+;; - Proper EOI to PIC (slave before master for IRQ>=8)
+;; - All segment registers preserved (including ES)
+;; - BP preserved for stack frame compatibility
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
         .8086                           ; Base compatibility
@@ -21,6 +30,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         align 16
 module_header:
+nic_irq_module_header:                  ; Export for C code
+        public  nic_irq_module_header   ; Make visible to patch_apply.c
         db      'PKTDRV',0              ; 7+1 bytes: Signature
         db      1, 0                    ; 2 bytes: Version 1.0
         dw      hot_section_start       ; 2 bytes: Hot start
@@ -45,34 +56,122 @@ hot_section_start:
         public  nic_irq_handler
         public  nic_3c509_handler
         public  nic_3c515_handler
+        public  PATCH_3c515_transfer    ; Export patch point
+        public  PATCH_dma_boundary_check ; Export patch point
+        public  PATCH_cache_flush_pre    ; Export patch point
+        public  PATCH_cache_flush_post   ; Export patch point
 
         ; External references
-        extern  packet_buffer:byte
-        extern  packet_process:near
+        extern  packet_isr_receive:near
         extern  statistics:byte
 
         ; Constants
         ISR_REENTRY_FLAG    equ 0x01
-        MAX_PACKETS_BATCH   equ 10      ; Process max 10 packets per IRQ
+        PIO_MAX_PACKETS     equ 8       ; 3C509B (PIO) batch cap per IRQ
+        DMA_MAX_PACKETS     equ 32      ; 3C515 (bus master) batch cap per IRQ
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Main NIC IRQ Handler (Patched for specific NIC)
+;; Main NIC IRQ Handler - Tiny ISR Fast Path
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 nic_irq_handler:
-        ; Save all registers (constraint requirement)
+        ; TINY ISR OPTIMIZATION: Minimal register saves for fast path
+        ; Save essential registers and establish DS
         push    ax
+        push    dx
+        push    ds
+        
+        ; CRITICAL: Establish data segment for accessing driver variables
+        mov     ax, seg _DATA
+        mov     ds, ax                  ; DS = _DATA for variable access
+        
+        ; Quick ownership check - is this interrupt for us?
+        mov     dx, [nic_io_base]       ; Access from data segment
+        add     dx, 0x0E                ; INT_STATUS register (16-bit on 3C509B/515)
+        in      ax, dx                  ; 16-bit read per 3Com datasheet
+        mov     [int_status], ax        ; Save full status
+        test    ax, ax                  ; Any bits set?
+        jz      .not_ours               ; Not our interrupt
+        
+        ; Check if only simple RX/TX bits are set (90% of cases)
+        mov     dx, ax                  ; Save original status
+        and     dx, 0xFFEC              ; Mask OFF RX_COMPLETE(0x10) | TX_COMPLETE(0x02) | TX_AVAIL(0x01)
+        jnz     .complex_interrupt      ; Other bits set, need full handler
+        
+        ; FAST PATH: Simple RX or TX acknowledgment
+        ; First, acknowledge interrupt in NIC (write-1-to-clear)
+        mov     dx, [nic_io_base]
+        add     dx, 0x0E                ; INT_STATUS register
+        out     dx, ax                  ; Write back status to clear
+        
+        test    ax, 0x0010              ; RX_COMPLETE?
+        jz      .check_tx_fast
+        
+        ; Minimal RX acknowledgment
+        inc     word ptr [rx_ack_count] ; Update counter
+        
+.check_tx_fast:
+        test    ax, 0x0002              ; TX_COMPLETE?
+        jz      .fast_done
+        
+        ; Minimal TX acknowledgment  
+        inc     word ptr [tx_ack_count] ; Update counter
+        
+.fast_done:
+        ; Send EOI and exit fast path
+        cmp     byte ptr [effective_nic_irq], 8
+        jb      .fast_master_only
+        mov     al, 20h
+        out     0A0h, al                ; EOI to slave PIC
+.fast_master_only:
+        mov     al, 20h
+        out     20h, al                 ; EOI to master PIC
+        
+        pop     ds
+        pop     dx
+        pop     ax
+        iret
+        
+.not_ours:
+        ; Not our interrupt but MUST still send EOI for spurious interrupts
+        cmp     byte ptr [effective_nic_irq], 8
+        jb      .not_ours_master_only
+        mov     al, 20h
+        out     0A0h, al                ; EOI to slave PIC
+.not_ours_master_only:
+        mov     al, 20h
+        out     20h, al                 ; EOI to master PIC
+        
+        pop     ds
+        pop     dx
+        pop     ax
+        iret
+        
+.complex_interrupt:
+        ; Need full handler - save remaining registers
         push    bx
         push    cx
-        push    dx
         push    si
         push    di
         push    bp
         push    ds
         push    es
-
+        
         ; Set up data segment
         mov     ax, seg _DATA
         mov     ds, ax
+        
+        ; Clear direction flag for any string operations
+        cld
+
+        ; CRITICAL FIX: Switch to private stack for TSR safety
+        ; Save caller's stack
+        mov     [saved_ss], ss
+        mov     [saved_sp], sp
+        
+        ; Switch to our private stack
+        mov     ax, seg _DATA
+        mov     ss, ax                      ; Stack segment = data segment
+        mov     sp, OFFSET isr_stack_top    ; Top of our private stack
 
         ; Check for reentrancy
         test    byte ptr [isr_flags], ISR_REENTRY_FLAG
@@ -96,7 +195,7 @@ PATCH_nic_dispatch:
 .send_eoi:
         ; Send EOI to PIC (constraint requirement)
         ; CRITICAL: Must send to slave BEFORE master for IRQ >= 8
-        cmp     byte ptr [nic_irq], 8
+        cmp     byte ptr [effective_nic_irq], 8
         jb      .master_only
         
         ; Slave PIC - send EOI to slave first
@@ -109,6 +208,10 @@ PATCH_nic_dispatch:
         out     20h, al                 ; EOI to master PIC SECOND
 
 .done:
+        ; CRITICAL FIX: Restore caller's stack
+        mov     ss, [saved_ss]
+        mov     sp, [saved_sp]
+        
         ; Restore all registers
         pop     es
         pop     ds
@@ -127,59 +230,207 @@ PATCH_nic_dispatch:
         jmp     .send_eoi
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; 3C509B Specific Handler
+;; 3C509B Specific Handler with Interrupt Mitigation
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 nic_3c509_handler:
+        ; Save ALL registers we'll use
+        push    ax
+        push    bx
         push    cx
-        mov     cx, MAX_PACKETS_BATCH
+        push    dx
+        push    si
+        push    di
+        push    ds
+        push    es                      ; CRITICAL: Save ES for buffer operations
+        
+        ; CRITICAL: Set up segments for data access
+        ; Both packet_buffer and variables are in _DATA segment
+        mov     ax, seg _DATA
+        mov     ds, ax                  ; DS = data segment for variables
+        mov     es, ax                  ; ES = data segment for packet_buffer
+        
+        ; CRITICAL: Clear direction flag for string operations
+        cld                             ; Ensure forward direction for rep insb
+        
+        ; Use internal ASM mitigation path unconditionally (no C in ISR)
+.use_legacy_handler:
+        ; INTERRUPT MITIGATION: Process multiple interrupts in one pass
+        xor     bx, bx                  ; Clear interrupt batch counter
+        
+        ; Patchable batch budget for PIO NICs (3C509B)
+PATCH_pio_batch_init:
+        mov     cx, 8                   ; Default; SMC-patched per CPU (B9 imm16 90 90)
+        nop
+        nop
+        mov     word ptr [packet_budget], cx
+
+.mitigation_loop:
+        ; Read and clear all interrupt sources at once
+        mov     dx, [nic_io_base]       ; Now using DS which is set to _DATA
+        add     dx, 0x0E                ; COMMAND/STATUS register
+        in      ax, dx
+        mov     [int_status], ax        ; Store in data segment
+        
+        ; Check for any pending interrupts
+        test    ax, ax                  ; Check ALL bits (not just lower 8)
+        jz      .mitigation_done
+        
+        ; Clear all pending interrupts atomically
+        out     dx, ax                  ; Acknowledge all at once
+        inc     bx                      ; Count mitigated interrupts
+        
+        ; Process RX interrupts
+        test    ax, 0x0010              ; RX_COMPLETE
+        jz      .check_tx_int
 
 .rx_loop:
-        ; Check RX status
-        mov     dx, [nic_io_base]
+        ; Check RX status register for pending packet
+        mov     dx, [nic_io_base]       ; Using DS = _DATA
         add     dx, 0x08                ; RX_STATUS register
         in      ax, dx
-
+        
+        ; Check if packet is complete and ready
         test    ax, 0x8000              ; RX_COMPLETE bit
-        jz      .rx_done
-
-        ; Get packet length
-        and     ax, 0x07FF              ; Mask length bits
-        mov     [packet_length], ax
-
-        ; Read packet data
-        mov     cx, ax
-        mov     di, offset packet_buffer
-        mov     dx, [nic_io_base]
-        add     dx, 0x00                ; RX_DATA register
-
-        ; PATCH POINT: Optimized packet read
-PATCH_3c509_read:
-        rep insb                        ; 2 bytes: 8086 default
-        nop                             ; 3 bytes padding
-        nop
-        nop
-        ; Will be patched to:
-        ; 286: REP INSW (2 bytes)
-        ; 386+: REP INSD with prefix (3 bytes)
-
-        ; Process packet
-        call    packet_process
-
-        ; Acknowledge RX
+        jz      .rx_fifo_empty          ; No more packets - exit RX loop early
+        
+        ; Also check packet budget before processing
+        cmp     word ptr [packet_budget], 0
+        jle     .check_tx_int           ; Budget exhausted
+        
+        ; Check for RX errors
+        test    ax, 0x4000              ; RX_ERROR bit
+        jz      .rx_good
+        
+        ; RX error - discard packet and continue
         mov     dx, [nic_io_base]
         add     dx, 0x0E                ; COMMAND register
         mov     ax, 0x4000              ; RX_DISCARD
         out     dx, ax
-
-        ; Check for more packets
-        dec     cx
+        inc     word ptr [rx_errors]
+        jmp     .rx_next
+        
+.rx_good:
+        ; Get packet length from status
+        and     ax, 0x07FF              ; Mask length bits (0-2047)
+        jz      .rx_discard             ; Zero length - discard
+        cmp     ax, 1514                ; Max Ethernet frame
+        ja      .rx_discard             ; Too large - discard
+        
+        mov     [packet_length], ax     ; Save valid length
+        
+        ; Read packet data from FIFO (optimized for 16-bit FIFO)
+        push    cx                      ; Save packet budget counter
+        mov     cx, ax                  ; Total byte count
+        mov     di, offset packet_buffer ; ES:DI -> destination buffer (ES=_DATA)
+        mov     dx, [nic_io_base]    
+        add     dx, 0x00                ; RX_DATA register (FIFO)
+        
+        ; Optimize for 16-bit transfers
+        push    cx                      ; Save total count
+        shr     cx, 1                   ; Word count = bytes / 2
+        jz      .skip_words             ; Skip if less than 2 bytes
+        
+        ; PATCH POINT: Optimized packet read (word transfers)
+PATCH_3c509_read:
+        rep insw                        ; Read CX words from DX to ES:DI
+        nop                             ; Padding for patches
+        
+.skip_words:
+        pop     cx                      ; Restore total count
+        test    cx, 1                   ; Check for odd byte
+        jz      .read_done
+        insb                            ; Read final odd byte
+        
+.read_done:
+        
+        ; Defer packet processing to bottom-half
+        ; Call: int packet_isr_receive(uint8_t *packet_data, uint16_t packet_size, uint8_t nic_index)
+        ; Push args right-to-left (small model near call)
+        ; NIC index argument
+        mov     al, [current_nic_index]
+        xor     ah, ah
+        push    ax
+        push    word ptr [packet_length]; Packet size
+        mov     ax, offset packet_buffer
+        push    ax                      ; Pointer to packet data
+        call    packet_isr_receive
+        add     sp, 6                   ; Clean up 3 args
+        pop     cx                      ; Restore packet budget counter
+        
+        ; Successfully received
+        inc     word ptr [packets_received]
+        
+.rx_discard:
+        ; Discard packet from FIFO (required to advance)
+        mov     dx, [nic_io_base]
+        add     dx, 0x0E                ; COMMAND register
+        mov     ax, 0x4000              ; RX_DISCARD command
+        out     dx, ax
+        
+.rx_next:
+        ; Check for more RX packets (up to batch limit)
+        dec     word ptr [packet_budget]
         jnz     .rx_loop
 
-.rx_done:
-        ; Update statistics
-        inc     word ptr [packets_received]
+.rx_fifo_empty:
+        ; RX FIFO is empty - skip to TX processing
+        ; This early exit improves performance when FIFO drains quickly
+        
+.check_tx_int:
+        ; Process TX completion
+        test    word ptr [int_status], 0x0004  ; TX_COMPLETE
+        jz      .check_errors                   ; Skip if TX bit not set
+        
+        ; TX bit is set - acknowledge TX completion
+        inc     word ptr [packets_sent]
+        
+.check_errors:
+        ; Handle any error interrupts
+        test    word ptr [int_status], 0x0040  ; ADAPTER_FAILURE
+        jz      .continue_mitigation            ; Skip if error bit not set
+        
+        ; Error bit is set - log error and attempt recovery
+        inc     word ptr [adapter_errors]
+        call    reset_adapter_minimal
+        
+.continue_mitigation:
+        ; Check if we should process more interrupt batches
+        cmp     bx, 3                   ; Max 3 batches per ISR
+        jae     .mitigation_done
+        
+        ; Check if we've processed maximum packets
+        cmp     word ptr [packet_budget], 0
+        jle     .mitigation_done
+        
+        ; Loop back to check for more pending interrupts
+        jmp     .mitigation_loop
 
+.mitigation_done:
+        ; Update mitigation statistics
+        cmp     bx, 1
+        jbe     .no_mitigation
+        inc     word ptr [interrupts_mitigated]
+        add     word ptr [mitigation_savings], bx
+        
+.no_mitigation:
+        ; Send EOI to PIC before returning
+        cmp     byte ptr [effective_nic_irq], 8
+        jb      .handler_master_only
+        mov     al, 20h
+        out     0A0h, al                ; EOI to slave PIC first
+.handler_master_only:
+        mov     al, 20h
+        out     20h, al                 ; EOI to master PIC
+        
+        ; Restore all registers
+        pop     es                      ; Restore ES
+        pop     ds
+        pop     di
+        pop     si
+        pop     dx
         pop     cx
+        pop     bx
+        pop     ax
         ret
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -188,7 +439,16 @@ PATCH_3c509_read:
 nic_3c515_handler:
         push    cx
         push    si
-
+        push    ds
+        push    es
+        
+        ; Set up segments
+        mov     ax, seg _DATA
+        mov     ds, ax
+        mov     es, ax
+        
+        ; Use internal ASM mitigation path unconditionally (no C in ISR)
+.use_legacy_3c515:
         ; Check interrupt status
         mov     dx, [nic_io_base]
         add     dx, 0x0E                ; INT_STATUS register
@@ -201,7 +461,12 @@ nic_3c515_handler:
 
         ; Process RX ring buffer
         mov     si, [rx_ring_ptr]
-        mov     cx, MAX_PACKETS_BATCH
+        
+        ; Patchable batch budget for DMA NICs (3C515)
+PATCH_dma_batch_init:
+        mov     cx, 32                  ; Default; SMC-patched per CPU (B9 imm16 90 90)
+        nop
+        nop
 
 .rx_ring_loop:
         ; Check ring descriptor status
@@ -215,12 +480,15 @@ nic_3c515_handler:
         mov     cx, [si+4]              ; Length
 
         ; PATCH POINT: DMA vs PIO transfer
+        ; CRITICAL SAFETY GATE: Default to PIO until DMA verified
 PATCH_3c515_transfer:
-        call    transfer_pio            ; 3 bytes: default PIO
+        call    transfer_pio            ; 3 bytes: SAFE default
         nop                             ; 2 bytes padding
         nop
-        ; Will be patched to:
-        ; If DMA capable: call transfer_dma
+        ; Will ONLY be patched to DMA after:
+        ; 1. Bus mastering test passes
+        ; 2. DMA boundary checks active  
+        ; 3. Cache coherency verified
 
         pop     si
 
@@ -258,6 +526,9 @@ PATCH_3c515_transfer:
         mov     ax, [int_status]
         out     dx, ax
 
+.3c515_done:
+        pop     es
+        pop     ds
         pop     si
         pop     cx
         ret
@@ -265,6 +536,7 @@ PATCH_3c515_transfer:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Transfer Methods (Patchable)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        public  transfer_pio
 transfer_pio:
         ; Programmed I/O transfer
         push    dx
@@ -285,6 +557,7 @@ PATCH_pio_loop:
         pop     dx
         ret
 
+        public  transfer_dma
 transfer_dma:
         ; DMA transfer (3C515 only)
         push    ax
@@ -517,6 +790,35 @@ cache_flush_software:
         ret
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Minimal adapter reset for error recovery
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+reset_adapter_minimal:
+        push    ax
+        push    dx
+        
+        ; Issue global reset command
+        mov     dx, [nic_io_base]   ; CS override for segment safety
+        add     dx, 0x0E                ; COMMAND register
+        mov     ax, 0x0000              ; GLOBAL_RESET
+        out     dx, ax
+        
+        ; Brief delay for reset
+        push    cx
+        mov     cx, 100
+.reset_delay:
+        nop
+        loop    .reset_delay
+        pop     cx
+        
+        ; Re-enable receiver and transmitter
+        mov     ax, 0x0101              ; RX_ENABLE | TX_ENABLE
+        out     dx, ax
+        
+        pop     dx
+        pop     ax
+        ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Generic fallback handler
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 generic_nic_handler:
@@ -599,6 +901,36 @@ patch_table:
         db      90h, 90h, 90h, 90h, 90h  ; NOPs (EISA/PCI)
         db      90h, 90h, 90h, 90h, 90h  ; NOPs (PCI)
 
+        ; Patch: PIO batch size (mov cx, imm16; nop; nop)
+        dw      PATCH_pio_batch_init
+        db      4                       ; Type: ISR
+        db      5                       ; Size
+        ; 8086: PIO=4
+        db      0B9h, 04h, 00h, 90h, 90h
+        ; 286:  PIO=6
+        db      0B9h, 06h, 00h, 90h, 90h
+        ; 386:  PIO=8
+        db      0B9h, 08h, 00h, 90h, 90h
+        ; 486:  PIO=12
+        db      0B9h, 0Ch, 00h, 90h, 90h
+        ; Pentium: PIO=16
+        db      0B9h, 10h, 00h, 90h, 90h
+
+        ; Patch: DMA batch size (mov cx, imm16; nop; nop)
+        dw      PATCH_dma_batch_init
+        db      4                       ; Type: ISR
+        db      5                       ; Size
+        ; 8086: DMA=8 (conservative)
+        db      0B9h, 08h, 00h, 90h, 90h
+        ; 286:  DMA=16
+        db      0B9h, 10h, 00h, 90h, 90h
+        ; 386:  DMA=24
+        db      0B9h, 18h, 00h, 90h, 90h
+        ; 486:  DMA=32
+        db      0B9h, 20h, 00h, 90h, 90h
+        ; Pentium: DMA=32
+        db      0B9h, 20h, 00h, 90h, 90h
+
         ; Patch 6: Pre-DMA cache flush
         dw      PATCH_cache_flush_pre
         db      7                       ; Type: CACHE_PRE
@@ -621,80 +953,361 @@ patch_table:
         db      0Fh, 09h, 90h, 90h, 90h  ; 486: WBINVD
         db      0E8h, 00h, 00h, 90h, 90h  ; Pentium: CALL invalidate_proc
 
-patch_count     equ     7
+patch_count     equ     9
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; IRQ Handler Initialization
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 irq_handler_init:
+        public  irq_handler_init
         push    ax
+        push    bx
+        push    cx
         push    dx
+        push    ds
         push    es
 
-        ; Get NIC IRQ from detection
+        ; Set up data segment first for variable access
+        push    ds
+        mov     ax, seg _DATA
+        mov     ds, ax
+        
+        ; Load NIC IRQ selected during detection
         mov     al, [detected_nic_irq]
         mov     [nic_irq], al
+        
+        pop     ds
 
-        ; Calculate interrupt vector (IRQ + 8 for master, IRQ + 0x70 for slave)
+        ; Compute effective IRQ (map 2->9)
+        mov     dl, al
+        cmp     al, 2
+        jne     .have_eff
+        mov     dl, 9
+.have_eff:
+        push    ds
+        mov     ax, seg _DATA
+        mov     ds, ax
+        mov     [effective_nic_irq], dl
+        
+        ; Save original IMR state before masking
+        push    dx
+        mov     dx, 021h                ; Master PIC IMR
+        in      al, dx
+        mov     [original_imr_master], al
+        mov     dx, 0A1h                ; Slave PIC IMR
+        in      al, dx
+        mov     [original_imr_slave], al
+        pop     dx
+        
+        pop     ds
+
+        ; CRITICAL: Mask the IRQ line immediately to minimize race window
+        mov     al, dl                  ; AL = effective_nic_irq
+        call    mask_irq_in_pic
+        
+        ; For slave IRQs, ensure cascade (IRQ2) is unmasked
+        cmp     dl, 8                   ; DL still has effective_nic_irq
+        jb      .skip_cascade
+        push    ds
+        mov     ax, seg _DATA
+        mov     ds, ax
+        push    ax
+        pushf
+        cli
+        mov     dx, 021h                ; Master PIC IMR
+        in      al, dx
+        test    al, 04h                 ; Check if IRQ2 is masked
+        jz      .cascade_already_ok     ; Already unmasked, skip
+        mov     byte ptr [cascade_modified], 1  ; Mark that we modified it
+        and     al, 0FBh                ; Clear bit 2 (unmask IRQ2 cascade)
+        out     dx, al
+.cascade_already_ok:
+        popf
+        pop     ax
+        pop     ds
+.skip_cascade:
+
+        ; Calculate interrupt vector (IRQ2 already mapped to 9 in effective_nic_irq)
+        mov     al, dl                  ; Restore AL = effective_nic_irq
         cmp     al, 8
-        jb      .master_pic
-        add     al, 0x70 - 8            ; Slave PIC vectors
-        jmp     .set_vector
-.master_pic:
-        add     al, 0x08                ; Master PIC vectors
+        jb      .use_master
+        ; Slave PIC vectors (IRQ8..15 -> INT 70h..77h)
+        mov     bl, al
+        add     bl, 0x70 - 8
+        jmp     .have_vector
+.use_master:
+        ; Master PIC vectors (IRQ0..7 -> INT 08h..0Fh)
+        mov     bl, al
+        add     bl, 0x08
 
-.set_vector:
-        ; Install interrupt handler
-        mov     ah, 0x25                ; Set interrupt vector
-        mov     dx, offset nic_irq_handler
+.have_vector:
+        ; Save old vector (AH=35h, AL=vector -> ES:BX)
+        mov     ah, 0x35
+        mov     al, bl
         int     21h
 
-        ; Enable IRQ in PIC
-        call    enable_irq_in_pic
+        ; Store old vector in _DATA
+        push    ds
+        mov     ax, seg _DATA
+        mov     ds, ax
+        mov     [old_vector_off], bx
+        mov     [old_vector_seg], es
+        mov     [installed_vector], bl
+        pop     ds
+
+        ; Install new handler (AH=25h expects DS:DX -> handler address)
+        mov     dx, offset nic_irq_handler
+        push    cs
+        pop     ds                      ; DS = CS so DS:DX points to code
+        mov     ah, 0x25
+        mov     al, bl                  ; vector number
+        int     21h
+
+        ; Leave IRQ masked; C-side phase will unmask explicitly after init
 
         pop     es
+        pop     ds
         pop     dx
+        pop     cx
+        pop     bx
         pop     ax
         ret
 
-enable_irq_in_pic:
+; Legacy enable_irq_in_pic removed - use unmask_irq_in_pic instead
+; The new function takes IRQ in AL and properly handles atomicity
+
+; Mask the NIC IRQ line in the PIC IMR (master/slave) – safe during vector change
+; AL = effective IRQ number (0-15, already mapped 2->9)
+mask_irq_in_pic:
+        pushf
+        cli                     ; Atomic IMR update
         push    ax
+        push    bx
+        push    cx
         push    dx
 
-        mov     al, [nic_irq]
         cmp     al, 8
-        jb      .enable_master
+        jb      .mask_master
 
-        ; Enable in slave PIC
+        ; Slave PIC: mask bit (IRQ8..15 -> bit 0..7)
         sub     al, 8
         mov     cl, al
-        mov     al, 1
-        shl     al, cl
-        not     al
-        mov     dx, 0xA1                ; Slave PIC mask
-        in      al, dx
-        and     al, ah
+        mov     bl, 1           ; Use BL for mask bit
+        shl     bl, cl
+        mov     dx, 0A1h
+        in      al, dx          ; Read IMR into AL (8-bit I/O only!)
+        or      al, bl          ; Set mask bit
         out     dx, al
-        jmp     .done
+        jmp     .done_mask
 
-.enable_master:
-        ; Enable in master PIC
+.mask_master:
+        ; Master PIC
         mov     cl, al
-        mov     al, 1
-        shl     al, cl
-        not     al
-        mov     dx, 0x21                ; Master PIC mask
-        in      ah, dx
-        and     ah, al
-        mov     al, ah
+        mov     bl, 1           ; Use BL for mask bit
+        shl     bl, cl
+        mov     dx, 021h
+        in      al, dx          ; Read IMR into AL (8-bit I/O only!)
+        or      al, bl          ; Set mask bit
         out     dx, al
 
-.done:
+.done_mask:
         pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        popf
+        ret
+
+; Unmask the NIC IRQ line in the PIC IMR (for enable_driver_interrupts)
+; AL = effective IRQ number (0-15, already mapped 2->9)
+unmask_irq_in_pic:
+        public  unmask_irq_in_pic
+        pushf
+        cli                     ; Atomic IMR update
+        push    ax
+        push    bx
+        push    cx
+        push    dx
+
+        cmp     al, 8
+        jb      .unmask_master
+
+        ; Slave PIC: unmask bit (IRQ8..15 -> bit 0..7)
+        sub     al, 8
+        mov     cl, al
+        mov     bl, 1           ; Use BL for mask bit
+        shl     bl, cl
+        not     bl              ; Invert to create unmask pattern
+        mov     dx, 0A1h
+        in      al, dx          ; Read IMR into AL
+        and     al, bl          ; Clear mask bit
+        out     dx, al
+        jmp     .done_unmask
+
+.unmask_master:
+        ; Master PIC
+        mov     cl, al
+        mov     bl, 1           ; Use BL for mask bit
+        shl     bl, cl
+        not     bl              ; Invert to create unmask pattern
+        mov     dx, 021h
+        in      al, dx          ; Read IMR into AL
+        and     al, bl          ; Clear mask bit
+        out     dx, al
+
+.done_unmask:
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        popf
+        ret
+
+; Uninstall IRQ handler and restore previous vector
+irq_handler_uninstall:
+        public  irq_handler_uninstall
+        push    ax
+        push    bx
+        push    cx                      ; Need CX for shift operations
+        push    dx
+        push    ds
+
+        ; Set up data segment
+        mov     ax, seg _DATA
+        mov     ds, ax
+
+        ; Keep IRQ masked while restoring
+        mov     al, [effective_nic_irq]
+        call    mask_irq_in_pic
+
+        ; Load saved vector number
+        mov     al, [installed_vector]
+        or      al, al
+        jz      .restore_imr_bit        ; Nothing to restore
+        
+        mov     bl, al                  ; Save vector number in BL
+
+        ; Load saved old handler DS:DX from _DATA
+        mov     dx, [old_vector_off]
+        mov     ax, [old_vector_seg]
+        or      ax, ax
+        jz      .restore_imr_bit        ; No old vector saved
+
+        ; AH=25h Set Vector, DS:DX must point to old handler
+        mov     ds, ax                  ; DS = old handler segment (clobbers AL!)
+        mov     ah, 0x25
+        mov     al, bl                  ; Restore vector number from BL
+        int     21h
+        
+        ; Clear tracking variables for idempotency
+        mov     ax, seg _DATA
+        mov     ds, ax
+        mov     byte ptr [installed_vector], 0
+        mov     word ptr [old_vector_off], 0
+        mov     word ptr [old_vector_seg], 0
+
+.restore_imr_bit:
+        ; Restore ONLY our IRQ bit in IMR (preserve other drivers' changes)
+        ; NOTE: DS is saved/restored by function prologue/epilogue
+        mov     ax, seg _DATA
+        mov     ds, ax
+        mov     al, [effective_nic_irq]
+        
+        pushf
+        cli                             ; Atomic IMR update
+        
+        cmp     al, 8
+        jb      .restore_master_bit
+        
+        ; Slave PIC - restore only our bit
+        sub     al, 8
+        mov     cl, al
+        mov     bl, 1
+        shl     bl, cl                  ; BL = our bit mask
+        not     bl                      ; BL = inverse mask (all bits except ours)
+        
+        mov     dx, 0A1h                ; Slave IMR
+        in      al, dx                  ; Current IMR
+        and     al, bl                  ; Clear our bit
+        mov     ah, [original_imr_slave]
+        not     bl                      ; BL = our bit mask again
+        and     ah, bl                  ; Isolate original bit
+        or      al, ah                  ; Restore original bit value
+        out     dx, al
+        jmp     .restore_done
+        
+.restore_master_bit:
+        ; Master PIC - restore only our bit
+        mov     cl, al
+        mov     bl, 1
+        shl     bl, cl                  ; BL = our bit mask
+        not     bl                      ; BL = inverse mask
+        
+        mov     dx, 021h                ; Master IMR
+        in      al, dx                  ; Current IMR
+        and     al, bl                  ; Clear our bit
+        mov     ah, [original_imr_master]
+        not     bl                      ; BL = our bit mask again
+        and     ah, bl                  ; Isolate original bit
+        or      al, ah                  ; Restore original bit value
+        out     dx, al
+
+.restore_done:
+        ; Restore IRQ2 cascade if we modified it
+        cmp     byte ptr [cascade_modified], 0
+        jz      .skip_cascade_restore
+        push    ax
+        pushf
+        cli
+        mov     dx, 021h                ; Master PIC IMR
+        in      al, dx
+        test    byte ptr [original_imr_master], 04h  ; Was IRQ2 originally masked?
+        jz      .cascade_restore_unmask
+        or      al, 04h                 ; Re-mask IRQ2
+        jmp     .cascade_restore_write
+.cascade_restore_unmask:
+        and     al, 0FBh                ; Keep IRQ2 unmasked
+.cascade_restore_write:
+        out     dx, al
+        popf
+        pop     ax
+.skip_cascade_restore:
+
+        pop     ds
+        pop     dx
+        pop     cx
+        pop     bx
         pop     ax
         ret
 
 cold_section_end:
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Binding helper - set IO base, IRQ, and NIC index from C
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        .code
+nic_irq_set_binding:
+        public  nic_irq_set_binding
+        ; Args (small model near): [SP+2]=io_base (word), [SP+4]=irq (byte), [SP+6]=nic_index (byte)
+        push    bp
+        mov     bp, sp
+        push    ax
+        push    ds
+        
+        mov     ax, seg _DATA
+        mov     ds, ax
+        
+        mov     ax, [bp+4]             ; io_base
+        mov     [nic_io_base], ax
+        mov     al, [bp+6]             ; irq
+        mov     [detected_nic_irq], al
+        mov     al, [bp+8]             ; nic_index
+        mov     [current_nic_index], al
+        
+        pop     ds
+        pop     ax
+        pop     bp
+        ret
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Section
@@ -721,7 +1334,17 @@ isr_flags           db      0
 nic_irq             db      0
 nic_io_base         dw      0
 detected_nic_irq    db      0
+current_nic_index   db      0
+        public  current_nic_index
 int_status          dw      0
+
+        ; CRITICAL FIX: Private ISR stack (2KB)
+        ; Prevents stack corruption from other TSRs
+        align 16
+isr_private_stack   db      2048 DUP(0)     ; 2KB private stack
+isr_stack_top       equ     $               ; Top of stack (grows down)
+saved_ss            dw      0               ; Saved caller's SS
+saved_sp            dw      0               ; Saved caller's SP
 
         ; Statistics
 packets_received    dw      0
@@ -730,12 +1353,37 @@ reentry_count       dw      0
 unhandled_irqs      dw      0
 dma_boundary_hits   dw      0
 cache_flushes       dw      0
+rx_ack_count        dw      0       ; Tiny ISR: RX fast acknowledgments
+tx_ack_count        dw      0       ; Tiny ISR: TX fast acknowledgments
+adapter_errors      dw      0       ; Adapter failure count
+interrupts_mitigated dw     0       ; Number of interrupt batches
+mitigation_savings  dw      0       ; Total interrupts saved
+rx_errors           dw      0       ; RX error count
+
+        ; Old interrupt vector storage for restore on unload
+old_vector_off      dw      0
+old_vector_seg      dw      0
+installed_vector    db      0
+
+        ; Effective IRQ (remaps 2->9 for AT PIC)
+effective_nic_irq   db      0
+
+        ; Original IMR state for clean restore
+original_imr_master db      0       ; Original master PIC IMR
+original_imr_slave  db      0       ; Original slave PIC IMR
+cascade_modified    db      0       ; 1 if we unmasked IRQ2 cascade
 
         ; Packet handling
 packet_length       dw      0
 packet_buffer_phys  dd      0
 packet_buffer_seg   dw      0       ; Segment for CLFLUSH
 packet_buffer_off   dw      0       ; Offset for CLFLUSH
+packet_budget       dw      0       ; Separate counter for mitigation loop
+
+        ; Packet buffer - defined locally in data segment for proper ES:DS access
+        align 2
+packet_buffer       db      1514 dup(?)     ; Max Ethernet frame size
+        public  packet_buffer           ; Export for C code if needed
 
         ; 3C515 ring buffer pointers
 rx_ring_start       dw      0

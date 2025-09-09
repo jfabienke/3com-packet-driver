@@ -118,6 +118,9 @@ void memory_copy_optimized(void *dest, const void *src, uint32_t size);
 void memory_set_optimized(void *ptr, uint8_t value, uint32_t size);
 int memory_init_cpu_optimized(void);
 
+/* ASM-optimized packet copy for ISR paths */
+void asm_packet_copy_fast(void *dest, const void *src, uint16_t size);
+
 /* Memory validation and debugging */
 bool memory_is_valid_pointer(const void *ptr);
 bool memory_is_allocated(const void *ptr);
