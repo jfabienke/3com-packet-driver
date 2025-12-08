@@ -99,6 +99,21 @@ use_insb:
 done:
 ENDM
 
+;------------------------------------------------------------------------------
+; SHR_SAFE - Shift right by immediate count (8086-compatible)
+; On 8086, shift by immediate > 1 requires CL register.
+; Note: These cache functions only run on 386+ (WBINVD/CLFLUSH),
+; so we use direct shifts since 386+ supports them.
+;
+; For pure 8086 compatibility, use:
+;   mov cl, N
+;   shr reg, cl
+;------------------------------------------------------------------------------
+; The following shift instructions in cache flush code are safe because:
+; 1. CLFLUSH (shr cx, 6) requires Pentium 4+ CPU
+; 2. Software cache touch (shr cx, 5) requires 386+ CPU
+; Neither code path will execute on 8086/8088 systems.
+
         .code
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -785,6 +800,20 @@ allocate_bounce_buffer:
         ; For now, return error to force PIO
         stc
         ret
+
+;==============================================================================
+; Cache Flush Routines (NOT used on 8086/8088)
+;
+; These cache management routines contain 186+ shift instructions (shr cx, N)
+; but are never called on 8086 systems because:
+; - CLFLUSH requires Pentium 4+ (cache_flush_clflush)
+; - WBINVD requires 486+ (cache_flush_wbinvd)
+; - Software cache touch requires 386+ (cache_flush_software)
+; - 8086/8088 CPUs have no cache to manage
+;
+; The 186+ shift instructions are acceptable here because this code
+; only executes on CPUs that support those instructions.
+;==============================================================================
 
 ; Cache flush for CLFLUSH systems (Pentium 4+)
 cache_flush_clflush:
