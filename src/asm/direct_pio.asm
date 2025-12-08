@@ -13,6 +13,71 @@
 EXTERN  asm_detect_cpu_type:PROC
 EXTERN  check_cpu_feature:PROC
 
+; External CPU optimization level from packet_ops.asm
+EXTRN current_cpu_opt:BYTE
+
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 186+ optimizations (INS/OUTS available)
+OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
+
+;==============================================================================
+; 8086-SAFE I/O MACROS
+;
+; REP INS/OUTS are 80186+ instructions. On 8086/8088, we must use a loop
+; with individual IN/OUT instructions combined with STOSB/LODSB.
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; OUTSW_SAFE - Output word array to port (8086-compatible)
+; Input: DS:SI = source buffer, DX = port, CX = word count
+; Clobbers: AX, CX, SI
+;------------------------------------------------------------------------------
+OUTSW_SAFE MACRO
+        LOCAL use_outsw, outsw_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_outsw
+        ;; 8086 path: manual loop
+        jcxz done               ; Skip if CX = 0
+outsw_loop:
+        lodsw                   ; AX = [DS:SI], SI += 2
+        out dx, ax              ; Output word to port
+        loop outsw_loop         ; Decrement CX, loop if not zero
+        jmp short done
+use_outsw:
+        ;; 186+ path: use REP OUTSW
+        rep outsw
+done:
+ENDM
+
+;------------------------------------------------------------------------------
+; INSW_SAFE - Input word array from port (8086-compatible)
+; Input: ES:DI = dest buffer, DX = port, CX = word count
+; Clobbers: AX, CX, DI
+;------------------------------------------------------------------------------
+INSW_SAFE MACRO
+        LOCAL use_insw, insw_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_insw
+        ;; 8086 path: manual loop
+        jcxz done               ; Skip if CX = 0
+insw_loop:
+        in ax, dx               ; AX = word from port
+        stosw                   ; [ES:DI] = AX, DI += 2
+        loop insw_loop          ; Decrement CX, loop if not zero
+        jmp short done
+use_insw:
+        ;; 186+ path: use REP INSW
+        rep insw
+done:
+ENDM
+
 .DATA
 
 ; Error codes
@@ -123,10 +188,11 @@ direct_pio_outsw PROC FAR
     test cx, cx             ; Check if word count is zero
     jz   pio_done           ; Skip if nothing to transfer
     
-    ; Perform optimized block transfer using REP OUTSW
+    ; Perform optimized block transfer using OUTSW_SAFE
     ; This is the key optimization - direct transfer from source to I/O
+    ; OUTSW_SAFE: Uses REP OUTSW on 186+, manual loop on 8086/8088
     cld                     ; Clear direction flag (forward transfer)
-    rep  outsw              ; Repeat OUTSW CX times: DS:[SI] -> DX, SI += 2
+    OUTSW_SAFE              ; CPU-adaptive: REP OUTSW (186+) or loop (8086)
     
 pio_done:
     ; Restore registers
@@ -187,10 +253,10 @@ send_packet_direct_pio_asm PROC FAR
     shr  ax, 1              ; AX = length / 2 (word count)
     mov  cx, ax             ; CX = word count for REP OUTSW
     
-    ; Transfer packet data using optimized REP OUTSW
+    ; Transfer packet data using 8086-safe OUTSW
     cld                     ; Clear direction flag
-    rep  outsw              ; Transfer CX words from DS:[SI] to DX
-    
+    OUTSW_SAFE              ; CPU-adaptive: REP OUTSW (186+) or loop (8086)
+
     ; Handle odd byte if packet length is odd
     mov  ax, [bp+10]        ; Reload original packet length
     test ax, 1              ; Check if length is odd
@@ -244,12 +310,12 @@ direct_pio_header_and_payload PROC FAR
     lds  si, [bp+8]         ; Load dest_mac address
     mov  cx, 3              ; 3 words for MAC address
     cld
-    rep  outsw              ; Transfer destination MAC
-    
+    OUTSW_SAFE              ; CPU-adaptive: transfer destination MAC
+
     ; Transfer source MAC (6 bytes = 3 words)
     lds  si, [bp+12]        ; Load src_mac address
     mov  cx, 3              ; 3 words for MAC address
-    rep  outsw              ; Transfer source MAC
+    OUTSW_SAFE              ; CPU-adaptive: transfer source MAC
     
     ; Transfer EtherType (2 bytes = 1 word)
     mov  ax, [bp+16]        ; Load ethertype
@@ -260,10 +326,10 @@ direct_pio_header_and_payload PROC FAR
     ; Transfer payload
     lds  si, [bp+18]        ; Load payload address
     mov  cx, [bp+22]        ; Load payload length
-    
+
     ; Convert byte count to word count
     shr  cx, 1              ; CX = payload_len / 2
-    rep  outsw              ; Transfer payload words
+    OUTSW_SAFE              ; CPU-adaptive: transfer payload words
     
     ; Handle odd payload byte
     mov  cx, [bp+22]        ; Reload payload length
@@ -345,20 +411,20 @@ direct_pio_outsl PROC FAR
     jmp  outsl_done
 
 fallback_to_16bit:
-    ; Fall back to 16-bit operations for 286 systems
+    ; Fall back to 16-bit operations for 286 systems (or loop for 8086)
     ; Convert dword count to word count (multiply by 2)
     mov  cx, [bp+12]        ; Load dword count
     shl  cx, 1              ; Convert to word count (dwords * 2)
-    
+
     ; Use existing 16-bit function logic
     lds  si, [bp+6]         ; Load DS:SI with source buffer address
     mov  dx, [bp+10]        ; Load destination port
-    
+
     test cx, cx             ; Check if word count is zero
     jz   outsl_done         ; Skip if nothing to transfer
-    
+
     cld                     ; Clear direction flag
-    rep  outsw              ; Use 16-bit OUTSW
+    OUTSW_SAFE              ; CPU-adaptive: REP OUTSW (186+) or loop (8086)
 
 outsl_done:
     ; Restore registers
@@ -424,20 +490,20 @@ direct_pio_insl PROC FAR
     jmp  insl_done
 
 insl_fallback_to_16bit:
-    ; Fall back to 16-bit operations for 286 systems
+    ; Fall back to 16-bit operations for 286 systems (or loop for 8086)
     ; Convert dword count to word count (multiply by 2)
     mov  cx, [bp+12]        ; Load dword count
     shl  cx, 1              ; Convert to word count (dwords * 2)
-    
+
     ; Use 16-bit operations
     les  di, [bp+6]         ; Load ES:DI with destination buffer address
     mov  dx, [bp+10]        ; Load source port
-    
+
     test cx, cx             ; Check if word count is zero
     jz   insl_done          ; Skip if nothing to transfer
-    
+
     cld                     ; Clear direction flag
-    rep  insw               ; Use 16-bit INSW
+    INSW_SAFE               ; CPU-adaptive: REP INSW (186+) or loop (8086)
 
 insl_done:
     ; Restore registers
@@ -532,14 +598,14 @@ send_packet_direct_pio_enhanced PROC FAR
     jmp  enhanced_transfer_remainder
 
 enhanced_use_16bit:
-    ; Use traditional 16-bit transfer method
+    ; Use traditional 16-bit transfer method (or loop for 8086)
     mov  ax, cx             ; AX = packet length
     shr  ax, 1              ; AX = length / 2 (word count)
-    mov  cx, ax             ; CX = word count for REP OUTSW
-    
-    ; Transfer packet data using 16-bit REP OUTSW
+    mov  cx, ax             ; CX = word count
+
+    ; Transfer packet data using 8086-safe OUTSW
     cld                     ; Clear direction flag
-    rep  outsw              ; Transfer CX words from DS:[SI] to DX
+    OUTSW_SAFE              ; CPU-adaptive: REP OUTSW (186+) or loop (8086)
     
     ; Handle odd byte if packet length is odd
     mov  ax, [bp+10]        ; Reload original packet length

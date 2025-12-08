@@ -23,6 +23,82 @@
 
         .8086                           ; Base compatibility
         .model small
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CPU Optimization Constants and Macros
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; External CPU optimization level from packet_ops.asm
+EXTRN current_cpu_opt:BYTE
+
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 186+ optimizations (INS/OUTS available)
+OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
+
+;------------------------------------------------------------------------------
+; INSW_SAFE - Input word array from port (8086-compatible)
+; Input: ES:DI = dest buffer, DX = port, CX = word count
+; Clobbers: AX, CX, DI
+; Note: Caller must set direction flag (CLD) before calling
+;------------------------------------------------------------------------------
+INSW_SAFE MACRO
+        LOCAL use_insw, insw_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_insw
+        ;; 8086 path: manual loop
+        jcxz done               ; Skip if CX = 0
+insw_loop:
+        in ax, dx               ; AX = word from port
+        stosw                   ; [ES:DI] = AX, DI += 2
+        loop insw_loop          ; Decrement CX, loop if not zero
+        jmp short done
+use_insw:
+        ;; 186+ path: use REP INSW
+        rep insw
+done:
+ENDM
+
+;------------------------------------------------------------------------------
+; INSB_SAFE - Input single byte from port (always 8086-compatible)
+; This is just INB followed by STOSB, which works on all CPUs
+; Input: ES:DI = dest buffer, DX = port
+; Clobbers: AL, DI
+;------------------------------------------------------------------------------
+INSB_SAFE MACRO
+        in al, dx               ; AL = byte from port
+        stosb                   ; [ES:DI] = AL, DI += 1
+ENDM
+
+;------------------------------------------------------------------------------
+; REP_INSB_SAFE - Input byte array from port (8086-compatible)
+; Input: ES:DI = dest buffer, DX = port, CX = byte count
+; Clobbers: AL, CX, DI
+; Note: Caller must set direction flag (CLD) before calling
+;------------------------------------------------------------------------------
+REP_INSB_SAFE MACRO
+        LOCAL use_insb, insb_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_insb
+        ;; 8086 path: manual loop
+        jcxz done               ; Skip if CX = 0
+insb_loop:
+        in al, dx               ; AL = byte from port
+        stosb                   ; [ES:DI] = AL, DI += 1
+        loop insb_loop          ; Decrement CX, loop if not zero
+        jmp short done
+use_insb:
+        ;; 186+ path: use REP INSB
+        rep insb
+done:
+ENDM
+
         .code
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -331,15 +407,16 @@ PATCH_pio_batch_init:
         jz      .skip_words             ; Skip if less than 2 bytes
         
         ; PATCH POINT: Optimized packet read (word transfers)
+        ; Uses INSW_SAFE macro for 8086 compatibility
 PATCH_3c509_read:
-        rep insw                        ; Read CX words from DX to ES:DI
+        INSW_SAFE                       ; CPU-adaptive: REP INSW (186+) or loop (8086)
         nop                             ; Padding for patches
-        
+
 .skip_words:
         pop     cx                      ; Restore total count
         test    cx, 1                   ; Check for odd byte
         jz      .read_done
-        insb                            ; Read final odd byte
+        INSB_SAFE                       ; 8086-safe single byte input
         
 .read_done:
         
@@ -539,6 +616,7 @@ PATCH_3c515_transfer:
         public  transfer_pio
 transfer_pio:
         ; Programmed I/O transfer
+        ; On 8086, SMC is disabled so REP_INSB_SAFE provides fallback
         push    dx
         push    di
 
@@ -546,12 +624,14 @@ transfer_pio:
         mov     dx, [nic_io_base]
 
         ; PATCH POINT: Optimized PIO
+        ; On 186+: May be patched to REP INSW or REP INSD
+        ; On 8086: Uses loop-based byte transfer (SMC disabled)
 PATCH_pio_loop:
-        rep insb                        ; 2 bytes: default
-        nop                             ; 3 bytes padding
+        REP_INSB_SAFE                   ; CPU-adaptive: REP INSB (186+) or loop (8086)
+        nop                             ; Padding for patches
         nop
         nop
-        ; Patched for CPU-specific optimization
+        ; Patched for CPU-specific optimization on 186+
 
         pop     di
         pop     dx

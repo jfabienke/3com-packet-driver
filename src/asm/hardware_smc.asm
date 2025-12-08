@@ -14,6 +14,66 @@
 
         .8086                           ; Base compatibility
         .model small
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CPU Optimization Constants and Macros
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; External CPU optimization level from packet_ops.asm
+EXTRN current_cpu_opt:BYTE
+
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 186+ optimizations (INS/OUTS available)
+
+;------------------------------------------------------------------------------
+; REP_INSB_SAFE - Input byte array from port (8086-compatible)
+; Input: ES:DI = dest buffer, DX = port, CX = byte count
+; Clobbers: AL, CX, DI
+;------------------------------------------------------------------------------
+REP_INSB_SAFE MACRO
+        LOCAL use_insb, insb_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_insb
+        ;; 8086 path: manual loop
+        jcxz done
+insb_loop:
+        in al, dx
+        stosb
+        loop insb_loop
+        jmp short done
+use_insb:
+        rep insb
+done:
+ENDM
+
+;------------------------------------------------------------------------------
+; REP_OUTSB_SAFE - Output byte array to port (8086-compatible)
+; Input: DS:SI = source buffer, DX = port, CX = byte count
+; Clobbers: AL, CX, SI
+;------------------------------------------------------------------------------
+REP_OUTSB_SAFE MACRO
+        LOCAL use_outsb, outsb_loop, done
+        push bx
+        mov bl, [current_cpu_opt]
+        test bl, OPT_16BIT
+        pop bx
+        jnz use_outsb
+        ;; 8086 path: manual loop
+        jcxz done
+outsb_loop:
+        lodsb
+        out dx, al
+        loop outsb_loop
+        jmp short done
+use_outsb:
+        rep outsb
+done:
+ENDM
+
         .code
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -119,9 +179,11 @@ hw_read_block:
 
 .aligned:
         ; PATCH POINT: Optimized block read
+        ; On 186+: May be patched to REP INSW or REP INSD
+        ; On 8086: Uses loop-based byte transfer (SMC disabled)
 PATCH_block_read:
-        rep insb                        ; 2 bytes: byte I/O
-        nop                             ; 3 bytes padding
+        REP_INSB_SAFE                   ; CPU-adaptive: REP INSB (186+) or loop (8086)
+        nop                             ; Padding for patches
         nop
         nop
         ; Will be patched to:
@@ -155,9 +217,11 @@ hw_write_block:
 
 .aligned:
         ; PATCH POINT: Optimized block write
+        ; On 186+: May be patched to REP OUTSW or REP OUTSD
+        ; On 8086: Uses loop-based byte transfer (SMC disabled)
 PATCH_block_write:
-        rep outsb                       ; 2 bytes: byte I/O
-        nop                             ; 3 bytes padding
+        REP_OUTSB_SAFE                  ; CPU-adaptive: REP OUTSB (186+) or loop (8086)
+        nop                             ; Padding for patches
         nop
         nop
         ; Will be patched to:
