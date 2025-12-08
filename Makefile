@@ -207,7 +207,7 @@ DEPS       = $(ALL_OBJS:.obj=.d)
 
 # --- Rules ---
 
-.PHONY: all clean debug release production test info config-3c509b config-3c515 config-both config-286 config-386 config-486 pci-utils link-sanity verify-patches
+.PHONY: all clean debug release production test info config-3c509b config-3c515 config-both config-8086 config-286 config-386 config-486 build-8086-minimal pci-utils link-sanity verify-patches
 
 all: release
 
@@ -230,7 +230,19 @@ config-both:
 	@echo "Configuring for both NICs..."
 	@$(MAKE) NIC_SUPPORT=both TARGET_CPU=$(TARGET_CPU) release
 
-# CPU-specific builds  
+# CPU-specific builds
+config-8086:
+	@echo "============================================="
+	@echo "Configuring for 8086/8088..."
+	@echo "============================================="
+	@echo "Features enabled:"
+	@echo "  - 3C509B NIC only (PIO mode)"
+	@echo "  - No SMC patching"
+	@echo "  - No XMS/VDS/bus-mastering"
+	@echo "  - 8086-safe code paths"
+	@echo "============================================="
+	@$(MAKE) TARGET_CPU=8086 NIC_SUPPORT=3c509b ENABLE_BUS_MASTER=0 ENABLE_XMS=0 ENABLE_VDS=0 release
+
 config-286:
 	@echo "Configuring for 80286..."
 	@$(MAKE) TARGET_CPU=286 NIC_SUPPORT=$(NIC_SUPPORT) release
@@ -247,6 +259,11 @@ config-486:
 build-minimal:
 	@echo "Building minimal configuration (3C509B, 286, no optional features)..."
 	@$(MAKE) NIC_SUPPORT=3c509b TARGET_CPU=286 ENABLE_LOGGING=0 ENABLE_DIAGNOSTICS=0 ENABLE_STATS=0 release
+
+# Ultra-minimal build for 8086/8088 systems
+build-8086-minimal:
+	@echo "Building ultra-minimal 8086 configuration..."
+	@$(MAKE) NIC_SUPPORT=3c509b TARGET_CPU=8086 ENABLE_LOGGING=0 ENABLE_DIAGNOSTICS=0 ENABLE_STATS=0 ENABLE_BUS_MASTER=0 ENABLE_XMS=0 ENABLE_VDS=0 release
 
 build-full:
 	@echo "Building full configuration (both NICs, 386, all features)..."
@@ -499,14 +516,16 @@ info:
 	@echo ""
 	@echo "Enhanced Build Targets:"
 	@echo "  wmake                    - Release build (default configuration)"
-	@echo "  wmake debug              - Enhanced debug build" 
+	@echo "  wmake debug              - Enhanced debug build"
 	@echo "  wmake test               - Enhanced test suite"
 	@echo "  wmake config-3c509b      - Build for 3C509B only"
 	@echo "  wmake config-3c515       - Build for 3C515 only"
 	@echo "  wmake config-both        - Build for both NICs"
+	@echo "  wmake config-8086        - Build for 8086/8088 (3C509B PIO only)"
 	@echo "  wmake config-286         - Build for 80286"
 	@echo "  wmake config-386         - Build for 80386"
 	@echo "  wmake config-486         - Build for 80486"
+	@echo "  wmake build-8086-minimal - Ultra-minimal 8086/8088 build"
 	@echo "  wmake build-minimal      - Minimal build (smallest size)"
 	@echo "  wmake build-full         - Full featured build"
 	@echo "  wmake build-performance  - Performance optimized build"
