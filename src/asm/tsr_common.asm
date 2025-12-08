@@ -7,6 +7,72 @@
 
 include 'tsr_defensive.inc'
 
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 16-bit optimizations (186+: PUSHA, INS/OUTS)
+
+; External reference to CPU optimization level
+EXTRN current_cpu_opt:BYTE
+
+;-----------------------------------------------------------------------------
+; 8086-SAFE REGISTER SAVE/RESTORE MACROS
+; These macros check the CPU optimization level and use either PUSHA/POPA
+; (on 186+) or explicit push/pop sequences (on 8086/8088)
+;-----------------------------------------------------------------------------
+
+; SAVE_ALL_REGS - Save all general purpose registers
+; On 186+: uses PUSHA (1 byte, faster)
+; On 8086: uses explicit pushes (14 bytes, but compatible)
+SAVE_ALL_REGS MACRO
+    LOCAL use_pusha, done
+    push ax                         ; Save AX first (we need it for the check)
+    mov al, [current_cpu_opt]
+    test al, OPT_16BIT
+    pop ax                          ; Restore AX
+    jnz use_pusha
+    ; 8086 path: explicit push sequence
+    push ax
+    push cx
+    push dx
+    push bx
+    push sp
+    push bp
+    push si
+    push di
+    jmp short done
+use_pusha:
+    pusha
+done:
+ENDM
+
+; RESTORE_ALL_REGS - Restore all general purpose registers
+; On 186+: uses POPA (1 byte, faster)
+; On 8086: uses explicit pops (14 bytes, but compatible)
+RESTORE_ALL_REGS MACRO
+    LOCAL use_popa, done
+    ; We can't easily check the flag here without corrupting registers
+    ; So we'll use a memory flag set during SAVE_ALL_REGS
+    ; For simplicity, just check the CPU opt level again using stack
+    push ax
+    mov al, [current_cpu_opt]
+    test al, OPT_16BIT
+    pop ax
+    jnz use_popa
+    ; 8086 path: explicit pop sequence (reverse order)
+    pop di
+    pop si
+    pop bp
+    add sp, 2                       ; Skip SP (can't pop into SP meaningfully)
+    pop bx
+    pop dx
+    pop cx
+    pop ax
+    jmp short done
+use_popa:
+    popa
+done:
+ENDM
+
 .data
 
 ; TSR identification and status
@@ -255,29 +321,31 @@ int28_handler proc far
     ; Check if we have deferred work
     cmp byte [cs:work_pending], 0
     jz .chain
-    
+
     ; Check if DOS is safe
     CHECK_DOS_COMPLETELY_SAFE
     jnz .chain                           ; DOS still busy
-    
+
     ; Process deferred work safely
     SAFE_STACK_SWITCH
-    
-    pusha
+
+    ; 8086-safe register save (uses PUSHA on 186+, explicit pushes on 8086)
+    SAVE_ALL_REGS
     push ds
     push es
-    
+
     mov ax, cs
     mov ds, ax
-    
+
     call process_work_queue
-    
+
     pop es
     pop ds
-    popa
-    
+    ; 8086-safe register restore (uses POPA on 186+, explicit pops on 8086)
+    RESTORE_ALL_REGS
+
     RESTORE_CALLER_STACK
-    
+
 .chain:
     ; Chain to original idle handler
     jmp dword ptr [cs:old_int28_offset]
@@ -575,22 +643,23 @@ check_uninstall_safety endp
 private_api_entry proc far
     ; Private API for advanced applications
     ; AH = function code, other registers = parameters
-    
+
     SAFE_STACK_SWITCH
-    
-    pusha
+
+    ; 8086-safe register save
+    SAVE_ALL_REGS
     push ds
     push es
-    
+
     mov ax, cs
     mov ds, ax
-    
+
     ; Validate function code
     cmp ah, 80h
     jb .invalid_function
     cmp ah, 8Fh
     ja .invalid_function
-    
+
     ; Dispatch to private function handlers
     mov al, ah
     sub al, 80h                          ; Convert to 0-based
@@ -598,22 +667,24 @@ private_api_entry proc far
     mov bx, ax
     shl bx, 1
     call word ptr [private_function_table + bx]
-    
+
     pop es
     pop ds
-    popa
-    
+    ; 8086-safe register restore
+    RESTORE_ALL_REGS
+
     RESTORE_CALLER_STACK
     retf
-    
+
 .invalid_function:
     mov ah, BAD_COMMAND
     stc
-    
+
     pop es
     pop ds
-    popa
-    
+    ; 8086-safe register restore
+    RESTORE_ALL_REGS
+
     RESTORE_CALLER_STACK
     retf
 private_api_entry endp

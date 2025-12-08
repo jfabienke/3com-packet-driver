@@ -11,6 +11,61 @@
 
 include 'patch_macros.inc'
 
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 16-bit optimizations (186+: PUSHA, INS/OUTS)
+
+; External reference to CPU optimization level
+EXTRN current_cpu_opt:BYTE
+
+;-----------------------------------------------------------------------------
+; 8086-SAFE REGISTER SAVE/RESTORE MACROS
+; Note: cache_flush_range is only called on Pentium 4+ (CLFLUSH requirement),
+; but for consistency and future-proofing, we use the 8086-safe macros.
+;-----------------------------------------------------------------------------
+
+SAVE_ALL_REGS MACRO
+    LOCAL use_pusha, done
+    push ax
+    mov al, [current_cpu_opt]
+    test al, OPT_16BIT
+    pop ax
+    jnz use_pusha
+    push ax
+    push cx
+    push dx
+    push bx
+    push sp
+    push bp
+    push si
+    push di
+    jmp short done
+use_pusha:
+    pusha
+done:
+ENDM
+
+RESTORE_ALL_REGS MACRO
+    LOCAL use_popa, done
+    push ax
+    mov al, [current_cpu_opt]
+    test al, OPT_16BIT
+    pop ax
+    jnz use_popa
+    pop di
+    pop si
+    pop bp
+    add sp, 2
+    pop bx
+    pop dx
+    pop cx
+    pop ax
+    jmp short done
+use_popa:
+    popa
+done:
+ENDM
+
 .code
 
 public cache_clflush_line
@@ -159,7 +214,10 @@ cache_clflush_safe endp
 ; Note: Caller must ensure CLFLUSH is supported before calling
 ;-----------------------------------------------------------------------------
 cache_flush_range proc
-    pusha                       ; Save all general-purpose registers
+    ; 8086-safe register save (uses PUSHA on 186+, explicit pushes on 8086)
+    ; Note: This function requires CLFLUSH (P4+), so on 8086 it won't be called,
+    ; but we use the macro for consistency.
+    SAVE_ALL_REGS
     push es
     
     ; Get cache line size (64 bytes default for Pentium 4+)
@@ -207,11 +265,12 @@ cache_flush_range proc
     jnz .flush_loop
     
 .flush_done:
-    ; Memory fence after all CLFLUSHes (required by Intel specification)  
+    ; Memory fence after all CLFLUSHes (required by Intel specification)
     call memory_fence_after_clflush  ; Proper serialization for 16-bit mode
-    
+
     pop es
-    popa
+    ; 8086-safe register restore
+    RESTORE_ALL_REGS
     ret
 cache_flush_range endp
 
