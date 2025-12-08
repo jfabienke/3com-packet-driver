@@ -212,9 +212,16 @@ cpu_detect_main PROC
         call    detect_cpu_type
         mov     [detected_cpu_type], al
 
-        ; Check minimum CPU requirement (286+)
+        ; Check for valid CPU type (accept 8086+)
+        cmp     al, CPU_UNKNOWN
+        je      .cpu_unsupported
+
+        ; Log 8086/8088 detection for simplified boot path
         cmp     al, CPU_80286
-        jb      .cpu_unsupported
+        jae     .cpu_ok
+        ; 8086/8088 detected - will use simplified boot path
+        ; Features will be minimal (no CPUID, no 32-bit, etc.)
+.cpu_ok:
 
         ; Detect CPU features based on detected type
         call    detect_cpu_features

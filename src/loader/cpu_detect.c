@@ -8,7 +8,7 @@
  *
  * Constraints:
  * - DOS real mode only
- * - Must work on 80286+ processors
+ * - Must work on 8086+ processors (8086/8088 support added)
  * - Results used for one-time SMC patching
  * - Entire module discarded after init (cold section)
  * - ALL CPU detection is performed by Assembly module
@@ -324,11 +324,16 @@ int cpu_detect_init(void) {
     /* Get CPU type from Assembly module - TRUST COMPLETELY */
     g_cpu_info.cpu_type = (cpu_type_t)asm_detect_cpu_type();
     
-    /* Check minimum requirement */
-    if (g_cpu_info.cpu_type < CPU_TYPE_80286) {
-        LOG_ERROR("CPU below minimum requirement (80286+): %s",
-                  cpu_type_to_string(g_cpu_info.cpu_type));
+    /* Check minimum requirement - now accepts 8086/8088 */
+    if (g_cpu_info.cpu_type == CPU_TYPE_UNKNOWN) {
+        LOG_ERROR("CPU detection failed: unknown CPU type");
         return ERROR_CPU_UNKNOWN;
+    }
+
+    /* Log 8086/8088 detection with appropriate warnings */
+    if (g_cpu_info.cpu_type < CPU_TYPE_80286) {
+        LOG_INFO("8086/8088 CPU detected - using simplified boot path");
+        LOG_INFO("Features: 3C509B PIO only, no XMS/VDS/bus-mastering");
     }
 
     /* For pre-CPUID CPUs, use the basic type name */

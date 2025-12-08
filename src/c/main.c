@@ -111,7 +111,7 @@ int initialize_cpu_detection(void) {
     /* Call ASM CPU detection routine */
     result = cpu_detect_main();
     if (result != 0) {
-        log_error("CPU detection failed or CPU not supported (requires 286+)");
+        log_error("CPU detection failed");
         return MAIN_ERR_HARDWARE;
     }
     
@@ -645,10 +645,15 @@ int main(int argc, char *argv[]) {
     printf("Phase 1: CPU detection and identification\n");
     result = initialize_cpu_detection();
     if (result < 0) {
-        printf("CPU detection failed - requires 286 or higher\n");
+        printf("CPU detection failed\n");
         return 1;
     }
     printf("  CPU: %s\n", cpu_type_to_string(g_cpu_info.type));
+
+    /* Check for 8086/8088 - simplified boot path */
+    if (g_cpu_info.type < CPU_TYPE_80286) {
+        printf("  8086/8088 mode: simplified boot, 3C509B PIO only\n");
+    }
     
     /* =================================================================
      * PHASE 2: Platform Probe Early (determine DMA policy)
@@ -713,7 +718,7 @@ int main(int argc, char *argv[]) {
                 printf("Driver is already loaded\n");
                 break;
             case 3:  /* ERROR_CPU_UNSUPPORTED */
-                printf("CPU not supported - requires 286 or higher\n");
+                printf("CPU detection failed\n");
                 break;
             case 4:  /* ERROR_HARDWARE */
                 printf("Hardware initialization failed\n");
