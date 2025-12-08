@@ -658,25 +658,39 @@ int main(int argc, char *argv[]) {
     /* =================================================================
      * PHASE 2: Platform Probe Early (determine DMA policy)
      * Now safe to check V86 mode with CPU known
+     * SKIP on 8086: V86 mode doesn't exist, always use direct DMA policy
      * =================================================================
      */
-    result = platform_probe_early();
-    if (result != 0) {
-        printf("Early platform probe failed\n");
-        return 1;
-    }
-    
-    platform = get_early_platform_results();
-    printf("DMA Policy: %s\n", get_dma_policy_description(platform->recommended_policy));
-    printf("Environment: %s\n", platform->environment_desc);
-    
-    /* Check if we can continue with this hardware */
-    if (platform->recommended_policy == DMA_POLICY_FORBID) {
-        printf("\n!!! WARNING: Bus-master DMA is FORBIDDEN !!!\n");
-        printf("3C515-TX will be disabled, only 3C509B (PIO) will work\n");
-        if (!platform->pio_fallback_ok) {
-            printf("No PIO fallback available - cannot continue\n");
+    if (g_cpu_info.type < CPU_TYPE_80286) {
+        /* 8086/8088: Skip V86/VDS detection - doesn't apply */
+        printf("Phase 2: Skipped (8086 mode - direct DMA policy)\n");
+        /* Set up a minimal platform result for 8086 */
+        static platform_probe_result_t platform_8086 = {
+            .recommended_policy = DMA_POLICY_DIRECT,
+            .pio_fallback_ok = 1,
+            .safe_for_busmaster = 0,  /* No bus mastering on 8086 */
+            .environment_desc = "8086 Real Mode"
+        };
+        platform = &platform_8086;
+    } else {
+        result = platform_probe_early();
+        if (result != 0) {
+            printf("Early platform probe failed\n");
             return 1;
+        }
+
+        platform = get_early_platform_results();
+        printf("DMA Policy: %s\n", get_dma_policy_description(platform->recommended_policy));
+        printf("Environment: %s\n", platform->environment_desc);
+
+        /* Check if we can continue with this hardware */
+        if (platform->recommended_policy == DMA_POLICY_FORBID) {
+            printf("\n!!! WARNING: Bus-master DMA is FORBIDDEN !!!\n");
+            printf("3C515-TX will be disabled, only 3C509B (PIO) will work\n");
+            if (!platform->pio_fallback_ok) {
+                printf("No PIO fallback available - cannot continue\n");
+                return 1;
+            }
         }
     }
     

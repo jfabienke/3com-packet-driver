@@ -131,52 +131,62 @@ int hardware_init_all(const config_t *config) {
     }
     
     /* Phase 2: Detect 3C515-TX NICs (complex bus mastering) */
-    log_info("Phase 2: Detecting 3C515-TX NICs (bus mastering)");
-    
-    /* Check CPU capability for bus mastering support */
-    bool cpu_supports_busmaster = (g_cpu_info.type >= CPU_TYPE_80286) && 
-                                 cpu_has_feature(CPU_FEATURE_CX8);
-    if (!cpu_supports_busmaster && config->busmaster != BUSMASTER_OFF) {
-        log_warning("CPU does not support bus mastering, disabling 3C515-TX detection");
+    /* SKIP on 8086: 3C515-TX requires 16-bit ISA slot and bus mastering */
+    if (g_cpu_info.type < CPU_TYPE_80286) {
+        log_info("Phase 2: Skipped (8086 mode - 3C515-TX requires 286+ and bus mastering)");
     } else {
-        int detected_3c515 = nic_detect_3c515(detect_info, MAX_NICS - num_nics);
-        if (detected_3c515 > 0) {
-            log_info("Found %d 3C515-TX NIC(s)", detected_3c515);
-            /* Initialize detected 3C515-TX NICs */
-            for (int i = 0; i < detected_3c515 && num_nics < MAX_NICS; i++) {
-                nic_info_t *nic = hardware_get_nic(num_nics);
-                result = nic_init_from_detection(nic, &detect_info[i]);
-                if (result == 0) {
-                    num_nics++;
-                    log_info("3C515-TX NIC %d initialized at IO=0x%X, IRQ=%d", 
-                            num_nics, detect_info[i].io_base, detect_info[i].irq);
-                } else {
-                    log_warning("Failed to initialize 3C515-TX NIC at IO=0x%X: %d", 
-                               detect_info[i].io_base, result);
+        log_info("Phase 2: Detecting 3C515-TX NICs (bus mastering)");
+
+        /* Check CPU capability for bus mastering support */
+        bool cpu_supports_busmaster = (g_cpu_info.type >= CPU_TYPE_80286) &&
+                                     cpu_has_feature(CPU_FEATURE_CX8);
+        if (!cpu_supports_busmaster && config->busmaster != BUSMASTER_OFF) {
+            log_warning("CPU does not support bus mastering, disabling 3C515-TX detection");
+        } else {
+            int detected_3c515 = nic_detect_3c515(detect_info, MAX_NICS - num_nics);
+            if (detected_3c515 > 0) {
+                log_info("Found %d 3C515-TX NIC(s)", detected_3c515);
+                /* Initialize detected 3C515-TX NICs */
+                for (int i = 0; i < detected_3c515 && num_nics < MAX_NICS; i++) {
+                    nic_info_t *nic = hardware_get_nic(num_nics);
+                    result = nic_init_from_detection(nic, &detect_info[i]);
+                    if (result == 0) {
+                        num_nics++;
+                        log_info("3C515-TX NIC %d initialized at IO=0x%X, IRQ=%d",
+                                num_nics, detect_info[i].io_base, detect_info[i].irq);
+                    } else {
+                        log_warning("Failed to initialize 3C515-TX NIC at IO=0x%X: %d",
+                                   detect_info[i].io_base, result);
+                    }
                 }
             }
         }
     }
-    
+
     /* Phase 3: Detect 3Com PCI NICs (Vortex, Boomerang, Cyclone, Tornado) */
-    log_info("Phase 3: Detecting 3Com PCI NICs");
-    
-    /* Check if PCI is available and enabled */
-    if (config->pci != PCI_DISABLED && is_pci_available()) {
-        int pci_nics = detect_and_init_pci_nics(config, MAX_NICS - num_nics);
-        if (pci_nics > 0) {
-            log_info("Initialized %d PCI NIC(s)", pci_nics);
-            num_nics += pci_nics;
-        } else if (pci_nics == 0) {
-            log_info("No 3Com PCI NICs detected");
-        } else {
-            log_warning("PCI detection failed with error: %d", pci_nics);
-        }
-    } else if (config->pci == PCI_REQUIRED) {
-        log_error("PCI support required but not available");
-        return INIT_ERR_NO_PCI;
+    /* SKIP on 8086: PCI didn't exist in the 8086 era */
+    if (g_cpu_info.type < CPU_TYPE_80286) {
+        log_info("Phase 3: Skipped (8086 mode - PCI not available)");
     } else {
-        log_info("PCI support disabled or not available");
+        log_info("Phase 3: Detecting 3Com PCI NICs");
+
+        /* Check if PCI is available and enabled */
+        if (config->pci != PCI_DISABLED && is_pci_available()) {
+            int pci_nics = detect_and_init_pci_nics(config, MAX_NICS - num_nics);
+            if (pci_nics > 0) {
+                log_info("Initialized %d PCI NIC(s)", pci_nics);
+                num_nics += pci_nics;
+            } else if (pci_nics == 0) {
+                log_info("No 3Com PCI NICs detected");
+            } else {
+                log_warning("PCI detection failed with error: %d", pci_nics);
+            }
+        } else if (config->pci == PCI_REQUIRED) {
+            log_error("PCI support required but not available");
+            return INIT_ERR_NO_PCI;
+        } else {
+            log_info("PCI support disabled or not available");
+        }
     }
     
     /* Validate against configuration constraints and integrate with TSR */
