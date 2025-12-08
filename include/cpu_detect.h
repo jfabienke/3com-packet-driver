@@ -39,6 +39,13 @@ typedef enum {
     VENDOR_UNKNOWN      = 0xFF
 } cpu_vendor_t;
 
+/* CPU optimization level flags (for runtime code path selection) */
+#define CPU_OPT_8086            0   /* 8086/8088 baseline (no 186+ instructions) */
+#define CPU_OPT_16BIT           1   /* 186+ (PUSHA, INS/OUTS, shift imm) */
+#define CPU_OPT_32BIT           2   /* 386+ (32-bit registers) */
+#define CPU_OPT_486_ENHANCED    8   /* 486+ (BSWAP, CMPXCHG) */
+#define CPU_OPT_PENTIUM         16  /* Pentium (pipeline optimizations) */
+
 /* CPU feature flags */
 #define CPU_FEATURE_NONE            0x0000
 #define CPU_FEATURE_PROTECTED_MODE  0x0001  /* 286+ protected mode */
@@ -101,6 +108,8 @@ const cpu_info_t* cpu_get_info(void);
 void detect_cpu_speed(cpu_info_t* info);
 const char* cpu_type_to_string(cpu_type_t type);
 uint8_t cpu_get_family(void);
+uint8_t cpu_get_optimization_level(void);  /* Returns CPU_OPT_* value */
+int cpu_is_8086(void);  /* Returns 1 if 8086/8088, 0 otherwise */
 
 /* Assembly helpers (implemented in cpu_detect.asm) */
 extern int cpu_detect_main(void);

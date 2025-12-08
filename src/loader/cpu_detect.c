@@ -607,5 +607,47 @@ int cpu_supports_32bit(void) {
     return (g_cpu_info.features & CPU_FEATURE_32BIT) ? 1 : 0;
 }
 
+/**
+ * @brief Get CPU optimization level for runtime code path selection
+ * @return CPU_OPT_* value indicating which instruction sets are available
+ *
+ * Returns the appropriate optimization level based on CPU type:
+ * - CPU_OPT_8086: 8086/8088 baseline (no 186+ instructions)
+ * - CPU_OPT_16BIT: 186/286 (PUSHA, INS/OUTS, shift immediate)
+ * - CPU_OPT_32BIT: 386+ (32-bit registers available)
+ * - CPU_OPT_486_ENHANCED: 486+ (BSWAP, CMPXCHG)
+ * - CPU_OPT_PENTIUM: Pentium+ (pipeline optimizations)
+ */
+uint8_t cpu_get_optimization_level(void) {
+    switch (g_cpu_info.cpu_type) {
+    case CPU_TYPE_8086:
+        return CPU_OPT_8086;
+    case CPU_TYPE_80186:
+    case CPU_TYPE_80286:
+        return CPU_OPT_16BIT;
+    case CPU_TYPE_80386:
+        return CPU_OPT_32BIT;
+    case CPU_TYPE_80486:
+        return CPU_OPT_486_ENHANCED;
+    case CPU_TYPE_CPUID_CAPABLE:
+        /* Pentium or higher */
+        return CPU_OPT_PENTIUM;
+    default:
+        /* Unknown - use safest baseline */
+        return CPU_OPT_8086;
+    }
+}
+
+/**
+ * @brief Check if running on 8086/8088 processor
+ * @return 1 if 8086/8088, 0 otherwise
+ *
+ * Used for conditional boot path selection - 8086 systems need
+ * simplified boot (no V86/VDS/XMS) and 8086-safe instruction paths.
+ */
+int cpu_is_8086(void) {
+    return (g_cpu_info.cpu_type == CPU_TYPE_8086) ? 1 : 0;
+}
+
 /* Restore default code segment */
 #pragma code_seg()

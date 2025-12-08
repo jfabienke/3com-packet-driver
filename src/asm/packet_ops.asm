@@ -22,11 +22,14 @@ PACKET_SIZE_512     EQU 512     ; Large packet size
 PACKET_SIZE_1518    EQU 1518    ; Maximum Ethernet packet
 
 ; CPU optimization flags
-OPT_NONE            EQU 0       ; No optimization
-OPT_16BIT           EQU 1       ; 16-bit optimizations (286+)
-OPT_32BIT           EQU 2       ; 32-bit optimizations (386+)
-OPT_PUSHA           EQU 4       ; PUSHA/POPA support (286+)
-OPT_486_ENHANCED    EQU 8       ; 486+ enhanced instructions
+; OPT_8086 is the baseline - 8086/8088 compatible code only
+; Higher flags indicate additional instruction sets available
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_NONE            EQU 0       ; Alias for OPT_8086 (backward compatibility)
+OPT_16BIT           EQU 1       ; 16-bit optimizations (186+: PUSHA, INS/OUTS, shifts)
+OPT_32BIT           EQU 2       ; 32-bit optimizations (386+: EAX, etc.)
+OPT_PUSHA           EQU 4       ; PUSHA/POPA support (186+)
+OPT_486_ENHANCED    EQU 8       ; 486+ enhanced instructions (BSWAP, CMPXCHG)
 OPT_PENTIUM         EQU 16      ; Pentium pipeline optimizations
 
 ; DMA alignment requirements
