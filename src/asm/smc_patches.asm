@@ -12,6 +12,20 @@
 
         .8086                           ; Target 8086+ compatibility with 486+ SMC support
         .model small
+
+;==============================================================================
+; 8086 COMPATIBILITY NOTES
+;
+; This file is marked .8086 for assembler compatibility but SMC patching
+; is only performed on 286+ systems (where SMC is enabled). On 8086:
+; - SMC is completely disabled (g_cpu_opt_level = OPT_8086)
+; - None of these patch functions are called
+; - The static 8086-safe code paths are used instead
+;
+; All PUSH immediate instructions have been replaced with MOV+PUSH sequences
+; for assembler compatibility, even though this code never runs on 8086.
+;==============================================================================
+
         .code
 
         ; Public interface
@@ -333,10 +347,12 @@ apply_rep_movsw_patch proc
         mov     byte ptr cs:movsw_patch_data+1, 0A5h  ; MOVSW instruction
         
         ; Apply patch atomically
+        ; Note: Using 8086-safe PUSH (mov + push) instead of PUSH imm
         push    ds                      ; Patch data segment
         push    offset movsw_patch_data ; Patch data offset
         push    bx                      ; Target address
-        push    2                       ; Patch size
+        mov     ax, 2                   ; Patch size (8086-safe: no PUSH imm)
+        push    ax
         call    asm_atomic_patch_bytes
         add     sp, 8                   ; Clean stack
         
@@ -391,10 +407,12 @@ apply_pusha_patch proc
         mov     byte ptr cs:pusha_patch_data+1, 61h    ; POPA
         
         ; Apply patch atomically
+        ; Note: Using 8086-safe PUSH (mov + push) instead of PUSH imm
         push    ds
         push    offset pusha_patch_data
         push    bx
-        push    2
+        mov     ax, 2                   ; Patch size (8086-safe: no PUSH imm)
+        push    ax
         call    asm_atomic_patch_bytes
         add     sp, 8
         

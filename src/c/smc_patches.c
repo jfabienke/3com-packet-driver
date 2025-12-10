@@ -85,8 +85,13 @@ int smc_patches_init(void) {
         log_info("SMC: 486+ CPU detected - using serialization via far jumps");
     } else if (cpu_info.cpu_type >= CPU_TYPE_80386) {
         log_info("SMC: 386 CPU detected - using basic serialization");
+    } else if (cpu_info.cpu_type >= CPU_TYPE_80286) {
+        log_info("SMC: 286 CPU detected - SMC disabled, using 16-bit static paths");
+        g_patch_manager.framework_initialized = false;
+        return SUCCESS; /* Not an error, just no SMC capability */
     } else {
-        log_warning("SMC: Pre-386 CPU - SMC disabled, using static code paths only");
+        /* 8086/8088 - most restricted path */
+        log_info("SMC: 8086/8088 CPU detected - SMC disabled, using 8086-safe static paths");
         g_patch_manager.framework_initialized = false;
         return SUCCESS; /* Not an error, just no SMC capability */
     }

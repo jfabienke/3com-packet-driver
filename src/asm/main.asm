@@ -52,7 +52,7 @@ install_msg        db '3Com Packet Driver installed successfully', 0Dh, 0Ah, 0
 already_loaded_msg db 'Driver already loaded', 0Dh, 0Ah, 0
 memory_error_msg   db 'Memory optimization initialization failed', 0Dh, 0Ah, 0
 defensive_error_msg db 'Defensive programming initialization failed', 0Dh, 0Ah, 0
-cpu_error_msg      db 'CPU not supported (requires 286+)', 0Dh, 0Ah, 0
+cpu_error_msg      db 'CPU detection failed', 0Dh, 0Ah, 0
 hardware_error_msg db 'Hardware initialization failed', 0Dh, 0Ah, 0
 
 ; Integration status variables

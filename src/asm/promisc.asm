@@ -14,6 +14,91 @@ EXTERN _g_promisc_buffer_tail:DWORD
 EXTERN _g_promisc_buffers:BYTE
 EXTERN _promisc_capture_packet:PROC
 
+; External CPU optimization level from packet_ops.asm
+EXTRN current_cpu_opt:BYTE
+
+; CPU optimization level constants (must match packet_ops.asm)
+OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
+OPT_16BIT           EQU 1       ; 186+ optimizations (PUSHA/POPA available)
+OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
+
+;==============================================================================
+; CPU-adaptive register save/restore macros for interrupt handlers
+;
+; SAVE_ALL_REGS_32: Save all registers (8086/286: 16-bit, 386+: 32-bit)
+; RESTORE_ALL_REGS_32: Restore all registers
+;
+; These macros check current_cpu_opt at runtime to select the appropriate
+; instruction sequence. On 386+, uses PUSHAD/POPAD. On 286, uses PUSHA/POPA.
+; On 8086/8088, uses explicit push/pop sequences.
+;==============================================================================
+
+SAVE_ALL_REGS_32 MACRO
+        LOCAL use_pushad, use_pusha, done
+        push ax
+        mov al, [current_cpu_opt]
+        cmp al, OPT_32BIT
+        pop ax
+        jae use_pushad
+        push ax
+        mov al, [current_cpu_opt]
+        test al, OPT_16BIT
+        pop ax
+        jnz use_pusha
+        ;; 8086 path: explicit push sequence (pushes same regs as PUSHA)
+        push ax
+        push cx
+        push dx
+        push bx
+        push sp
+        push bp
+        push si
+        push di
+        jmp short done
+use_pusha:
+        ;; 286 path: use PUSHA (16-bit)
+        pusha
+        jmp short done
+use_pushad:
+        ;; 386+ path: use PUSHAD (32-bit)
+        pushad
+done:
+ENDM
+
+RESTORE_ALL_REGS_32 MACRO
+        LOCAL use_popad, use_popa, done
+        ;; Must determine CPU type without corrupting registers being restored
+        ;; Use stack to preserve test value
+        push ax
+        mov al, [current_cpu_opt]
+        cmp al, OPT_32BIT
+        pop ax
+        jae use_popad
+        push ax
+        mov al, [current_cpu_opt]
+        test al, OPT_16BIT
+        pop ax
+        jnz use_popa
+        ;; 8086 path: explicit pop sequence (reverse of push)
+        pop di
+        pop si
+        pop bp
+        add sp, 2               ; Skip SP (was pushed but not restored)
+        pop bx
+        pop dx
+        pop cx
+        pop ax
+        jmp short done
+use_popa:
+        ;; 286 path: use POPA (16-bit)
+        popa
+        jmp short done
+use_popad:
+        ;; 386+ path: use POPAD (32-bit)
+        popad
+done:
+ENDM
+
 ; Constants
 PROMISC_BUFFER_SIZE     EQU     1600
 PROMISC_BUFFER_COUNT    EQU     64
@@ -419,46 +504,51 @@ detect_cpu_for_copy ENDP
 ;
 ; This function can be called from NIC interrupt handlers to capture packets
 ; with minimal overhead and error packet handling
+;
+; Register save/restore is CPU-adaptive:
+;   - 8086/8088: Explicit PUSH/POP sequence (16-bit)
+;   - 80286: PUSHA/POPA (16-bit)
+;   - 80386+: PUSHAD/POPAD (32-bit)
 ;------------------------------------------------------------------------------
 promisc_asm_interrupt_handler PROC NEAR
-        pushad
+        SAVE_ALL_REGS_32        ; CPU-adaptive: PUSHAD (386+), PUSHA (286), explicit (8086)
         push    es
         push    ds
-        
+
         ; Check if capture enabled
         cmp     capture_enabled, 0
         je      interrupt_exit
-        
+
         ; Enhanced interrupt handling with error packet detection
         ; Get packet status from NIC-specific registers
-        
+
         ; For 3C509B: Check Window 1, RX Status
         ; For 3C515-TX: Check DMA descriptor status
-        
+
         ; Fast path: check for common error conditions
         call    check_packet_errors
         jc      handle_error_packet
-        
+
         ; Fast packet processing for valid packets
         call    fast_packet_reception
         jnc     update_counters
-        
+
 handle_error_packet:
         ; Handle error packets in promiscuous mode
         ; Even error packets should be captured for network analysis
         inc     asm_capture_errors
-        
+
         ; Check if we should still capture error packets
         ; (promiscuous mode typically wants ALL packets)
         call    capture_error_packet
-        
+
 update_counters:
         inc     asm_packets_captured
-        
+
 interrupt_exit:
         pop     ds
         pop     es
-        popad
+        RESTORE_ALL_REGS_32     ; CPU-adaptive: POPAD (386+), POPA (286), explicit (8086)
         ret
 promisc_asm_interrupt_handler ENDP
 
