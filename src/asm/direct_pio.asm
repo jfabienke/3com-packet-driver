@@ -9,11 +9,7 @@
 .MODEL LARGE                ; Large memory model for DOS
 .386                        ; Enable 386+ instructions for conditional use
 
-; External CPU detection functions
-EXTERN  asm_detect_cpu_type:PROC
-EXTERN  check_cpu_feature:PROC
-
-; External CPU optimization level from packet_ops.asm
+; External CPU optimization level from packet_ops.asm (set by packet_ops_init)
 EXTRN current_cpu_opt:BYTE
 
 ; External I/O dispatch handlers from nic_irq_smc.asm
@@ -88,39 +84,22 @@ io_optimization_level   db 0        ; 0=286 mode, 1=386 mode, 2=486+ mode
 ;
 PUBLIC direct_pio_init_cpu_detection
 direct_pio_init_cpu_detection PROC FAR
-    push bp
-    mov  bp, sp
     push ax
-    push bx
-    
-    ; Detect CPU type
-    call asm_detect_cpu_type
-    
-    ; Initialize optimization flags based on CPU type
-    mov  byte ptr [cpu_supports_32bit], 0
-    mov  byte ptr [io_optimization_level], 0
-    
-    ; Check for 386+ capabilities
-    cmp  ax, CPU_80386
-    jb   no_32bit_support
-    
-    ; Enable 32-bit support for 386+
-    mov  byte ptr [cpu_supports_32bit], 1
-    mov  byte ptr [io_optimization_level], 1
-    
-    ; Check for 486+ for enhanced optimizations
-    cmp  ax, CPU_80486
-    jb   init_done
-    
-    ; Enable enhanced optimizations for 486+
-    mov  byte ptr [io_optimization_level], 2
-    
-init_done:
-no_32bit_support:
-    pop  bx
+
+    ; Read cached optimization level from packet_ops.asm (set by packet_ops_init)
+    ; This eliminates redundant CPU detection - cpu_detect_init() is the single source
+    mov  al, [current_cpu_opt]
+    mov  [io_optimization_level], al
+
+    ; Set cpu_supports_32bit flag (8086-safe, no SETNZ)
+    xor  ah, ah                     ; Clear AH (assume no 32-bit support)
+    test al, OPT_32BIT              ; Check if 386+ optimization level
+    jz   @F                         ; Skip if not 386+
+    inc  ah                         ; AH = 1 if 386+
+@@:
+    mov  [cpu_supports_32bit], ah
+
     pop  ax
-    mov  sp, bp
-    pop  bp
     ret
 direct_pio_init_cpu_detection ENDP
 

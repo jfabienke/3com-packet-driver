@@ -102,134 +102,87 @@ const char* get_vendor_name(cpu_vendor_t vendor) {
 /**
  * @brief Initialize CPU detection and get system information
  * @return 0 on success, negative on error
+ *
+ * This function delegates to cpu_detect_init() for core detection,
+ * then adds extended logging for vendor-specific warnings and quirks.
  */
 int initialize_cpu_detection(void) {
     int result;
-    
+
     log_info("Performing CPU detection...");
-    
-    /* Call ASM CPU detection routine */
-    result = cpu_detect_main();
+
+    /* Call canonical CPU detection from cpu_detect.c
+     * This populates g_cpu_info with all core CPU information:
+     * - type, features, vendor, vendor_string
+     * - has_cpuid, has_clflush, has_wbinvd, in_v86_mode
+     * - current_cpl, in_ring0, can_wbinvd
+     * - addr_bits, cpu_family, cpu_model
+     */
+    result = cpu_detect_init();
     if (result != 0) {
-        log_error("CPU detection failed");
+        log_error("CPU detection failed: %d", result);
         return MAIN_ERR_HARDWARE;
     }
-    
-    /* Get CPU information and populate global structure */
-    g_cpu_info.type = (cpu_type_t)asm_detect_cpu_type();
-    g_cpu_info.features = asm_get_cpu_flags();
-    g_cpu_info.vendor = (cpu_vendor_t)asm_get_cpu_vendor();
-    
-    /* Get vendor string if CPUID is available */
-    if (g_cpu_info.features & CPU_FEATURE_CPUID) {
-        char far* vendor_str = asm_get_cpu_vendor_string();
-        if (vendor_str) {
-            /* Copy vendor string from far pointer */
-            int i;
-            for (i = 0; i < 12 && vendor_str[i]; i++) {
-                g_cpu_info.vendor_string[i] = vendor_str[i];
-            }
-            g_cpu_info.vendor_string[i] = '\0';
-        }
-    }
-    
-    /* Check for Cyrix extensions */
-    g_cpu_info.has_cyrix_ext = asm_has_cyrix_extensions() != 0;
-    
-    /* Get CPU family/model if CPUID is available */
-    if (g_cpu_info.type == CPU_TYPE_CPUID_CAPABLE || 
-        (g_cpu_info.type == CPU_TYPE_80486 && (g_cpu_info.features & CPU_FEATURE_CPUID))) {
-        
-        /* Get family and model information */
-        uint8_t family = asm_get_cpu_family();
-        uint32_t max_level = asm_get_cpuid_max_level();
-        
-        /* Handle extended family (family 15 = 0x0F) */
-        if (family == 0x0F) {
-            /* Extended family already added in ASM module */
-            log_info("CPU family 0x%02X (extended)", family);
-        } else {
-            log_info("CPU family %d", family);
-        }
-        
-        /* Store family for future use */
-        g_cpu_info.cpu_family = family;
-        
-        /* Note: cpu_model would be retrieved similarly if needed */
-    }
-    
-    /* Set boolean flags based on detected features */
-    g_cpu_info.has_cpuid = (g_cpu_info.features & CPU_FEATURE_CPUID) != 0;
-    g_cpu_info.has_clflush = (g_cpu_info.features & CPU_FEATURE_CLFLUSH) != 0;
-    g_cpu_info.has_wbinvd = (g_cpu_info.features & CPU_FEATURE_WBINVD) != 0;
-    g_cpu_info.in_v86_mode = (g_cpu_info.features & CPU_FEATURE_V86_MODE) != 0;
-    
-    /* Check for V86 mode */
-    if (asm_is_v86_mode()) {
-        log_warning("Running in Virtual 8086 mode - certain instructions restricted");
-        g_cpu_info.features |= CPU_FEATURE_V86_MODE;
-        g_cpu_info.in_v86_mode = 1;
-    }
-    
-    /* Log CPU information */
-    log_info("Detected CPU: %s (%s)", cpu_type_to_string(g_cpu_info.type), 
-             get_vendor_name(g_cpu_info.vendor));
-    
+
+    /* Extended logging (unique to main.c initialization path) */
+    log_info("Detected CPU: %s (%s)", cpu_type_to_string(g_cpu_info.cpu_type),
+             get_vendor_name(g_cpu_info.cpu_vendor));
+
     /* Log vendor string if available */
     if (g_cpu_info.vendor_string[0] != '\0') {
         log_info("CPU Vendor ID: %s", g_cpu_info.vendor_string);
     }
-    
+
     /* Log special vendor cases and warnings */
-    if (g_cpu_info.vendor == VENDOR_NEXGEN) {
+    if (g_cpu_info.cpu_vendor == VENDOR_NEXGEN) {
         log_warning("NexGen Nx586 detected - CPUID without ID flag support");
         log_warning("Special handling enabled for this processor");
     }
-    
-    if (g_cpu_info.vendor == VENDOR_CYRIX) {
+
+    if (g_cpu_info.cpu_vendor == VENDOR_CYRIX) {
         if (g_cpu_info.has_cyrix_ext) {
             log_info("Cyrix CPU with DIR0 extensions detected");
         }
-        if (g_cpu_info.type == CPU_TYPE_CPUID_CAPABLE) {
+        if (g_cpu_info.cpu_type == CPU_TYPE_CPUID_CAPABLE) {
             log_warning("Cyrix 6x86 may report as 486 for compatibility");
         }
     }
-    
-    if (g_cpu_info.vendor == VENDOR_AMD && g_cpu_info.type == CPU_TYPE_80486) {
+
+    if (g_cpu_info.cpu_vendor == VENDOR_AMD && g_cpu_info.cpu_type == CPU_TYPE_80486) {
         log_info("AMD 486 detected - no CPUID support on Am486 series");
     }
-    
+
     /* Log Intel 486 specific information */
-    if (g_cpu_info.vendor == VENDOR_INTEL && g_cpu_info.type == CPU_TYPE_80486) {
+    if (g_cpu_info.cpu_vendor == VENDOR_INTEL && g_cpu_info.cpu_type == CPU_TYPE_80486) {
         if (g_cpu_info.features & CPU_FEATURE_CPUID) {
             log_info("Intel 486 with CPUID detected (DX4 or SL Enhanced)");
         } else {
             log_info("Early Intel 486 detected (no CPUID support)");
         }
     }
-    
+
     if (g_cpu_info.features & CPU_FEATURE_FPU) {
         log_info("FPU detected");
     }
-    
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+
+    if (g_cpu_info.cpu_type >= CPU_TYPE_80386) {
         log_info("32-bit operations enabled (386+ CPU)");
     }
-    
+
     /* Log CPU database information for known quirks */
     log_cpu_database_info(&g_cpu_info);
-    
+
     /* Check for specific quirks that need handling */
-    if (g_cpu_info.vendor == VENDOR_CYRIX && cyrix_needs_cpuid_enable(&g_cpu_info)) {
+    if (g_cpu_info.cpu_vendor == VENDOR_CYRIX && cyrix_needs_cpuid_enable(&g_cpu_info)) {
         log_warning("Cyrix CPUID may need manual enabling via CCR4 register");
     }
-    
-    if (g_cpu_info.vendor == VENDOR_AMD && g_cpu_info.cpu_family == 5 && g_cpu_info.cpu_model == 0) {
+
+    if (g_cpu_info.cpu_vendor == VENDOR_AMD && g_cpu_info.cpu_family == 5 && g_cpu_info.cpu_model == 0) {
         if (amd_k5_has_pge_bug(g_cpu_info.cpu_model)) {
             log_warning("AMD K5 Model 0 PGE feature bit is unreliable");
         }
     }
-    
+
     return 0;
 }
 
@@ -293,7 +246,7 @@ int driver_init(const char *config_params) {
     }
     
     /* 4.3: Bus master testing (conditional) */
-    if (g_cpu_info.type == CPU_TYPE_80286 || !chipset_result.chipset.found) {
+    if (g_cpu_info.cpu_type == CPU_TYPE_80286 || !chipset_result.chipset.found) {
         log_info("  Running bus master capability test (286 or unknown chipset)");
         busmaster_test_results_t bm_results = {0};
         busmaster_test_config_t bm_config = {
@@ -329,7 +282,7 @@ int driver_init(const char *config_params) {
     }
     
     /* Additional DMA tests for 286 or unknown chipsets */
-    if (g_cpu_info.type == CPU_TYPE_80286 || !chipset_result.chipset.found) {
+    if (g_cpu_info.cpu_type == CPU_TYPE_80286 || !chipset_result.chipset.found) {
         log_info("  Running DMA capability tests (286 or unknown chipset)");
         
         /* Configure DMA tests for early detection */
@@ -370,7 +323,19 @@ int driver_init(const char *config_params) {
         return MAIN_ERR_MEMORY;
     }
     MARK_PHASE_COMPLETE(UNWIND_PHASE_MEMORY_CORE);
-    
+
+    /* PHASE 5.5: Initialize packet operations (sets current_cpu_opt) */
+    log_info("Phase 5.5: Initializing packet operations subsystem");
+    result = packet_ops_init(&driver_state.config);
+    if (result < 0) {
+        log_error("Packet operations initialization failed: %s", get_error_message(result));
+        unwind_execute(result, "Packet operations initialization failed");
+        return MAIN_ERR_INIT;
+    }
+    MARK_PHASE_COMPLETE(UNWIND_PHASE_PACKET_OPS);
+    log_info("  Packet operations initialized, CPU optimization level: %d",
+             cpu_get_optimization_level());
+
     /* PHASE 6-8: Initialize hardware detection and NICs */
     log_info("Phase 6-8: Hardware detection and initialization");
     result = hardware_init_all(&driver_state.config);
@@ -503,7 +468,7 @@ int driver_init(const char *config_params) {
     /* Report final status */
     log_info("=================================================");
     log_info("3Com Packet Driver Boot Sequence Complete");
-    log_info("  CPU: %s", cpu_type_to_string(g_cpu_info.type));
+    log_info("  CPU: %s", cpu_type_to_string(g_cpu_info.cpu_type));
     log_info("  Chipset: %s", chipset_result.chipset.found ? 
              chipset_result.chipset.name : "Unknown");
     log_info("  Bus: %s", bus_type == BUS_MCA ? "MCA" :
@@ -585,9 +550,9 @@ void get_cpu_info(cpu_info_t* info) {
  */
 void print_cpu_info(void) {
     printf("CPU Information:\n");
-    printf("  Type: %s\n", cpu_type_to_string(g_cpu_info.type));
+    printf("  Type: %s\n", cpu_type_to_string(g_cpu_info.cpu_type));
     printf("  Features: 0x%04X\n", g_cpu_info.features);
-    
+
     if (g_cpu_info.features & CPU_FEATURE_FPU) {
         printf("    - Floating Point Unit\n");
     }
@@ -596,8 +561,8 @@ void print_cpu_info(void) {
     }
     if (g_cpu_info.has_cpuid) {
         printf("    - CPUID Instruction\n");
-        if (g_cpu_info.vendor[0] != '\0') {
-            printf("  Vendor: %.12s\n", g_cpu_info.vendor);
+        if (g_cpu_info.vendor_string[0] != '\0') {
+            printf("  Vendor: %.12s\n", g_cpu_info.vendor_string);
         }
         printf("  Stepping: %d\n", g_cpu_info.stepping);
     }
@@ -648,10 +613,10 @@ int main(int argc, char *argv[]) {
         printf("CPU detection failed\n");
         return 1;
     }
-    printf("  CPU: %s\n", cpu_type_to_string(g_cpu_info.type));
+    printf("  CPU: %s\n", cpu_type_to_string(g_cpu_info.cpu_type));
 
     /* Check for 8086/8088 - simplified boot path */
-    if (g_cpu_info.type < CPU_TYPE_80286) {
+    if (g_cpu_info.cpu_type < CPU_TYPE_80286) {
         printf("  8086/8088 mode: simplified boot, 3C509B PIO only\n");
     }
     
@@ -661,7 +626,7 @@ int main(int argc, char *argv[]) {
      * SKIP on 8086: V86 mode doesn't exist, always use direct DMA policy
      * =================================================================
      */
-    if (g_cpu_info.type < CPU_TYPE_80286) {
+    if (g_cpu_info.cpu_type < CPU_TYPE_80286) {
         /* 8086/8088: Skip V86/VDS detection - doesn't apply */
         printf("Phase 2: Skipped (8086 mode - direct DMA policy)\n");
         /* Set up a minimal platform result for 8086 */
@@ -705,7 +670,7 @@ int main(int argc, char *argv[]) {
     
     log_info("=== 3Com Packet Driver Boot Sequence ===");
     log_info("Phase 0: Entry validation complete");
-    log_info("Phase 1: CPU detection complete - %s", cpu_type_to_string(g_cpu_info.type));
+    log_info("Phase 1: CPU detection complete - %s", cpu_type_to_string(g_cpu_info.cpu_type));
     MARK_PHASE_COMPLETE(UNWIND_PHASE_CPU_DETECT);
     
     log_info("Phase 2: DMA policy set to %s", 
