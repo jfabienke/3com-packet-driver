@@ -8,7 +8,7 @@ A feature-complete DOS packet driver supporting the 3Com EtherLink III family of
 
 ![Status](https://img.shields.io/badge/Status-Alpha-yellow)
 ![DOS Support](https://img.shields.io/badge/DOS-2.0%2B-blue)
-![CPU Support](https://img.shields.io/badge/CPU-286%20to%20Pentium%204-orange)
+![CPU Support](https://img.shields.io/badge/CPU-8086%20to%20Pentium%204-orange)
 ![TSR](https://img.shields.io/badge/TSR-13KB-green)
 ![NICs Supported](https://img.shields.io/badge/NICs-65%2B%20Models-brightgreen)
 ![Bus Support](https://img.shields.io/badge/Bus-ISA%2FPCI%2FPCMCIA-red)
@@ -122,6 +122,7 @@ The ISA bus fundamentally limits network throughput regardless of NIC capabiliti
 #### SMC Code Optimization by CPU
 | CPU Generation | SMC Optimization | Key Features |
 |---------------|------------------|--------------|
+| 8086/8088 | 8086-safe | Manual loops, no INS/OUTS, MOV+PUSH |
 | 80286 | Baseline | 16-bit operations, REP MOVSW |
 | 80386 | +15% | 32-bit operations, DWORD I/O |
 | 80486 | +20% | BSWAP, WBINVD cache management |
@@ -231,12 +232,17 @@ The driver includes support for 47+ PCI/CardBus models through device detection:
 - Files: `src/c/3com_pci_detect.c`, `src/c/pci_bios.c`
 
 ### System Compatibility
-- **CPU Support**: 8086 through Pentium Pro with automatic optimization
+- **CPU Support**: 8086/8088 through Pentium 4 with automatic optimization
+  - 8086/8088: PIO mode only, 3C509B support (simplified boot path)
+  - 286+: Full feature set including ISA bus mastering (3C515-TX)
+  - 386+: 32-bit I/O operations, enhanced performance
+  - 486+: BSWAP, cache management (WBINVD)
+  - Pentium+: Pipeline optimizations, CLFLUSH cache control
 - **DOS Versions**: 2.0 through 6.22 (including FreeDOS)
 - **Memory**: <6KB TSR resident footprint
-- **XMS Support**: Optional XMS 2.0+ for extended buffers
-- **VDS Support**: Virtual DMA Services for protected mode
-- **PCI Support**: Via INT 1Ah BIOS services
+- **XMS Support**: Optional XMS 2.0+ for extended buffers (286+)
+- **VDS Support**: Virtual DMA Services for protected mode (386+)
+- **PCI Support**: Via INT 1Ah BIOS services (286+)
 - **PCMCIA Support**: Socket Services or Point Enabler mode
 
 
@@ -309,8 +315,9 @@ Hardware Implementation
 ### Self-Modifying Code (SMC) Optimization
 
 The driver uses SMC to optimize for the detected CPU at runtime:
-- **CPU Detection**: Identifies processor from 8086 to Pentium Pro
+- **CPU Detection**: Identifies processor from 8086/8088 to Pentium 4
 - **Runtime Patching**: Modifies code paths for optimal CPU instructions
+- **8086-Safe Fallbacks**: All code paths have 8086-compatible alternatives
 - **Memory Reduction**: Discards initialization code after patching
 - Files: `src/asm/cpu_detect.asm`, `src/loader/patch_apply.c`
 
@@ -455,6 +462,8 @@ src/
 
 ### Core Documentation
 - [Implemented Features](docs/IMPLEMENTED_FEATURES.md) - Complete feature list from source code
+- [Architecture Review](docs/ARCHITECTURE_REVIEW.md) - Comprehensive architecture analysis
+- [8086 Support Extension](docs/design/8086_SUPPORT_EXTENSION.md) - 8086/8088 CPU support design
 - [Architecture Documents](docs/architecture/) - System design and implementation
 - [API Reference](docs/api/) - Packet Driver API documentation
 - [Performance Analysis](docs/performance/) - Benchmarks and optimization
@@ -469,9 +478,10 @@ We especially need testing on:
 - **ISA Cards**: 3C509B, 3C515-TX on actual ISA bus systems
 - **PCI Cards**: 3C590, 3C595, 3C900, 3C905 series
 - **PCMCIA/CardBus**: 3C589, 3C574 series
-- **Different CPUs**: 286, 386, 486, Pentium systems
+- **Different CPUs**: 8086/8088 (IBM PC/XT), 286, 386, 486, Pentium systems
 - **Different DOS versions**: MS-DOS, PC-DOS, FreeDOS, DR-DOS
 - **Various chipsets**: Especially for ISA bus mastering compatibility
+- **8086/8088 systems**: IBM PC 5150, IBM PCjr, NEC V20/V30 compatibles
 
 ### How You Can Help Test
 1. **Download** the latest release
