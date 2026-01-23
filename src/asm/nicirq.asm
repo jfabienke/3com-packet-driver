@@ -1466,14 +1466,14 @@ irq_handler_init:
         ; Compute effective IRQ (map 2->9)
         mov     dl, al
         cmp     al, 2
-        jne     .have_eff
+        jne     irq_init_have_eff
         mov     dl, 9
-.have_eff:
+irq_init_have_eff:
         push    ds
         mov     ax, seg _DATA
         mov     ds, ax
         mov     [effective_nic_irq], dl
-        
+
         ; Save original IMR state before masking
         push    dx
         mov     dx, 021h                ; Master PIC IMR
@@ -1483,16 +1483,16 @@ irq_handler_init:
         in      al, dx
         mov     [original_imr_slave], al
         pop     dx
-        
+
         pop     ds
 
         ; CRITICAL: Mask the IRQ line immediately to minimize race window
         mov     al, dl                  ; AL = effective_nic_irq
         call    mask_irq_in_pic
-        
+
         ; For slave IRQs, ensure cascade (IRQ2) is unmasked
         cmp     dl, 8                   ; DL still has effective_nic_irq
-        jb      .skip_cascade
+        jb      irq_init_skip_cascade
         push    ds
         mov     ax, seg _DATA
         mov     ds, ax
@@ -1502,30 +1502,30 @@ irq_handler_init:
         mov     dx, 021h                ; Master PIC IMR
         in      al, dx
         test    al, 04h                 ; Check if IRQ2 is masked
-        jz      .cascade_already_ok     ; Already unmasked, skip
+        jz      irq_init_cascade_ok     ; Already unmasked, skip
         mov     byte ptr [cascade_modified], 1  ; Mark that we modified it
         and     al, 0FBh                ; Clear bit 2 (unmask IRQ2 cascade)
         out     dx, al
-.cascade_already_ok:
+irq_init_cascade_ok:
         popf
         pop     ax
         pop     ds
-.skip_cascade:
+irq_init_skip_cascade:
 
         ; Calculate interrupt vector (IRQ2 already mapped to 9 in effective_nic_irq)
         mov     al, dl                  ; Restore AL = effective_nic_irq
         cmp     al, 8
-        jb      .use_master
+        jb      irq_init_use_master
         ; Slave PIC vectors (IRQ8..15 -> INT 70h..77h)
         mov     bl, al
         add     bl, 0x70 - 8
-        jmp     .have_vector
-.use_master:
+        jmp     irq_init_have_vector
+irq_init_use_master:
         ; Master PIC vectors (IRQ0..7 -> INT 08h..0Fh)
         mov     bl, al
         add     bl, 0x08
 
-.have_vector:
+irq_init_have_vector:
         ; Save old vector (AH=35h, AL=vector -> ES:BX)
         mov     ah, 0x35
         mov     al, bl
@@ -1561,7 +1561,7 @@ irq_handler_init:
 ; Legacy enable_irq_in_pic removed - use unmask_irq_in_pic instead
 ; The new function takes IRQ in AL and properly handles atomicity
 
-; Mask the NIC IRQ line in the PIC IMR (master/slave) – safe during vector change
+; Mask the NIC IRQ line in the PIC IMR (master/slave) - safe during vector change
 ; AL = effective IRQ number (0-15, already mapped 2->9)
 mask_irq_in_pic:
         pushf
@@ -1572,7 +1572,7 @@ mask_irq_in_pic:
         push    dx
 
         cmp     al, 8
-        jb      .mask_master
+        jb      mask_irq_master
 
         ; Slave PIC: mask bit (IRQ8..15 -> bit 0..7)
         sub     al, 8
@@ -1583,9 +1583,9 @@ mask_irq_in_pic:
         in      al, dx          ; Read IMR into AL (8-bit I/O only!)
         or      al, bl          ; Set mask bit
         out     dx, al
-        jmp     .done_mask
+        jmp     mask_irq_done
 
-.mask_master:
+mask_irq_master:
         ; Master PIC
         mov     cl, al
         mov     bl, 1           ; Use BL for mask bit
@@ -1595,7 +1595,7 @@ mask_irq_in_pic:
         or      al, bl          ; Set mask bit
         out     dx, al
 
-.done_mask:
+mask_irq_done:
         pop     dx
         pop     cx
         pop     bx
@@ -1615,7 +1615,7 @@ unmask_irq_in_pic:
         push    dx
 
         cmp     al, 8
-        jb      .unmask_master
+        jb      unmask_irq_master
 
         ; Slave PIC: unmask bit (IRQ8..15 -> bit 0..7)
         sub     al, 8
@@ -1627,9 +1627,9 @@ unmask_irq_in_pic:
         in      al, dx          ; Read IMR into AL
         and     al, bl          ; Clear mask bit
         out     dx, al
-        jmp     .done_unmask
+        jmp     unmask_irq_done
 
-.unmask_master:
+unmask_irq_master:
         ; Master PIC
         mov     cl, al
         mov     bl, 1           ; Use BL for mask bit
@@ -1640,7 +1640,7 @@ unmask_irq_in_pic:
         and     al, bl          ; Clear mask bit
         out     dx, al
 
-.done_unmask:
+unmask_irq_done:
         pop     dx
         pop     cx
         pop     bx
@@ -1668,22 +1668,22 @@ irq_handler_uninstall:
         ; Load saved vector number
         mov     al, [installed_vector]
         or      al, al
-        jz      .restore_imr_bit        ; Nothing to restore
-        
+        jz      uninst_restore_imr_bit  ; Nothing to restore
+
         mov     bl, al                  ; Save vector number in BL
 
         ; Load saved old handler DS:DX from _DATA
         mov     dx, [old_vector_off]
         mov     ax, [old_vector_seg]
         or      ax, ax
-        jz      .restore_imr_bit        ; No old vector saved
+        jz      uninst_restore_imr_bit  ; No old vector saved
 
         ; AH=25h Set Vector, DS:DX must point to old handler
         mov     ds, ax                  ; DS = old handler segment (clobbers AL!)
         mov     ah, 0x25
         mov     al, bl                  ; Restore vector number from BL
         int     21h
-        
+
         ; Clear tracking variables for idempotency
         mov     ax, seg _DATA
         mov     ds, ax
@@ -1691,26 +1691,26 @@ irq_handler_uninstall:
         mov     word ptr [old_vector_off], 0
         mov     word ptr [old_vector_seg], 0
 
-.restore_imr_bit:
+uninst_restore_imr_bit:
         ; Restore ONLY our IRQ bit in IMR (preserve other drivers' changes)
         ; NOTE: DS is saved/restored by function prologue/epilogue
         mov     ax, seg _DATA
         mov     ds, ax
         mov     al, [effective_nic_irq]
-        
+
         pushf
         cli                             ; Atomic IMR update
-        
+
         cmp     al, 8
-        jb      .restore_master_bit
-        
+        jb      uninst_restore_master
+
         ; Slave PIC - restore only our bit
         sub     al, 8
         mov     cl, al
         mov     bl, 1
         shl     bl, cl                  ; BL = our bit mask
         not     bl                      ; BL = inverse mask (all bits except ours)
-        
+
         mov     dx, 0A1h                ; Slave IMR
         in      al, dx                  ; Current IMR
         and     al, bl                  ; Clear our bit
@@ -1719,15 +1719,15 @@ irq_handler_uninstall:
         and     ah, bl                  ; Isolate original bit
         or      al, ah                  ; Restore original bit value
         out     dx, al
-        jmp     .restore_done
-        
-.restore_master_bit:
+        jmp     uninst_restore_done
+
+uninst_restore_master:
         ; Master PIC - restore only our bit
         mov     cl, al
         mov     bl, 1
         shl     bl, cl                  ; BL = our bit mask
         not     bl                      ; BL = inverse mask
-        
+
         mov     dx, 021h                ; Master IMR
         in      al, dx                  ; Current IMR
         and     al, bl                  ; Clear our bit
@@ -1737,26 +1737,26 @@ irq_handler_uninstall:
         or      al, ah                  ; Restore original bit value
         out     dx, al
 
-.restore_done:
+uninst_restore_done:
         ; Restore IRQ2 cascade if we modified it
         cmp     byte ptr [cascade_modified], 0
-        jz      .skip_cascade_restore
+        jz      uninst_skip_cascade
         push    ax
         pushf
         cli
         mov     dx, 021h                ; Master PIC IMR
         in      al, dx
         test    byte ptr [original_imr_master], 04h  ; Was IRQ2 originally masked?
-        jz      .cascade_restore_unmask
+        jz      uninst_cascade_unmask
         or      al, 04h                 ; Re-mask IRQ2
-        jmp     .cascade_restore_write
-.cascade_restore_unmask:
+        jmp     uninst_cascade_write
+uninst_cascade_unmask:
         and     al, 0FBh                ; Keep IRQ2 unmasked
-.cascade_restore_write:
+uninst_cascade_write:
         out     dx, al
         popf
         pop     ax
-.skip_cascade_restore:
+uninst_skip_cascade:
 
         pop     ds
         pop     dx

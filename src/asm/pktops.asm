@@ -1994,11 +1994,11 @@ perf_copy_with_66_prefix PROC
 
         ; Check if 32-bit optimization is enabled
         cmp     byte ptr [use_66_prefix], 1
-        jne     .fallback_copy
+        jne     p66_fallback_copy
 
         ; Check minimum size threshold (overhead not worth it for small copies)
         cmp     cx, PERF_32BIT_THRESHOLD
-        jb      .fallback_copy
+        jb      p66_fallback_copy
 
         ; Save 32-bit registers
         db      66h                     ; OPERAND32
@@ -2021,23 +2021,23 @@ perf_copy_with_66_prefix PROC
         ; Calculate DWORD count
         db      66h
         shr     ecx, 2                  ; ECX = byte_count / 4
-        jz      .p66_remainder
+        jz      p66_remainder
 
         ; Perform 32-bit copy: REP MOVSD
         cld
         db      66h                     ; 32-bit operand prefix
         rep movsd                       ; Copy ECX DWORDs (4 bytes each)
 
-.p66_remainder:
+p66_remainder:
         ; Handle 0-3 remaining bytes
         db      66h
         pop     ecx                     ; Restore original count
         db      66h
         and     ecx, 3                  ; Remainder bytes (0-3)
-        jz      .p66_done
+        jz      p66_done
         rep movsb                       ; Copy remaining bytes
 
-.p66_done:
+p66_done:
         ; Update statistics
         inc     dword ptr [memory_ops_optimized]
 
@@ -2052,9 +2052,9 @@ perf_copy_with_66_prefix PROC
         pop     eax
 
         mov     ax, 0                   ; Success
-        jmp     .p66_exit
+        jmp     p66_exit
 
-.fallback_copy:
+p66_fallback_copy:
         ; Fall back to 16-bit REP MOVSW
         push    dx
         mov     dx, cx
@@ -2062,13 +2062,13 @@ perf_copy_with_66_prefix PROC
         cld
         rep movsw
         test    dx, 1
-        jz      .fb_done
+        jz      p66_fb_done
         movsb
-.fb_done:
+p66_fb_done:
         pop     dx
         mov     ax, 0
 
-.p66_exit:
+p66_exit:
         pop     bp
         ret
 perf_copy_with_66_prefix ENDP
@@ -2090,11 +2090,11 @@ perf_copy_pipeline_optimized PROC
 
         ; Check if pipeline optimization is enabled
         cmp     byte ptr [pipeline_enabled], 1
-        jne     .pp_standard_copy
+        jne     pp_standard_copy
 
         ; Check size threshold (need enough data to benefit from unrolling)
         cmp     cx, PERF_PIPELINE_THRESHOLD
-        jb      .pp_standard_copy
+        jb      pp_standard_copy
 
         ; Save 32-bit registers
         db      66h
@@ -2120,17 +2120,17 @@ perf_copy_pipeline_optimized PROC
         mov     ax, si
         or      ax, di
         test    ax, 31                  ; 32-byte cache line alignment
-        jz      .pp_cache_aligned_copy
+        jz      pp_cache_aligned_copy
 
         ;-----------------------------------------------------------------------
         ; Unaligned path: 8-byte blocks with U/V pipe pairing
         ;-----------------------------------------------------------------------
         db      66h
         shr     ecx, 3                  ; 8-byte blocks
-        jz      .pp_unaligned_remainder
+        jz      pp_unaligned_remainder
 
         cld
-.pp_pipeline_loop:
+pp_pipeline_loop:
         ; U/V pipe pairing for 486+
         db      66h
         mov     eax, ds:[si]            ; U-pipe: load dword 1
@@ -2145,26 +2145,26 @@ perf_copy_pipeline_optimized PROC
         add     di, 8                   ; V-pipe: advance dest (pairs)
         db      66h
         dec     ecx                     ; U-pipe
-        jnz     .pp_pipeline_loop
+        jnz     pp_pipeline_loop
 
-.pp_unaligned_remainder:
+pp_unaligned_remainder:
         db      66h
         mov     ecx, edx                ; Restore original count
         db      66h
         and     ecx, 7                  ; Remainder (0-7 bytes)
         rep movsb
-        jmp     .pp_done
+        jmp     pp_done
 
         ;-----------------------------------------------------------------------
         ; Cache-aligned path: 32-byte blocks for maximum performance
         ;-----------------------------------------------------------------------
-.pp_cache_aligned_copy:
+pp_cache_aligned_copy:
         db      66h
         shr     ecx, 5                  ; 32-byte cache line blocks
-        jz      .pp_cache_remainder
+        jz      pp_cache_remainder
 
         cld
-.pp_cache_loop:
+pp_cache_loop:
         ; Copy full 32-byte cache line with optimal pairing
         db      66h
         mov     eax, ds:[si]            ; Bytes 0-3
@@ -2206,16 +2206,16 @@ perf_copy_pipeline_optimized PROC
         add     di, 32
         db      66h
         dec     ecx
-        jnz     .pp_cache_loop
+        jnz     pp_cache_loop
 
-.pp_cache_remainder:
+pp_cache_remainder:
         db      66h
         mov     ecx, edx                ; Restore original count
         db      66h
         and     ecx, 31                 ; Remainder (0-31 bytes)
         rep movsb
 
-.pp_done:
+pp_done:
         ; Update statistics
         inc     dword ptr [memory_ops_optimized]
 
@@ -2234,13 +2234,13 @@ perf_copy_pipeline_optimized PROC
         pop     eax
 
         mov     ax, 0
-        jmp     .pp_exit
+        jmp     pp_exit
 
-.pp_standard_copy:
+pp_standard_copy:
         ; Fall back to basic 32-bit copy
         call    perf_copy_with_66_prefix
 
-.pp_exit:
+pp_exit:
         pop     bp
         ret
 perf_copy_pipeline_optimized ENDP
@@ -2265,7 +2265,7 @@ perf_copy_pentium_optimized PROC
 
         ; Check if Pentium AGI avoidance is enabled
         cmp     byte ptr [agi_avoidance], 1
-        jne     .pent_fallback
+        jne     pent_fallback
 
         ; Save 32-bit registers
         db      66h
@@ -2289,19 +2289,19 @@ perf_copy_pentium_optimized PROC
 
         ; Check 8-byte alignment for optimal access
         test    si, 7
-        jnz     .pent_use_pipeline
+        jnz     pent_use_pipeline
         test    di, 7
-        jnz     .pent_use_pipeline
+        jnz     pent_use_pipeline
 
         ;-----------------------------------------------------------------------
         ; AGI-free 8-byte aligned copy
         ;-----------------------------------------------------------------------
         db      66h
         shr     ecx, 3                  ; 8-byte blocks
-        jz      .pent_remainder
+        jz      pent_remainder
 
         cld
-.pent_agi_loop:
+pent_agi_loop:
         ; Load from current address BEFORE calculating next
         db      66h
         mov     eax, ds:[si]            ; U-pipe: load from SI
@@ -2324,17 +2324,17 @@ perf_copy_pentium_optimized PROC
         add     di, 8                   ; U-pipe: advance dest
         db      66h
         dec     ecx                     ; V-pipe: decrement counter (pairs)
-        jnz     .pent_agi_loop
+        jnz     pent_agi_loop
 
-.pent_remainder:
+pent_remainder:
         db      66h
         mov     ecx, edx                ; Restore original count
         db      66h
         and     ecx, 7                  ; Remainder (0-7 bytes)
         rep movsb
-        jmp     .pent_done
+        jmp     pent_done
 
-.pent_use_pipeline:
+pent_use_pipeline:
         ; Restore registers and fall through to pipeline copy
         db      66h
         pop     edi
@@ -2351,7 +2351,7 @@ perf_copy_pentium_optimized PROC
         pop     bp
         jmp     perf_copy_pipeline_optimized
 
-.pent_done:
+pent_done:
         ; Update statistics
         inc     dword ptr [memory_ops_optimized]
 
@@ -2370,13 +2370,13 @@ perf_copy_pentium_optimized PROC
         pop     eax
 
         mov     ax, 0
-        jmp     .pent_exit
+        jmp     pent_exit
 
-.pent_fallback:
+pent_fallback:
         ; Use pipeline-optimized copy if AGI avoidance not available
         call    perf_copy_pipeline_optimized
 
-.pent_exit:
+pent_exit:
         pop     bp
         ret
 perf_copy_pentium_optimized ENDP
