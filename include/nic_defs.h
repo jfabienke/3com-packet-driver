@@ -13,7 +13,10 @@
 #ifndef _NIC_DEFS_H_
 #define _NIC_DEFS_H_
 
-#include <common.h>  // Assumed to provide basic types (uint8_t, uint16_t, etc.)
+/* Signal to common.h that we provide enum-based NIC_TYPE definitions */
+#define _NIC_DEFS_PROVIDES_NIC_TYPES 1
+
+#include <common.h>  /* Provides basic types (uint8_t, uint16_t, etc.) */
 
 // --- Common Definitions ---
 
@@ -258,103 +261,59 @@ typedef struct {
  * This database contains detailed information for all supported 3c509 family variants,
  * enabling accurate detection and optimal configuration for each specific model.
  */
+/* C89 positional initialization - field order:
+ * variant_id, variant_name, description, product_id, product_id_mask,
+ * media_capabilities, default_media, max_speed_mbps, connector_type,
+ * detection_priority, special_features
+ */
 static const nic_variant_info_t NIC_3C509_VARIANT_DATABASE[] = {
-    {
-        .variant_id = VARIANT_3C509B_COMBO,
-        .variant_name = "3C509B-Combo",
-        .description = "3Com EtherLink III ISA - Combo (10BaseT/10Base2/AUI)",
-        .product_id = 0x6D50,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C509B_COMBO,
-        .default_media = MEDIA_TYPE_COMBO,
-        .max_speed_mbps = 10,
-        .connector_type = CONNECTOR_COMBO,
-        .detection_priority = 1,
-        .special_features = FEATURE_LINK_BEAT | FEATURE_SQE_TEST | FEATURE_JABBER_DETECT |
-                           FEATURE_COLLISION_DETECT | FEATURE_LED_INDICATORS
-    },
-    {
-        .variant_id = VARIANT_3C509B_TP,
-        .variant_name = "3C509B-TP",
-        .description = "3Com EtherLink III ISA - 10BaseT only",
-        .product_id = 0x6D51,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C509B_TP,
-        .default_media = MEDIA_TYPE_10BASE_T,
-        .max_speed_mbps = 10,
-        .connector_type = CONNECTOR_RJ45,
-        .detection_priority = 2,
-        .special_features = FEATURE_LINK_BEAT | FEATURE_JABBER_DETECT |
-                           FEATURE_LED_INDICATORS | FEATURE_FULL_DUPLEX_HW
-    },
-    {
-        .variant_id = VARIANT_3C509B_BNC,
-        .variant_name = "3C509B-BNC",
-        .description = "3Com EtherLink III ISA - 10Base2 only",
-        .product_id = 0x6D52,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C509B_BNC,
-        .default_media = MEDIA_TYPE_10BASE_2,
-        .max_speed_mbps = 10,
-        .connector_type = CONNECTOR_BNC,
-        .detection_priority = 3,
-        .special_features = FEATURE_COLLISION_DETECT | FEATURE_LED_INDICATORS
-    },
-    {
-        .variant_id = VARIANT_3C509B_AUI,
-        .variant_name = "3C509B-AUI",
-        .description = "3Com EtherLink III ISA - AUI only",
-        .product_id = 0x6D53,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C509B_AUI,
-        .default_media = MEDIA_TYPE_AUI,
-        .max_speed_mbps = 10,
-        .connector_type = CONNECTOR_DB15_AUI,
-        .detection_priority = 4,
-        .special_features = FEATURE_SQE_TEST | FEATURE_EXTERNAL_XCVR | FEATURE_LED_INDICATORS
-    },
-    {
-        .variant_id = VARIANT_3C509B_FL,
-        .variant_name = "3C509B-FL",
-        .description = "3Com EtherLink III ISA - Fiber Link",
-        .product_id = 0x6D54,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAP_10BASE_FL | MEDIA_CAP_LINK_DETECT | MEDIA_CAP_FULL_DUPLEX,
-        .default_media = MEDIA_TYPE_10BASE_FL,
-        .max_speed_mbps = 10,
-        .connector_type = CONNECTOR_FIBER_ST,
-        .detection_priority = 5,
-        .special_features = FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS
-    },
-    {
-        .variant_id = VARIANT_3C515_TX,
-        .variant_name = "3C515-TX",
-        .description = "3Com Fast EtherLink ISA - 10/100BaseT",
-        .product_id = 0x5051,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C515_TX,
-        .default_media = MEDIA_TYPE_AUTO_DETECT,
-        .max_speed_mbps = 100,
-        .connector_type = CONNECTOR_RJ45,
-        .detection_priority = 1,
-        .special_features = FEATURE_MII_INTERFACE | FEATURE_WAKE_ON_LAN | FEATURE_POWER_MANAGEMENT |
-                           FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS |
-                           FEATURE_DIAGNOSTIC_LEDS
-    },
-    {
-        .variant_id = VARIANT_3C515_FX,
-        .variant_name = "3C515-FX",
-        .description = "3Com Fast EtherLink ISA - 100BaseFX Fiber",
-        .product_id = 0x5052,
-        .product_id_mask = 0xFFF0,
-        .media_capabilities = MEDIA_CAPS_3C515_FX,
-        .default_media = MEDIA_TYPE_100BASE_FX,
-        .max_speed_mbps = 100,
-        .connector_type = CONNECTOR_FIBER_SC,
-        .detection_priority = 2,
-        .special_features = FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS |
-                           FEATURE_POWER_MANAGEMENT
-    }
+    /* 3C509B-Combo */
+    { VARIANT_3C509B_COMBO, "3C509B-Combo",
+      "3Com EtherLink III ISA - Combo (10BaseT/10Base2/AUI)",
+      0x6D50, 0xFFF0, MEDIA_CAPS_3C509B_COMBO, MEDIA_TYPE_COMBO,
+      10, CONNECTOR_COMBO, 1,
+      FEATURE_LINK_BEAT | FEATURE_SQE_TEST | FEATURE_JABBER_DETECT |
+      FEATURE_COLLISION_DETECT | FEATURE_LED_INDICATORS },
+    /* 3C509B-TP */
+    { VARIANT_3C509B_TP, "3C509B-TP",
+      "3Com EtherLink III ISA - 10BaseT only",
+      0x6D51, 0xFFF0, MEDIA_CAPS_3C509B_TP, MEDIA_TYPE_10BASE_T,
+      10, CONNECTOR_RJ45, 2,
+      FEATURE_LINK_BEAT | FEATURE_JABBER_DETECT |
+      FEATURE_LED_INDICATORS | FEATURE_FULL_DUPLEX_HW },
+    /* 3C509B-BNC */
+    { VARIANT_3C509B_BNC, "3C509B-BNC",
+      "3Com EtherLink III ISA - 10Base2 only",
+      0x6D52, 0xFFF0, MEDIA_CAPS_3C509B_BNC, MEDIA_TYPE_10BASE_2,
+      10, CONNECTOR_BNC, 3,
+      FEATURE_COLLISION_DETECT | FEATURE_LED_INDICATORS },
+    /* 3C509B-AUI */
+    { VARIANT_3C509B_AUI, "3C509B-AUI",
+      "3Com EtherLink III ISA - AUI only",
+      0x6D53, 0xFFF0, MEDIA_CAPS_3C509B_AUI, MEDIA_TYPE_AUI,
+      10, CONNECTOR_DB15_AUI, 4,
+      FEATURE_SQE_TEST | FEATURE_EXTERNAL_XCVR | FEATURE_LED_INDICATORS },
+    /* 3C509B-FL */
+    { VARIANT_3C509B_FL, "3C509B-FL",
+      "3Com EtherLink III ISA - Fiber Link",
+      0x6D54, 0xFFF0, MEDIA_CAP_10BASE_FL | MEDIA_CAP_LINK_DETECT | MEDIA_CAP_FULL_DUPLEX,
+      MEDIA_TYPE_10BASE_FL, 10, CONNECTOR_FIBER_ST, 5,
+      FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS },
+    /* 3C515-TX */
+    { VARIANT_3C515_TX, "3C515-TX",
+      "3Com Fast EtherLink ISA - 10/100BaseT",
+      0x5051, 0xFFF0, MEDIA_CAPS_3C515_TX, MEDIA_TYPE_AUTO_DETECT,
+      100, CONNECTOR_RJ45, 1,
+      FEATURE_MII_INTERFACE | FEATURE_WAKE_ON_LAN | FEATURE_POWER_MANAGEMENT |
+      FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS |
+      FEATURE_DIAGNOSTIC_LEDS },
+    /* 3C515-FX */
+    { VARIANT_3C515_FX, "3C515-FX",
+      "3Com Fast EtherLink ISA - 100BaseFX Fiber",
+      0x5052, 0xFFF0, MEDIA_CAPS_3C515_FX, MEDIA_TYPE_100BASE_FX,
+      100, CONNECTOR_FIBER_SC, 2,
+      FEATURE_LINK_BEAT | FEATURE_FULL_DUPLEX_HW | FEATURE_LED_INDICATORS |
+      FEATURE_POWER_MANAGEMENT }
 };
 
 /* Number of entries in the variant database */
@@ -381,53 +340,48 @@ typedef struct {
  * This table includes all known TCM50xx PnP device IDs for complete
  * coverage of the 3c509 family including rare and regional variants.
  */
+/* C89 positional initialization - field order:
+ * vendor_id, device_id, variant_id, pnp_name, product_id_override, logical_device
+ */
 static const pnp_device_id_t NIC_3C509_PNP_DEVICE_TABLE[] = {
     /* 3c509B Standard ISA variants */
-    { 0x544D4350, 0x5000, VARIANT_3C509B_COMBO, "TCM5000 - 3c509B Combo",      0x6D50, 0 },
-    { 0x544D4350, 0x5001, VARIANT_3C509B_TP,    "TCM5001 - 3c509B-TP",         0x6D51, 0 },
-    { 0x544D4350, 0x5002, VARIANT_3C509B_BNC,   "TCM5002 - 3c509B-BNC",        0x6D52, 0 },
-    { 0x544D4350, 0x5003, VARIANT_3C509B_AUI,   "TCM5003 - 3c509B-AUI",        0x6D53, 0 },
-    { 0x544D4350, 0x5004, VARIANT_3C509B_FL,    "TCM5004 - 3c509B-FL",         0x6D54, 0 },
-    
+    { 0x544D4350UL, 0x5000UL, VARIANT_3C509B_COMBO, "TCM5000 - 3c509B Combo",      0x6D50, 0 },
+    { 0x544D4350UL, 0x5001UL, VARIANT_3C509B_TP,    "TCM5001 - 3c509B-TP",         0x6D51, 0 },
+    { 0x544D4350UL, 0x5002UL, VARIANT_3C509B_BNC,   "TCM5002 - 3c509B-BNC",        0x6D52, 0 },
+    { 0x544D4350UL, 0x5003UL, VARIANT_3C509B_AUI,   "TCM5003 - 3c509B-AUI",        0x6D53, 0 },
+    { 0x544D4350UL, 0x5004UL, VARIANT_3C509B_FL,    "TCM5004 - 3c509B-FL",         0x6D54, 0 },
     /* 3c509B Enhanced variants with additional features */
-    { 0x544D4350, 0x5010, VARIANT_3C509B_COMBO, "TCM5010 - 3c509B Combo+",     0x6D60, 0 },
-    { 0x544D4350, 0x5011, VARIANT_3C509B_TP,    "TCM5011 - 3c509B-TP+",        0x6D61, 0 },
-    { 0x544D4350, 0x5012, VARIANT_3C509B_BNC,   "TCM5012 - 3c509B-BNC+",       0x6D62, 0 },
-    { 0x544D4350, 0x5013, VARIANT_3C509B_AUI,   "TCM5013 - 3c509B-AUI+",       0x6D63, 0 },
-    
+    { 0x544D4350UL, 0x5010UL, VARIANT_3C509B_COMBO, "TCM5010 - 3c509B Combo+",     0x6D60, 0 },
+    { 0x544D4350UL, 0x5011UL, VARIANT_3C509B_TP,    "TCM5011 - 3c509B-TP+",        0x6D61, 0 },
+    { 0x544D4350UL, 0x5012UL, VARIANT_3C509B_BNC,   "TCM5012 - 3c509B-BNC+",       0x6D62, 0 },
+    { 0x544D4350UL, 0x5013UL, VARIANT_3C509B_AUI,   "TCM5013 - 3c509B-AUI+",       0x6D63, 0 },
     /* 3c509B Regional and OEM variants */
-    { 0x544D4350, 0x5020, VARIANT_3C509B_COMBO, "TCM5020 - 3c509B Combo EU",   0x6D70, 0 },
-    { 0x544D4350, 0x5021, VARIANT_3C509B_TP,    "TCM5021 - 3c509B-TP EU",      0x6D71, 0 },
-    { 0x544D4350, 0x5022, VARIANT_3C509B_COMBO, "TCM5022 - 3c509B Combo JP",   0x6D72, 0 },
-    { 0x544D4350, 0x5023, VARIANT_3C509B_TP,    "TCM5023 - 3c509B-TP JP",      0x6D73, 0 },
-    
+    { 0x544D4350UL, 0x5020UL, VARIANT_3C509B_COMBO, "TCM5020 - 3c509B Combo EU",   0x6D70, 0 },
+    { 0x544D4350UL, 0x5021UL, VARIANT_3C509B_TP,    "TCM5021 - 3c509B-TP EU",      0x6D71, 0 },
+    { 0x544D4350UL, 0x5022UL, VARIANT_3C509B_COMBO, "TCM5022 - 3c509B Combo JP",   0x6D72, 0 },
+    { 0x544D4350UL, 0x5023UL, VARIANT_3C509B_TP,    "TCM5023 - 3c509B-TP JP",      0x6D73, 0 },
     /* 3c509B Industrial and extended temperature variants */
-    { 0x544D4350, 0x5030, VARIANT_3C509B_COMBO, "TCM5030 - 3c509B Industrial", 0x6D80, 0 },
-    { 0x544D4350, 0x5031, VARIANT_3C509B_TP,    "TCM5031 - 3c509B-TP Ind",     0x6D81, 0 },
-    { 0x544D4350, 0x5032, VARIANT_3C509B_FL,    "TCM5032 - 3c509B-FL Ind",     0x6D82, 0 },
-    
+    { 0x544D4350UL, 0x5030UL, VARIANT_3C509B_COMBO, "TCM5030 - 3c509B Industrial", 0x6D80, 0 },
+    { 0x544D4350UL, 0x5031UL, VARIANT_3C509B_TP,    "TCM5031 - 3c509B-TP Ind",     0x6D81, 0 },
+    { 0x544D4350UL, 0x5032UL, VARIANT_3C509B_FL,    "TCM5032 - 3c509B-FL Ind",     0x6D82, 0 },
     /* 3c515 Fast Ethernet variants */
-    { 0x544D4350, 0x5050, VARIANT_3C515_TX,     "TCM5050 - 3c515-TX",          0x5051, 0 },
-    { 0x544D4350, 0x5051, VARIANT_3C515_FX,     "TCM5051 - 3c515-FX",          0x5052, 0 },
-    { 0x544D4350, 0x5052, VARIANT_3C515_TX,     "TCM5052 - 3c515-TX+",         0x5053, 0 },
-    { 0x544D4350, 0x5053, VARIANT_3C515_TX,     "TCM5053 - 3c515-TX EU",       0x5054, 0 },
-    
+    { 0x544D4350UL, 0x5050UL, VARIANT_3C515_TX,     "TCM5050 - 3c515-TX",          0x5051, 0 },
+    { 0x544D4350UL, 0x5051UL, VARIANT_3C515_FX,     "TCM5051 - 3c515-FX",          0x5052, 0 },
+    { 0x544D4350UL, 0x5052UL, VARIANT_3C515_TX,     "TCM5052 - 3c515-TX+",         0x5053, 0 },
+    { 0x544D4350UL, 0x5053UL, VARIANT_3C515_TX,     "TCM5053 - 3c515-TX EU",       0x5054, 0 },
     /* 3c515 Enhanced and OEM variants */
-    { 0x544D4350, 0x5060, VARIANT_3C515_TX,     "TCM5060 - 3c515-TX Pro",      0x5060, 0 },
-    { 0x544D4350, 0x5061, VARIANT_3C515_FX,     "TCM5061 - 3c515-FX Pro",      0x5061, 0 },
-    { 0x544D4350, 0x5062, VARIANT_3C515_TX,     "TCM5062 - 3c515-TX WOL",      0x5062, 0 },
-    
+    { 0x544D4350UL, 0x5060UL, VARIANT_3C515_TX,     "TCM5060 - 3c515-TX Pro",      0x5060, 0 },
+    { 0x544D4350UL, 0x5061UL, VARIANT_3C515_FX,     "TCM5061 - 3c515-FX Pro",      0x5061, 0 },
+    { 0x544D4350UL, 0x5062UL, VARIANT_3C515_TX,     "TCM5062 - 3c515-TX WOL",      0x5062, 0 },
     /* Rare and specialized variants */
-    { 0x544D4350, 0x5070, VARIANT_3C509B_COMBO, "TCM5070 - 3c509B Boot ROM",   0x6D90, 0 },
-    { 0x544D4350, 0x5071, VARIANT_3C509B_TP,    "TCM5071 - 3c509B-TP Boot",    0x6D91, 0 },
-    { 0x544D4350, 0x5072, VARIANT_3C515_TX,     "TCM5072 - 3c515-TX Boot",     0x5070, 0 },
-    
+    { 0x544D4350UL, 0x5070UL, VARIANT_3C509B_COMBO, "TCM5070 - 3c509B Boot ROM",   0x6D90, 0 },
+    { 0x544D4350UL, 0x5071UL, VARIANT_3C509B_TP,    "TCM5071 - 3c509B-TP Boot",    0x6D91, 0 },
+    { 0x544D4350UL, 0x5072UL, VARIANT_3C515_TX,     "TCM5072 - 3c515-TX Boot",     0x5070, 0 },
     /* Development and engineering samples */
-    { 0x544D4350, 0x50F0, VARIANT_3C509B_COMBO, "TCM50F0 - 3c509B Proto",      0x6DF0, 0 },
-    { 0x544D4350, 0x50F1, VARIANT_3C515_TX,     "TCM50F1 - 3c515-TX Proto",    0x50F0, 0 },
-    
+    { 0x544D4350UL, 0x50F0UL, VARIANT_3C509B_COMBO, "TCM50F0 - 3c509B Proto",      0x6DF0, 0 },
+    { 0x544D4350UL, 0x50F1UL, VARIANT_3C515_TX,     "TCM50F1 - 3c515-TX Proto",    0x50F0, 0 },
     /* Terminator entry */
-    { 0x00000000, 0x0000, VARIANT_UNKNOWN,      NULL,                          0x0000, 0 }
+    { 0x00000000UL, 0x0000UL, VARIANT_UNKNOWN,      NULL,                          0x0000, 0 }
 };
 
 /* Number of entries in the PnP device table (excluding terminator) */

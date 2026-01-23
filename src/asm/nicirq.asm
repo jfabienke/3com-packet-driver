@@ -23,6 +23,7 @@
 
         .8086                           ; Base compatibility
         .model small
+        .386                            ; Enable 386+ instructions (SHR imm, REP INS/OUTS)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; CPU Optimization Constants and Macros
@@ -172,63 +173,63 @@ nic_irq_handler:
         in      ax, dx                  ; 16-bit read per 3Com datasheet
         mov     [int_status], ax        ; Save full status
         test    ax, ax                  ; Any bits set?
-        jz      .not_ours               ; Not our interrupt
-        
+        jz      irq_not_ours            ; Not our interrupt
+
         ; Check if only simple RX/TX bits are set (90% of cases)
         mov     dx, ax                  ; Save original status
         and     dx, 0xFFEC              ; Mask OFF RX_COMPLETE(0x10) | TX_COMPLETE(0x02) | TX_AVAIL(0x01)
-        jnz     .complex_interrupt      ; Other bits set, need full handler
-        
+        jnz     irq_complex_interrupt   ; Other bits set, need full handler
+
         ; FAST PATH: Simple RX or TX acknowledgment
         ; First, acknowledge interrupt in NIC (write-1-to-clear)
         mov     dx, [nic_io_base]
         add     dx, 0x0E                ; INT_STATUS register
         out     dx, ax                  ; Write back status to clear
-        
+
         test    ax, 0x0010              ; RX_COMPLETE?
-        jz      .check_tx_fast
-        
+        jz      irq_check_tx_fast
+
         ; Minimal RX acknowledgment
         inc     word ptr [rx_ack_count] ; Update counter
-        
-.check_tx_fast:
+
+irq_check_tx_fast:
         test    ax, 0x0002              ; TX_COMPLETE?
-        jz      .fast_done
-        
-        ; Minimal TX acknowledgment  
+        jz      irq_fast_done
+
+        ; Minimal TX acknowledgment
         inc     word ptr [tx_ack_count] ; Update counter
-        
-.fast_done:
+
+irq_fast_done:
         ; Send EOI and exit fast path
         cmp     byte ptr [effective_nic_irq], 8
-        jb      .fast_master_only
+        jb      irq_fast_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC
-.fast_master_only:
+irq_fast_master_only:
         mov     al, 20h
         out     20h, al                 ; EOI to master PIC
-        
+
         pop     ds
         pop     dx
         pop     ax
         iret
-        
-.not_ours:
+
+irq_not_ours:
         ; Not our interrupt but MUST still send EOI for spurious interrupts
         cmp     byte ptr [effective_nic_irq], 8
-        jb      .not_ours_master_only
+        jb      irq_not_ours_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC
-.not_ours_master_only:
+irq_not_ours_master_only:
         mov     al, 20h
         out     20h, al                 ; EOI to master PIC
-        
+
         pop     ds
         pop     dx
         pop     ax
         iret
-        
-.complex_interrupt:
+
+irq_complex_interrupt:
         ; Need full handler - save remaining registers
         push    bx
         push    cx
@@ -274,26 +275,26 @@ PATCH_nic_dispatch:
         ; Clear ISR active flag
         and     byte ptr [isr_flags], not ISR_REENTRY_FLAG
 
-.send_eoi:
+nic_irq_send_eoi:
         ; Send EOI to PIC (constraint requirement)
         ; CRITICAL: Must send to slave BEFORE master for IRQ >= 8
         cmp     byte ptr [effective_nic_irq], 8
-        jb      .master_only
+        jb      nic_irq_master_only
         
         ; Slave PIC - send EOI to slave first
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC FIRST
         
-.master_only:
+nic_irq_master_only:
         ; Master PIC - always send
         mov     al, 20h
         out     20h, al                 ; EOI to master PIC SECOND
 
-.done:
+nic_irq_done:
         ; CRITICAL FIX: Restore caller's stack
         mov     ss, [saved_ss]
         mov     sp, [saved_sp]
-        
+
         ; Restore all registers
         pop     es
         pop     ds
@@ -306,10 +307,10 @@ PATCH_nic_dispatch:
         pop     ax
         iret
 
-.already_in_isr:
+nic_irq_already_in_isr:
         ; Already processing, just acknowledge and exit
         inc     word ptr [reentry_count]
-        jmp     .send_eoi
+        jmp     nic_irq_send_eoi
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; 3C509B Specific Handler with Interrupt Mitigation
@@ -353,7 +354,7 @@ nic_3c509_handler:
         mov     bp, [nic_io_base]
 
         ; Use internal ASM mitigation path unconditionally (no C in ISR)
-.use_legacy_handler:
+c509_use_legacy_handler:
         ; INTERRUPT MITIGATION: Process multiple interrupts in one pass
         xor     bx, bx                  ; Clear interrupt batch counter
 
@@ -366,7 +367,7 @@ PATCH_pio_batch_init:
 
         ; 286 OPTIMIZATION: Align loop entry for prefetch
         align   4
-.mitigation_loop:
+c509_mitigation_loop:
         ; Read and clear all interrupt sources at once
         ; 286 OPT: Use BP cache instead of memory read
         mov     dx, bp                  ; DX = cached nic_io_base (2 cy vs 8 cy)
@@ -377,7 +378,7 @@ PATCH_pio_batch_init:
 
         ; Check for any pending interrupts
         test    si, si                  ; 286 OPT: Use cached value
-        jz      .mitigation_done
+        jz      c509_mitigation_done
 
         ; Clear all pending interrupts atomically
         out     dx, ax                  ; Acknowledge all at once
@@ -385,28 +386,28 @@ PATCH_pio_batch_init:
 
         ; Process RX interrupts
         test    si, 0x0010              ; 286 OPT: Use cached int_status
-        jz      .check_tx_int
+        jz      c509_check_tx_int
 
         ; 286 OPTIMIZATION: Align hot loop for prefetch queue
         align   4
-.rx_loop:
+c509_rx_loop:
         ; Check RX status register for pending packet
         ; 286 OPT: Use BP cache instead of memory read
         mov     dx, bp                  ; DX = cached nic_io_base (2 cy vs 8 cy)
         add     dx, 0x08                ; RX_STATUS register
         in      ax, dx
-        
+
         ; Check if packet is complete and ready
         test    ax, 0x8000              ; RX_COMPLETE bit
-        jz      .rx_fifo_empty          ; No more packets - exit RX loop early
-        
+        jz      c509_rx_fifo_empty      ; No more packets - exit RX loop early
+
         ; Also check packet budget before processing
         cmp     word ptr [packet_budget], 0
-        jle     .check_tx_int           ; Budget exhausted
-        
+        jle     c509_check_tx_int       ; Budget exhausted
+
         ; Check for RX errors
         test    ax, 0x4000              ; RX_ERROR bit
-        jz      .rx_good
+        jz      c509_rx_good
 
         ; RX error - discard packet and continue
         ; 286 OPT: Use BP cache instead of memory read
@@ -415,15 +416,15 @@ PATCH_pio_batch_init:
         mov     ax, 0x4000              ; RX_DISCARD
         out     dx, ax
         inc     word ptr [rx_errors]
-        jmp     .rx_next
-        
-.rx_good:
+        jmp     c509_rx_next
+
+c509_rx_good:
         ; Get packet length from status
         and     ax, 0x07FF              ; Mask length bits (0-2047)
-        jz      .rx_discard             ; Zero length - discard
+        jz      c509_rx_discard         ; Zero length - discard
         cmp     ax, 1514                ; Max Ethernet frame
-        ja      .rx_discard             ; Too large - discard
-        
+        ja      c509_rx_discard         ; Too large - discard
+
         mov     [packet_length], ax     ; Save valid length
 
         ; Read packet data from FIFO (optimized for 16-bit FIFO)
@@ -449,17 +450,17 @@ PATCH_pio_batch_init:
         mov     bl, [current_cpu_opt]
         test    bl, OPT_16BIT           ; Check if 186+
         pop     bx
-        jnz     .use_word_io            ; 186+ always uses word I/O (faster)
+        jnz     c509_use_word_io        ; 186+ always uses word I/O (faster)
 
         ; 8086: Check if small packet benefits from byte mode
         cmp     cx, 64                  ; Small packet threshold
-        ja      .use_word_io            ; Large packet: use word I/O
+        ja      c509_use_word_io        ; Large packet: use word I/O
 
         ; Small packet on 8086: use optimized byte transfer
         call    insw_8086_byte_mode     ; CX = byte count, ES:DI = buffer, DX = port
-        jmp     .read_done
+        jmp     c509_read_done
 
-.use_word_io:
+c509_use_word_io:
         ; Standard I/O path - CPU-adaptive word/dword transfers
         ;
         ; 386+ OPTIMIZATION: The SMC patches at PATCH_3c509_read use REP INSD
@@ -477,7 +478,7 @@ PATCH_pio_batch_init:
         mov     bl, [current_cpu_opt]
         test    bl, OPT_32BIT
         pop     bx
-        jz      .use_16bit_io           ; 8086/286: use word count
+        jz      c509_use_16bit_io       ; 8086/286: use word count
 
         ;-----------------------------------------------------------------------
         ; 386+ PATH: Use DWORD count for REP INSD (2x throughput)
@@ -485,44 +486,44 @@ PATCH_pio_batch_init:
         db      66h                     ; 32-bit operand prefix
         shr     cx, 2                   ; DWORD count = bytes / 4 (uses 32-bit SHR)
         and     cx, 0FFFFh              ; Ensure 16-bit result
-        jcxz    .handle_386_remainder   ; Less than 4 bytes
+        jcxz    c509_handle_386_remainder ; Less than 4 bytes
 
         ; PATCH POINT: 32-bit packet read
 PATCH_3c509_read:
         INSW_SAFE                       ; Patched to REP INSD on 386+ (66h F3h 6Dh)
         nop                             ; Padding for patches
 
-.handle_386_remainder:
+c509_handle_386_remainder:
         ; Handle 0-3 trailing bytes
         pop     cx                      ; Restore total byte count
         and     cx, 3                   ; Remainder (0-3 bytes)
-        jz      .read_done
+        jz      c509_read_done
         ; Read remaining bytes one at a time
-.read_386_remainder:
+c509_read_386_remainder:
         in      al, dx
         stosb
-        loop    .read_386_remainder
-        jmp     .read_done
+        loop    c509_read_386_remainder
+        jmp     c509_read_done
 
         ;-----------------------------------------------------------------------
         ; 8086/286 PATH: Use WORD count for REP INSW (or unrolled loop)
         ;-----------------------------------------------------------------------
-.use_16bit_io:
+c509_use_16bit_io:
         shr     cx, 1                   ; Word count = bytes / 2
-        jz      .skip_words             ; Skip if less than 2 bytes
+        jz      c509_skip_words         ; Skip if less than 2 bytes
 
         ; Uses dispatch table - insw_handler set by init_io_dispatch
         call    [insw_handler]          ; REP INSW on 286, unrolled on 8086
         nop                             ; Maintain alignment with 386+ path
 
-.skip_words:
+c509_skip_words:
         pop     cx                      ; Restore total byte count
         test    cx, 1                   ; Check for odd byte
-        jz      .read_done
+        jz      c509_read_done
         INSB_SAFE                       ; 8086-safe single byte input
 
-.read_done:
-        
+c509_read_done:
+
         ; Defer packet processing to bottom-half
         ; Call: int packet_isr_receive(uint8_t *packet_data, uint16_t packet_size, uint8_t nic_index)
         ; Push args right-to-left (small model near call)
@@ -536,72 +537,72 @@ PATCH_3c509_read:
         call    packet_isr_receive
         add     sp, 6                   ; Clean up 3 args
         pop     cx                      ; Restore packet budget counter
-        
+
         ; Successfully received
         inc     word ptr [packets_received]
-        
-.rx_discard:
+
+c509_rx_discard:
         ; Discard packet from FIFO (required to advance)
         ; 286 OPT: Use BP cache instead of memory read
         mov     dx, bp                  ; DX = cached nic_io_base (2 cy vs 8 cy)
         add     dx, 0x0E                ; COMMAND register
         mov     ax, 0x4000              ; RX_DISCARD command
         out     dx, ax
-        
-.rx_next:
+
+c509_rx_next:
         ; Check for more RX packets (up to batch limit)
         dec     word ptr [packet_budget]
-        jnz     .rx_loop
+        jnz     c509_rx_loop
 
-.rx_fifo_empty:
+c509_rx_fifo_empty:
         ; RX FIFO is empty - skip to TX processing
         ; This early exit improves performance when FIFO drains quickly
-        
-.check_tx_int:
+
+c509_check_tx_int:
         ; Process TX completion
         ; 286 OPT: Use SI cached int_status instead of memory read
         test    si, 0x0004                      ; TX_COMPLETE (SI = cached int_status)
-        jz      .check_errors                   ; Skip if TX bit not set
+        jz      c509_check_errors               ; Skip if TX bit not set
 
         ; TX bit is set - acknowledge TX completion
         inc     word ptr [packets_sent]
 
-.check_errors:
+c509_check_errors:
         ; Handle any error interrupts
         ; 286 OPT: Use SI cached int_status instead of memory read
         test    si, 0x0040                      ; ADAPTER_FAILURE (SI = cached int_status)
-        jz      .continue_mitigation            ; Skip if error bit not set
-        
+        jz      c509_continue_mitigation        ; Skip if error bit not set
+
         ; Error bit is set - log error and attempt recovery
         inc     word ptr [adapter_errors]
         call    reset_adapter_minimal
-        
-.continue_mitigation:
+
+c509_continue_mitigation:
         ; Check if we should process more interrupt batches
         cmp     bx, 3                   ; Max 3 batches per ISR
-        jae     .mitigation_done
-        
+        jae     c509_mitigation_done
+
         ; Check if we've processed maximum packets
         cmp     word ptr [packet_budget], 0
-        jle     .mitigation_done
-        
-        ; Loop back to check for more pending interrupts
-        jmp     .mitigation_loop
+        jle     c509_mitigation_done
 
-.mitigation_done:
+        ; Loop back to check for more pending interrupts
+        jmp     c509_mitigation_loop
+
+c509_mitigation_done:
         ; Update mitigation statistics
         cmp     bx, 1
-        jbe     .no_mitigation
+        jbe     c509_no_mitigation
         inc     word ptr [interrupts_mitigated]
         add     word ptr [mitigation_savings], bx
-        
-.no_mitigation:
+
+c509_no_mitigation:
         ; Send EOI to PIC before returning
         cmp     byte ptr [effective_nic_irq], 8
-        jb      .handler_master_only
+        jb      c509_handler_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC first
-.handler_master_only:
+c509_handler_master_only:
         mov     al, 20h
         out     20h, al                 ; EOI to master PIC
         
@@ -632,7 +633,7 @@ nic_3c515_handler:
         mov     es, ax
         
         ; Use internal ASM mitigation path unconditionally (no C in ISR)
-.use_legacy_3c515:
+c515_use_legacy:
         ; Check interrupt status
         mov     dx, [nic_io_base]
         add     dx, 0x0E                ; INT_STATUS register
@@ -641,22 +642,22 @@ nic_3c515_handler:
 
         ; Check for RX complete
         test    ax, 0x0010              ; RX_COMPLETE
-        jz      .check_tx
+        jz      nic_3c515_check_tx
 
         ; Process RX ring buffer
         mov     si, [rx_ring_ptr]
-        
+
         ; Patchable batch budget for DMA NICs (3C515)
 PATCH_dma_batch_init:
         mov     cx, 32                  ; Default; SMC-patched per CPU (B9 imm16 90 90)
         nop
         nop
 
-.rx_ring_loop:
+c515_rx_ring_loop:
         ; Check ring descriptor status
         mov     ax, [si]                ; Status word
         test    ax, 0x8000              ; OWN bit
-        jz      .rx_ring_done           ; NIC owns it
+        jz      c515_rx_ring_done       ; NIC owns it
 
         ; Get packet from ring
         push    si
@@ -671,7 +672,7 @@ PATCH_3c515_transfer:
         nop
         ; Will ONLY be patched to DMA after:
         ; 1. Bus mastering test passes
-        ; 2. DMA boundary checks active  
+        ; 2. DMA boundary checks active
         ; 3. Cache coherency verified
 
         pop     si
@@ -682,20 +683,20 @@ PATCH_3c515_transfer:
         ; Advance ring pointer
         add     si, 8                   ; Next descriptor
         cmp     si, [rx_ring_end]
-        jb      .next_packet
+        jb      c515_next_packet
         mov     si, [rx_ring_start]     ; Wrap around
 
-.next_packet:
+c515_next_packet:
         dec     cx
-        jnz     .rx_ring_loop
+        jnz     c515_rx_ring_loop
 
-.rx_ring_done:
+c515_rx_ring_done:
         mov     [rx_ring_ptr], si
 
-.check_tx:
+nic_3c515_check_tx:
         ; Check for TX complete
         test    word ptr [int_status], 0x0004  ; TX_COMPLETE
-        jz      .done
+        jz      nic_3c515_ack_irq
 
         ; Update TX statistics
         inc     word ptr [packets_sent]
@@ -703,14 +704,14 @@ PATCH_3c515_transfer:
         ; Free TX buffer
         call    free_tx_buffer
 
-.done:
+nic_3c515_ack_irq:
         ; Acknowledge all interrupts
         mov     dx, [nic_io_base]
         add     dx, 0x0E
         mov     ax, [int_status]
         out     dx, ax
 
-.3c515_done:
+nic_3c515_done:
         pop     es
         pop     ds
         pop     si
@@ -781,13 +782,13 @@ PATCH_cache_flush_pre:
 
         ; Wait for completion (with timeout)
         mov     cx, 1000
-.dma_wait:
+dma_wait_loop:
         in      ax, dx
         test    ax, 0x0100              ; DMA_DONE
-        jnz     .dma_complete
-        loop    .dma_wait
+        jnz     dma_complete
+        loop    dma_wait_loop
 
-.dma_complete:
+dma_complete:
         ; PATCH POINT: Post-DMA cache invalidate
 PATCH_cache_flush_post:
         nop                             ; 5-byte NOP sled
@@ -801,8 +802,8 @@ PATCH_cache_flush_post:
         pop     ax
         clc                             ; Success
         ret
-        
-.use_pio_fallback:
+
+transfer_dma_pio_fallback:
         ; PIO fallback when DMA unsafe
         pop     dx
         pop     cx
@@ -818,67 +819,67 @@ check_dma_boundary:
         push    ax
         push    bx
         push    cx
-        
+
         ; Get buffer physical address
         mov     ax, [packet_buffer_phys]
         mov     bx, [packet_buffer_phys+2]
-        
-        ; Check if buffer + length crosses 64KB boundary  
+
+        ; Check if buffer + length crosses 64KB boundary
         mov     cx, [packet_length]
         or      cx, cx                  ; Check for zero length
-        jz      .boundary_ok            ; Zero length = no crossing
-        
+        jz      dma_boundary_ok         ; Zero length = no crossing
+
         ; Calculate end address for both checks
         push    ax                      ; Save start low
         push    bx                      ; Save start high
-        
+
         dec     cx                      ; Use length-1
         add     ax, cx                  ; Add to low word
         adc     bx, 0                   ; Propagate carry to high word
-        
+
         ; Check 16MB ISA DMA limit on end address
         test    bh, 0FFh                ; Check bits 24-31 of end
-        jnz     .restore_and_fail       ; End >16MB, can't use ISA DMA
-        
+        jnz     dma_restore_and_fail    ; End >16MB, can't use ISA DMA
+
         ; Check if crossed 64KB boundary
         pop     bx                      ; Restore start high
         pop     ax                      ; Restore start low
         push    bx                      ; Save again for potential bounce buffer
         push    ax
-        
+
         ; Original 64KB check
         mov     cx, [packet_length]
         dec     cx
         add     ax, cx
-        jc      .boundary_crossed       ; Carry = crossed 64KB
-        
+        jc      dma_boundary_crossed    ; Carry = crossed 64KB
+
         ; No crossing, clean up stack and continue
         pop     ax                      ; Discard saved values
         pop     bx
-        jmp     .boundary_ok
-        
-.boundary_crossed:
+        jmp     dma_boundary_ok
+
+dma_boundary_crossed:
         pop     ax                      ; Restore original address
         pop     bx
         ; Boundary crossed - use bounce buffer
         inc     word ptr [dma_boundary_hits]
         call    allocate_bounce_buffer
-        jc      .use_pio_fallback
-        jmp     .boundary_ok
-        
-.restore_and_fail:
+        jc      dma_check_pio_fallback
+        jmp     dma_boundary_ok
+
+dma_restore_and_fail:
         pop     bx                      ; Clean up stack
         pop     ax
-        jmp     .use_pio_fallback
-        
-.boundary_ok:
+        jmp     dma_check_pio_fallback
+
+dma_boundary_ok:
         pop     cx
         pop     bx
         pop     ax
         clc                             ; Success
         ret
-        
-.use_pio_fallback:
+
+dma_check_pio_fallback:
         ; Force PIO transfer
         pop     cx
         pop     bx
@@ -931,26 +932,26 @@ cache_flush_clflush:
         add     cx, bx                  ; Add misalignment
         add     cx, 63                  ; Round up
         shr     cx, 6                   ; Divide by 64
-        jz      .done                   ; Nothing to flush
-        
-.flush_loop:
+        jz      clflush_done            ; Nothing to flush
+
+clflush_loop:
         ; CLFLUSH es:[di] - proper encoding for real mode
         db      26h                     ; ES: segment override
         db      0Fh, 0AEh, 3Dh          ; CLFLUSH [di]
-        
+
         ; Advance to next cache line
         add     di, 64
-        jnc     .no_wrap                ; Check for segment wrap
-        
+        jnc     clflush_no_wrap         ; Check for segment wrap
+
         ; Handle segment wrap - advance ES by 64KB
         mov     ax, es
         add     ax, 1000h               ; 64KB = 0x1000 paragraphs
         mov     es, ax
-        
-.no_wrap:
-        loop    .flush_loop
-        
-.done:
+
+clflush_no_wrap:
+        loop    clflush_loop
+
+clflush_done:
         inc     word ptr [cache_flushes]
         
         pop     es
@@ -971,20 +972,20 @@ cache_flush_software:
         push    si
         push    cx
         push    ax
-        
+
         ; Touch every cache line to force write-through
         mov     si, [packet_buffer_phys]
         mov     cx, [packet_length]
         add     cx, 31                  ; Round to cache lines
         shr     cx, 5                   ; Divide by 32
-        
-.touch_loop:
+
+cache_sw_touch_loop:
         mov     al, [si]                ; Read to force cache line load
         add     si, 32                  ; Next cache line
-        loop    .touch_loop
-        
+        loop    cache_sw_touch_loop
+
         inc     word ptr [cache_flushes]
-        
+
         pop     ax
         pop     cx
         pop     si
@@ -996,19 +997,19 @@ cache_flush_software:
 reset_adapter_minimal:
         push    ax
         push    dx
-        
+
         ; Issue global reset command
         mov     dx, [nic_io_base]   ; CS override for segment safety
         add     dx, 0x0E                ; COMMAND register
         mov     ax, 0x0000              ; GLOBAL_RESET
         out     dx, ax
-        
+
         ; Brief delay for reset
         push    cx
         mov     cx, 100
-.reset_delay:
+reset_delay_loop:
         nop
-        loop    .reset_delay
+        loop    reset_delay_loop
         pop     cx
         
         ; Re-enable receiver and transmitter
@@ -1064,9 +1065,9 @@ insw_286_direct:                        ; Alias for 286-specific documentation
 insw_8086_unrolled:
         ; Handle small counts (< 4 words) directly
         cmp     cx, 4
-        jb      .insw_remainder
+        jb      insw_8086_remainder
 
-.insw_unroll_loop:
+insw_8086_unroll_loop:
         ; Unrolled 4x: process 4 words per iteration
         in      ax, dx          ; Word 1: 15 cycles
         stosw                   ; 9 cycles
@@ -1078,16 +1079,16 @@ insw_8086_unrolled:
         stosw                   ; 9 cycles
         sub     cx, 4           ; 3 cycles
         cmp     cx, 4           ; 3 cycles
-        jae     .insw_unroll_loop ; 4 cycles (taken)
+        jae     insw_8086_unroll_loop ; 4 cycles (taken)
 
         ; Handle remainder (0-3 words)
-.insw_remainder:
-        jcxz    .insw_done
-.insw_tail:
+insw_8086_remainder:
+        jcxz    insw_8086_done
+insw_8086_tail:
         in      ax, dx
         stosw
-        loop    .insw_tail
-.insw_done:
+        loop    insw_8086_tail
+insw_8086_done:
         ret
 
 ;------------------------------------------------------------------------------
@@ -1154,19 +1155,19 @@ outsw_386_wrapper:
         push    ax
         mov     ax, cx
         shr     cx, 1                   ; CX = word_count / 2 = DWORD count
-        jz      .outsw_386_remainder    ; < 2 words, use word I/O
+        jz      outsw_386_remainder     ; < 2 words, use word I/O
 
         ; Perform 32-bit output
         db      66h                     ; 32-bit operand prefix
         rep outsd                       ; 386+ string I/O, 32 bits at a time
 
-.outsw_386_remainder:
+outsw_386_remainder:
         ; Handle remainder (0 or 1 word)
         test    ax, 1                   ; Original word count odd?
-        jz      .outsw_386_done
+        jz      outsw_386_done
         outsw                           ; Transfer final word
 
-.outsw_386_done:
+outsw_386_done:
         pop     ax
         ret
 
@@ -1184,19 +1185,19 @@ insw_386_wrapper:
         push    ax
         mov     ax, cx
         shr     cx, 1                   ; CX = word_count / 2 = DWORD count
-        jz      .insw_386_remainder     ; < 2 words, use word I/O
+        jz      insw_386_remainder      ; < 2 words, use word I/O
 
         ; Perform 32-bit input
         db      66h                     ; 32-bit operand prefix
         rep insd                        ; 386+ string I/O, 32 bits at a time
 
-.insw_386_remainder:
+insw_386_remainder:
         ; Handle remainder (0 or 1 word)
         test    ax, 1                   ; Original word count odd?
-        jz      .insw_386_done
+        jz      insw_386_done
         insw                            ; Transfer final word
 
-.insw_386_done:
+insw_386_done:
         pop     ax
         ret
 
@@ -1209,9 +1210,9 @@ insw_386_wrapper:
 outsw_8086_unrolled:
         ; Handle small counts (< 4 words) directly
         cmp     cx, 4
-        jb      .outsw_remainder
+        jb      outsw_8086_remainder
 
-.outsw_unroll_loop:
+outsw_8086_unroll_loop:
         ; Unrolled 4x: process 4 words per iteration
         lodsw                   ; Word 1: 12 cycles
         out     dx, ax          ; 12 cycles
@@ -1223,16 +1224,16 @@ outsw_8086_unrolled:
         out     dx, ax          ; 12 cycles
         sub     cx, 4           ; 3 cycles
         cmp     cx, 4           ; 3 cycles
-        jae     .outsw_unroll_loop ; 4 cycles (taken)
+        jae     outsw_8086_unroll_loop ; 4 cycles (taken)
 
         ; Handle remainder (0-3 words)
-.outsw_remainder:
-        jcxz    .outsw_done
-.outsw_tail:
+outsw_8086_remainder:
+        jcxz    outsw_8086_done
+outsw_8086_tail:
         lodsw
         out     dx, ax
-        loop    .outsw_tail
-.outsw_done:
+        loop    outsw_8086_tail
+outsw_8086_done:
         ret
 
 ;------------------------------------------------------------------------------
@@ -1242,12 +1243,12 @@ outsw_8086_unrolled:
 ;------------------------------------------------------------------------------
         public  insw_8086_byte_mode
 insw_8086_byte_mode:
-        jcxz    .byte_done
-.byte_loop:
+        jcxz    byte_mode_done
+byte_mode_loop:
         in      al, dx          ; 12 cycles
         stosb                   ; 5 cycles
-        loop    .byte_loop      ; 17 cycles = 34 cycles/byte
-.byte_done:
+        loop    byte_mode_loop  ; 17 cycles = 34 cycles/byte
+byte_mode_done:
         ret
 
 ;------------------------------------------------------------------------------
@@ -1274,31 +1275,31 @@ init_io_dispatch:
 
         ; Check if 8086 (OPT_8086 = 0, no OPT_16BIT flag)
         test    al, OPT_16BIT
-        jnz     .setup_186_plus
+        jnz     dispatch_setup_186_plus
 
         ; 8086 path: use unrolled loops (37% faster than simple loop)
         mov     word ptr [insw_handler], offset insw_8086_unrolled
         mov     word ptr [outsw_handler], offset outsw_8086_unrolled
-        jmp     .dispatch_done
+        jmp     dispatch_done
 
-.setup_186_plus:
+dispatch_setup_186_plus:
         ; Check if 386+ (OPT_32BIT flag set)
         test    al, OPT_32BIT
-        jnz     .setup_386_plus
+        jnz     dispatch_setup_386_plus
 
         ; 186/286 path: use REP INSW/OUTSW (tightest possible code)
         mov     word ptr [insw_handler], offset insw_286_direct
         mov     word ptr [outsw_handler], offset outsw_286_direct
-        jmp     .dispatch_done
+        jmp     dispatch_done
 
-.setup_386_plus:
+dispatch_setup_386_plus:
         ; 386+ path: use 32-bit I/O wrappers for 2x throughput
         ; These wrappers accept word count (compatible API) but internally
         ; use REP INSD/OUTSD with proper remainder handling
         mov     word ptr [insw_handler], offset insw_386_wrapper
         mov     word ptr [outsw_handler], offset outsw_386_wrapper
 
-.dispatch_done:
+dispatch_done:
         pop     bx
         pop     ax
         ret

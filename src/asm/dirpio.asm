@@ -201,7 +201,8 @@ send_packet_direct_pio_asm PROC FAR
     mov  dx, bx             ; DX = TX FIFO port address
     
     ; Write packet length to TX FIFO first (3c509B requirement)
-    out  dx, cx             ; Write packet length as 16-bit value
+    mov  ax, cx             ; Move packet length to AX for OUT instruction
+    out  dx, ax             ; Write packet length as 16-bit value
     
     ; Calculate number of 16-bit words to transfer
     mov  ax, cx             ; AX = packet length
@@ -215,13 +216,13 @@ send_packet_direct_pio_asm PROC FAR
     ; Handle odd byte if packet length is odd
     mov  ax, [bp+10]        ; Reload original packet length
     test ax, 1              ; Check if length is odd
-    jz   pio_success        ; Skip if even length
+    jz   pio_success_label  ; Skip if even length
     
     ; Transfer the remaining odd byte
     lodsb                   ; Load byte from DS:[SI] into AL, increment SI
     out  dx, al             ; Output the odd byte
-    
-pio_success:
+
+pio_success_label:
     mov  ax, PIO_SUCCESS    ; Return success
     jmp  pio_exit
     
@@ -514,7 +515,8 @@ send_packet_direct_pio_enhanced PROC FAR
     mov  dx, bx             ; DX = TX FIFO port address
     
     ; Write packet length to TX FIFO first
-    out  dx, cx             ; Write packet length as 16-bit value
+    mov  ax, cx             ; Move packet length to AX for OUT instruction
+    out  dx, ax             ; Write packet length as 16-bit value
     
     ; Choose optimal transfer method based on CPU and packet size
     cmp  byte ptr [cpu_supports_32bit], 0

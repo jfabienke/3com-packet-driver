@@ -13,6 +13,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
         .8086                           ; Base compatibility
+        .386                            ; Enable 386+ instructions (REP INSB/OUTSB)
         .model small
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -169,15 +170,15 @@ hw_read_block:
 
         ; Align to word boundary for 286+
         test    di, 1
-        jz      .aligned
+        jz      rb_aligned
 
         ; Read unaligned byte
         in      al, dx
         stosb
         dec     cx
-        jz      .done
+        jz      rb_done
 
-.aligned:
+rb_aligned:
         ; PATCH POINT: Optimized block read
         ; On 186+: May be patched to REP INSW or REP INSD
         ; On 8086: Uses loop-based byte transfer (SMC disabled)
@@ -191,7 +192,7 @@ PATCH_block_read:
         ; 386: REP INSD with prefix
         ; 486+: Cache-optimized version
 
-.done:
+rb_done:
         pop     ax
         pop     si
         ret
@@ -207,15 +208,15 @@ hw_write_block:
 
         ; Check alignment
         test    si, 1
-        jz      .aligned
+        jz      wb_aligned
 
         ; Write unaligned byte
         lodsb
         out     dx, al
         dec     cx
-        jz      .done
+        jz      wb_done
 
-.aligned:
+wb_aligned:
         ; PATCH POINT: Optimized block write
         ; On 186+: May be patched to REP OUTSW or REP OUTSD
         ; On 8086: Uses loop-based byte transfer (SMC disabled)
@@ -229,7 +230,7 @@ PATCH_block_write:
         ; 386: REP OUTSD with prefix
         ; 486+: Optimized for write combining
 
-.done:
+wb_done:
         pop     ax
         pop     di
         ret
@@ -260,11 +261,11 @@ hw_read_eeprom:
 PATCH_eeprom_wait:
         ; Default: Simple loop
         mov     cx, 1000
-.wait_loop:
+eeprom_wait_loop:
         in      ax, dx                  ; 1 byte
         test    ax, EEPROM_BUSY         ; 3 bytes
-        jz      .ready                  ; 2 bytes
-        loop    .wait_loop              ; 2 bytes
+        jz      eeprom_ready            ; 2 bytes
+        loop    eeprom_wait_loop        ; 2 bytes
         ; Total: 8 bytes (padding needed)
         nop
         nop
@@ -272,7 +273,7 @@ PATCH_eeprom_wait:
         ; 386+: Use PAUSE instruction in loop
         ; 486+: Optimized timing loop
 
-.ready:
+eeprom_ready:
         ; Read EEPROM data
         mov     dx, [nic_io_base]
         add     dx, 0x0C                ; EEPROM_DATA
@@ -300,9 +301,9 @@ hw_reset_nic:
 PATCH_reset_delay:
         ; Default: Simple delay loop
         mov     cx, 1000
-.delay:
+reset_delay_loop:
         nop
-        loop    .delay
+        loop    reset_delay_loop
         ; Total: 5 bytes
         ; Will be patched to:
         ; 286+: Better calibrated delay
@@ -310,22 +311,22 @@ PATCH_reset_delay:
 
         ; Wait for reset complete
         mov     cx, 1000
-.wait_reset:
+reset_wait_loop:
         in      ax, dx
         test    ax, 0x1000              ; RESET_COMPLETE
-        jnz     .reset_done
-        
+        jnz     reset_done
+
         ; Small delay between checks
         push    cx
         mov     cx, 10
-.inner_delay:
+reset_inner_delay:
         nop
-        loop    .inner_delay
+        loop    reset_inner_delay
         pop     cx
-        
-        loop    .wait_reset
 
-.reset_done:
+        loop    reset_wait_loop
+
+reset_done:
         ; Re-enable NIC
         mov     ax, 0x0001              ; ENABLE
         out     dx, ax
@@ -445,7 +446,11 @@ patch_table:
         db      74h, 02h                ; JZ +2
         db      0E2h, 0F7h              ; LOOP -9
         ; (Same for all CPUs in this case)
-        times 5 db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
+        db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
+        db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
+        db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
+        db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
+        db      0B9h, 0E8h, 03h, 0ECh, 0A9h, 00h, 80h, 74h, 02h, 0E2h
 
         ; Patch 6: Reset delay
         dw      PATCH_reset_delay
@@ -455,7 +460,11 @@ patch_table:
         db      0B9h, 0E8h, 03h        ; MOV CX, 1000
         db      0E2h, 0FEh              ; LOOP -2
         ; (Repeated for all CPUs)
-        times 5 db      0B9h, 0E8h, 03h, 0E2h, 0FEh
+        db      0B9h, 0E8h, 03h, 0E2h, 0FEh
+        db      0B9h, 0E8h, 03h, 0E2h, 0FEh
+        db      0B9h, 0E8h, 03h, 0E2h, 0FEh
+        db      0B9h, 0E8h, 03h, 0E2h, 0FEh
+        db      0B9h, 0E8h, 03h, 0E2h, 0FEh
 
         ; Patch 7: Fast 16-bit read
         dw      PATCH_fast_read16
@@ -514,15 +523,12 @@ cold_section_end:
 ;; Data Section
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         .data
-_DATA   segment
 
         ; Hardware configuration
-nic_io_base         dw      0x300           ; Default I/O base
+nic_io_base         dw      0300h           ; Default I/O base
 detected_io_base    dw      0               ; From detection
 
         ; Module size
 module_size         equ     cold_section_end - module_header
-
-_DATA   ends
 
         end

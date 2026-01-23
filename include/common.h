@@ -112,7 +112,8 @@ uint32_t get_system_timestamp_ms(void);         /* Get timestamp in milliseconds
 uint32_t get_timestamp_elapsed_ms(uint32_t start_ticks); /* Get elapsed milliseconds from start */
 
 /* Physical address calculation for DMA (GPT-5 Critical Fix) */
-static inline uint32_t phys_from_ptr(void far* p) {
+/* C89: use static function instead of inline */
+static uint32_t phys_from_ptr(void far* p) {
     /* Convert far pointer to physical address in real mode */
     return ((uint32_t)FP_SEG(p) << 4) + FP_OFF(p);
 }
@@ -219,9 +220,16 @@ typedef struct {
 #define PHYSICAL_TO_OFF(addr)       ((uint16_t)((addr) & 0x0F))
 
 /* Make far pointer from segment:offset */
+/* Note: These may already be defined in <dos.h> - only define if not present */
+#ifndef MK_FP
 #define MK_FP(seg, off)            ((void far *)((((uint32_t)(seg)) << 16) | (off)))
+#endif
+#ifndef FP_SEG
 #define FP_SEG(fp)                  ((uint16_t)((uint32_t)(fp) >> 16))
+#endif
+#ifndef FP_OFF
 #define FP_OFF(fp)                  ((uint16_t)(fp))
+#endif
 
 /* Hardware NIC context structure */
 typedef struct {
@@ -239,10 +247,12 @@ typedef struct {
     uint32_t rx_errors;     /* RX error counter */
 } nic_context_t;
 
-/* NIC type definitions */
+/* NIC type definitions - only define if not provided by nic_defs.h enum */
+#ifndef _NIC_DEFS_PROVIDES_NIC_TYPES
 #define NIC_TYPE_NONE       0
 #define NIC_TYPE_3C509B     1
 #define NIC_TYPE_3C515      2
+#endif
 
 /* Bus type enumeration */
 typedef enum {
@@ -317,30 +327,26 @@ typedef enum {
     (*(uint32_t*)((uint8_t*)(ptr) + (size)) == CANARY_PATTERN_REAR)
 
 /* TSR Defensive Macros - Hardware Operations */
-#define WAIT_FOR_CONDITION(port, mask, timeout) ({ \
-    uint32_t _count = (timeout); \
-    uint8_t _val; \
-    do { \
-        _val = inb(port); \
-        if ((_val & (mask)) == (mask)) break; \
-        IO_DELAY(); \
-    } while (--_count > 0); \
-    (_count > 0) ? 0 : -1; \
-})
+/* C89: These must be implemented as functions instead of GNU statement expressions */
+#ifndef __ASSEMBLER__
+/* Wait for condition with timeout - returns 0 on success, -1 on timeout */
+static int wait_for_condition(uint16_t port, uint8_t mask, uint32_t timeout) {
+    uint32_t count = timeout;
+    uint8_t val;
+    do {
+        val = inb(port);
+        if ((val & mask) == mask) return 0;
+        IO_DELAY();
+    } while (--count > 0);
+    return -1;
+}
 
-#define RETRY_ON_ERROR(func, max_retries) ({ \
-    int _result; \
-    int _retry = 0; \
-    do { \
-        _result = (func); \
-        if (_result == 0) break; \
-        if (_retry > 0) { \
-            for (int _d = 0; _d < RETRY_DELAY_BASE * _retry; _d++) \
-                IO_DELAY(); \
-        } \
-    } while (++_retry < (max_retries)); \
-    _result; \
-})
+/* Retry function on error - returns last result */
+/* Note: Caller must implement retry logic inline for C89 compatibility */
+#endif /* !__ASSEMBLER__ */
+
+/* Legacy macro compatibility (use functions instead when possible) */
+#define WAIT_FOR_CONDITION(port, mask, timeout) wait_for_condition((port), (mask), (timeout))
 
 /* Memory barrier for DOS (ensures I/O completion) */
 #define IO_BARRIER()        { volatile uint8_t _dummy = inb(0x80); }

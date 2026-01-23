@@ -54,9 +54,8 @@ hot_section_start:
         public  packet_receive_fast
         public  extension_snapshots
 
-        ; External references
-        extern  handle_table:word
-        extern  callback_chains:dword
+        ; Forward references to data section symbols (defined below)
+        ; handle_table, callback_chains, packet_buffer defined in .data section
         extern  packet_buffer:byte
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -814,22 +813,21 @@ cold_section_end:
 ;; Data Section
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         .data
-_DATA   segment
-        
+
         ; Station address (MAC)
 station_address db      00h, 00h, 00h, 00h, 00h, 00h
-        
+
         ; Packet buffer pointer
 packet_buffer_ptr dd    0
 packet_length     dw    0
-        
+
         ; Handle management
+        public  handle_table
+        public  callback_chains
 handle_table      dw    16 dup(0)
 callback_chains   dd    256 dup(0)
-        
+
         ; Module size calculation
 module_size       equ   cold_section_end - module_header
-
-_DATA   ends
 
         end

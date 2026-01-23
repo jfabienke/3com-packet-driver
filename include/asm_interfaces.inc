@@ -10,7 +10,7 @@ ifndef ASM_INTERFACES_INC
 ASM_INTERFACES_INC equ 1
 
 ; Include defensive programming patterns
-include "tsr_defensive.inc"
+include "tsr_defensive_wasm.inc"
 
 ;=============================================================================
 ; HARDWARE ERROR CODES (matching C layer)
