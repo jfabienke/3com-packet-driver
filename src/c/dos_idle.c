@@ -6,7 +6,7 @@
  * deferred work outside ISR context.
  */
 
-#include "../include/packet_ops.h"
+#include "../include/pktops.h"
 #include "../include/pcmcia.h"
 
 /*

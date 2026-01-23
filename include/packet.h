@@ -13,7 +13,7 @@
 #ifndef _PACKET_H_
 #define _PACKET_H_
 
-#include "packet_ops.h"
+#include "pktops.h"
 #include "common.h"
 
 /* Simple packet structure compatible with existing buffer management */

@@ -22,21 +22,21 @@
 
 #include "3c515.h"
 #include "eeprom.h"
-#include "media_control.h"
-#include "enhanced_ring_context.h"
-#include "error_handling.h"
+#include "medictl.h"
+#include "enhring.h"
+#include "errhndl.h"
 #include "logging.h"
-#include "interrupt_mitigation.h"
-#include "../include/hw_checksum.h"  // Phase 2.1: Hardware checksumming
+#include "irqmit.h"
+#include "../include/hwchksm.h"  // Phase 2.1: Hardware checksumming
 #include "../include/dma.h"          // Phase 2.2: Scatter-gather DMA
-#include "../include/cache_coherency.h"  // Phase 4: Runtime cache coherency testing
-#include "../include/cache_management.h"  // Phase 4: Cache management system
-#include "../include/chipset_detect.h"  // Phase 4: Safe chipset detection
+#include "../include/cachecoh.h"  // Phase 4: Runtime cache coherency testing
+#include "../include/cachemgt.h"  // Phase 4: Cache management system
+#include "../include/chipdet.h"  // Phase 4: Safe chipset detection
 #include "../include/chipset_database.h"  // Phase 4: Community chipset database
-#include "../include/dma_mapping.h"     // GPT-5: Centralized DMA mapping layer
+#include "../include/dmamap.h"     // GPT-5: Centralized DMA mapping layer
 #include "../include/vds.h"             // VDS support for descriptor rings
-#include "../include/buffer_alloc.h"    // VDS common buffer access
-#include "../include/platform_probe.h"  // Platform detection
+#include "../include/bufaloc.h"    // VDS common buffer access
+#include "../include/pltprob.h"  // Platform detection
 #include "../include/common.h"       // Physical address helper (GPT-5 fix)
 #include <stdlib.h>  // For malloc/free
 #include <string.h>  // For memcpy
@@ -1682,7 +1682,7 @@ static void _3c515_dma_complete_buffers(void *buffer, size_t length, bool is_rec
  * Sub-Agent 1: DMA Specialist - Advanced DMA System
  * ============================================================================ */
 
-#include "../include/dma_descriptors.h"
+#include "../include/dmadesc.h"
 
 /* Global advanced DMA context */
 static advanced_dma_context_t g_advanced_dma_context;

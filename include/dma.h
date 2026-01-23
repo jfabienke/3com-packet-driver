@@ -27,9 +27,9 @@ extern "C" {
 
 #include "common.h"
 #include "memory.h"
-#include "xms_detect.h"
+#include "xmsdet.h"
 #include "3c515.h"
-#include "enhanced_ring_context.h"
+#include "enhring.h"
 
 /* DMA capability flags matching NIC hardware capabilities */
 #define DMA_CAP_NONE                0x0000   /* No DMA support (3C509B) */

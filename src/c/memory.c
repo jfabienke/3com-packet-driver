@@ -11,8 +11,8 @@
  */
 
 #include "../../include/memory.h"
-#include "../../include/xms_detect.h"
-#include "../../include/cpu_detect.h"
+#include "../../include/xmsdet.h"
+#include "../../include/cpudet.h"
 #include "../../include/logging.h"
 #include "../../include/vds.h"
 #include <dos.h>

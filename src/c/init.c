@@ -13,21 +13,21 @@
 #include <string.h>
 #include "../include/init.h"
 #include "../include/hardware.h"
-#include "../include/xms_detect.h"
-#include "../include/buffer_alloc.h"
+#include "../include/xmsdet.h"
+#include "../include/bufaloc.h"
 #include "../include/routing.h"
 #include "../include/stats.h"
 #include "../include/logging.h"
 #include "../include/nic_init.h"
-#include "../include/cpu_detect.h"
+#include "../include/cpudet.h"
 #include "../include/config.h"
-#include "../include/production.h"
-#include "../include/dma_mapping.h"  // GPT-5: Centralized DMA mapping layer
-#include "../include/platform_probe.h" // Platform detection and VDS support
+#include "../include/prod.h"
+#include "../include/dmamap.h"  // GPT-5: Centralized DMA mapping layer
+#include "../include/pltprob.h" // Platform detection and VDS support
 #include "../include/vds.h"          // GPT-5 A+: Virtual DMA Services
-#include "../include/telemetry.h"    // GPT-5 A+: Production telemetry
+#include "../include/telemetr.h"    // GPT-5 A+: Production telemetry
 #include "../include/smc_safety_patches.h" // SMC safety detection and patching
-#include "../include/pci_integration.h"     // PCI subsystem integration
+#include "../include/pciintg.h"     // PCI subsystem integration
 
 /* Global initialization state */
 static init_state_t init_state = {0};

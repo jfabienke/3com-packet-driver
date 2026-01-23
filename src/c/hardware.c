@@ -9,19 +9,19 @@
  */
 
 #include "../include/hardware.h"
-#include "../include/hardware_hal.h"
-#include "../include/nic_context.h"
-#include "../include/hal_errors.h"
-#include "../include/register_access.h"
+#include "../include/hwhal.h"
+#include "../include/nicctx.h"
+#include "../include/halerr.h"
+#include "../include/regacc.h"
 #include "../include/nic_init.h"
 #include "../include/logging.h"
 #include "../include/memory.h"
-#include "../include/diagnostics.h"
+#include "../include/diag.h"
 #include "../include/3c509b.h"
 #include "../include/3c515.h"
-#include "../include/error_handling.h"
-#include "../include/buffer_alloc.h"
-#include "../include/nic_buffer_pools.h"
+#include "../include/errhndl.h"
+#include "../include/bufaloc.h"
+#include "../include/nicbufp.h"
 #include <string.h>
 #include <stdlib.h>
 

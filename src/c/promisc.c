@@ -13,7 +13,7 @@
 #include "../include/3c515.h"
 #include "../include/logging.h"
 #include "../include/memory.h"
-#include "../include/diagnostics.h"
+#include "../include/diag.h"
 #include "../include/routing.h"
 #include "../include/api.h"
 #include <string.h>

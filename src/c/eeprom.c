@@ -20,7 +20,7 @@
 #include "../include/eeprom.h"
 #include "../include/logging.h"
 #include "../include/common.h"
-#include "../include/cpu_optimized.h"
+#include "../include/cpuopt.h"
 #include <string.h>
 
 /* Global EEPROM statistics */

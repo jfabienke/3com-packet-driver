@@ -19,7 +19,7 @@ extern "C" {
 #include "common.h"
 #include "config.h"
 #include "hardware.h"
-#include "chipset_detect.h"
+#include "chipdet.h"
 
 /* Bus type enumeration */
 typedef enum {

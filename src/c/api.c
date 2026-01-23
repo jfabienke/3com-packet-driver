@@ -13,11 +13,11 @@
 #include <string.h>
 #include "../include/api.h"
 #include "../include/hardware.h"
-#include "../include/packet_ops.h"
+#include "../include/pktops.h"
 #include "../include/logging.h"
 #include "../include/stats.h"
 #include "../include/routing.h"
-#include "../include/production.h"
+#include "../include/prod.h"
 
 /* Packet Driver API constants */
 #define PD_MAX_HANDLES    16      /* Maximum number of handles */

@@ -17,7 +17,7 @@ extern "C" {
 
 /* Includes */
 #include "common.h"
-#include "error_handling.h"
+#include "errhndl.h"
 
 /* Forward declarations */
 struct nic_info;

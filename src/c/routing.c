@@ -10,13 +10,13 @@
 
 #include "../include/routing.h"
 #include "../include/logging.h"
-#include "../include/static_routing.h"
+#include "../include/statrt.h"
 #include "../include/common.h"
-#include "../include/cpu_detect.h"
+#include "../include/cpudet.h"
 #include "../include/hardware.h"
 #include "../include/mii.h"
 #include "../include/3c515.h"
-#include "../include/atomic_time.h"
+#include "../include/atomtime.h"
 #include "../include/arp.h"
 
 /* Global routing state */

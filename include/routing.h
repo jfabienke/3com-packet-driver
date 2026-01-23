@@ -18,7 +18,7 @@ extern "C" {
 /* Includes */
 #include "common.h"
 #include "hardware.h"
-#include "packet_ops.h"
+#include "pktops.h"
 
 /* Routing decision types */
 typedef enum {

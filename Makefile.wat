@@ -56,97 +56,97 @@ PCI_UTILS = $(BUILDDIR)\pcitest.exe &
             $(BUILDDIR)\pcidump.exe
 
 # --- HOT SECTION - Resident Assembly Objects ---
-HOT_ASM_OBJS = $(BUILDDIR)\packet_api_smc.obj &
-               $(BUILDDIR)\nic_irq_smc.obj &
-               $(BUILDDIR)\hardware_smc.obj &
-               $(BUILDDIR)\pcmcia_isr.obj &
-               $(BUILDDIR)\flow_routing.obj &
-               $(BUILDDIR)\direct_pio.obj &
-               $(BUILDDIR)\packet_ops.obj &
-               $(BUILDDIR)\packet_copy_c_wrapper.obj &
-               $(BUILDDIR)\tsr_common.obj &
-               $(BUILDDIR)\tsr_c_wrappers.obj &
+HOT_ASM_OBJS = $(BUILDDIR)\pktapi.obj &
+               $(BUILDDIR)\nicirq.obj &
+               $(BUILDDIR)\hwsmc.obj &
+               $(BUILDDIR)\pcmisr.obj &
+               $(BUILDDIR)\flowrt.obj &
+               $(BUILDDIR)\dirpio.obj &
+               $(BUILDDIR)\pktops.obj &
+               $(BUILDDIR)\pktcopy.obj &
+               $(BUILDDIR)\tsrcom.obj &
+               $(BUILDDIR)\tsrwrap.obj &
                $(BUILDDIR)\pci_io.obj &
-               $(BUILDDIR)\pci_shim_isr.obj
+               $(BUILDDIR)\pciisr.obj
 
 # --- Main loader ---
-LOADER_OBJ = $(BUILDDIR)\tsr_loader.obj
+LOADER_OBJ = $(BUILDDIR)\tsrldr.obj
 
 # --- HOT SECTION - Resident C Objects ---
-# Note: packet_ops is in HOT_ASM_OBJS (assembly implementation preferred)
+# Note: pktops is in HOT_ASM_OBJS (assembly implementation preferred)
 HOT_C_OBJS = $(BUILDDIR)\api.obj &
              $(BUILDDIR)\routing.obj &
              $(BUILDDIR)\pci_shim.obj &
-             $(BUILDDIR)\pci_multiplex.obj &
-             $(BUILDDIR)\dma_mapping.obj &
-             $(BUILDDIR)\dma_boundary.obj &
-             $(BUILDDIR)\hw_checksum.obj &
+             $(BUILDDIR)\pcimux.obj &
+             $(BUILDDIR)\dmamap.obj &
+             $(BUILDDIR)\dmabnd.obj &
+             $(BUILDDIR)\hwchksm.obj &
              $(BUILDDIR)\dos_idle.obj &
              $(BUILDDIR)\irq_bind.obj &
-             $(BUILDDIR)\runtime_config.obj &
-             $(BUILDDIR)\interrupt_mitigation.obj &
-             $(BUILDDIR)\rx_batch_refill.obj &
-             $(BUILDDIR)\tx_lazy_irq.obj
+             $(BUILDDIR)\rtcfg.obj &
+             $(BUILDDIR)\irqmit.obj &
+             $(BUILDDIR)\rxbatch.obj &
+             $(BUILDDIR)\txlazy.obj
 
 # --- COLD SECTION - Initialization Assembly Objects ---
-COLD_ASM_OBJS = $(BUILDDIR)\cpu_detect.obj &
+COLD_ASM_OBJS = $(BUILDDIR)\cpudet.obj &
                 $(BUILDDIR)\pnp.obj &
                 $(BUILDDIR)\promisc.obj &
-                $(BUILDDIR)\smc_patches.obj &
-                $(BUILDDIR)\safety_stubs.obj &
+                $(BUILDDIR)\smcpat.obj &
+                $(BUILDDIR)\safestub.obj &
                 $(BUILDDIR)\quiesce.obj
 
 # --- COLD SECTION - Initialization C Objects ---
 COLD_C_OBJS_BASE = $(BUILDDIR)\main.obj &
                    $(BUILDDIR)\init.obj &
                    $(BUILDDIR)\config.obj &
-                   $(BUILDDIR)\pcmcia_manager.obj &
-                   $(BUILDDIR)\pcmcia_snapshot.obj &
-                   $(BUILDDIR)\flow_control.obj &
-                   $(BUILDDIR)\pcmcia_pe_backend.obj &
-                   $(BUILDDIR)\pcmcia_ss_backend.obj &
+                   $(BUILDDIR)\pcmmgr.obj &
+                   $(BUILDDIR)\pcmsnap.obj &
+                   $(BUILDDIR)\flowctl.obj &
+                   $(BUILDDIR)\pcmpebe.obj &
+                   $(BUILDDIR)\pcmssbe.obj &
                    $(BUILDDIR)\memory.obj &
-                   $(BUILDDIR)\xms_detect.obj &
-                   $(BUILDDIR)\umb_loader.obj &
+                   $(BUILDDIR)\xmsdet.obj &
+                   $(BUILDDIR)\umbldr.obj &
                    $(BUILDDIR)\eeprom.obj &
-                   $(BUILDDIR)\buffer_alloc.obj &
-                   $(BUILDDIR)\buffer_autoconfig.obj &
-                   $(BUILDDIR)\static_routing.obj &
+                   $(BUILDDIR)\bufaloc.obj &
+                   $(BUILDDIR)\bufauto.obj &
+                   $(BUILDDIR)\statrt.obj &
                    $(BUILDDIR)\arp.obj &
                    $(BUILDDIR)\nic_init.obj &
                    $(BUILDDIR)\hardware.obj &
-                   $(BUILDDIR)\hardware_stubs.obj &
+                   $(BUILDDIR)\hwstubs.obj &
                    $(BUILDDIR)\3c515.obj &
                    $(BUILDDIR)\3c509b.obj &
-                   $(BUILDDIR)\entry_validation.obj &
-                   $(BUILDDIR)\platform_probe_early.obj &
-                   $(BUILDDIR)\dma_capability_test.obj &
-                   $(BUILDDIR)\tsr_manager.obj &
-                   $(BUILDDIR)\dma_tests.obj &
-                   $(BUILDDIR)\dma_safety.obj &
+                   $(BUILDDIR)\entval.obj &
+                   $(BUILDDIR)\pltprob.obj &
+                   $(BUILDDIR)\dmacap.obj &
+                   $(BUILDDIR)\tsrmgr.obj &
+                   $(BUILDDIR)\dmatest.obj &
+                   $(BUILDDIR)\dmasafe.obj &
                    $(BUILDDIR)\vds_core.obj &
-                   $(BUILDDIR)\vds_safety.obj &
-                   $(BUILDDIR)\vds_manager.obj &
-                   $(BUILDDIR)\extension_api.obj &
+                   $(BUILDDIR)\vdssafe.obj &
+                   $(BUILDDIR)\vdsmgr.obj &
+                   $(BUILDDIR)\extapi.obj &
                    $(BUILDDIR)\unwind.obj &
-                   $(BUILDDIR)\chipset_detect.obj &
-                   $(BUILDDIR)\busmaster_test.obj &
-                   $(BUILDDIR)\loader_cpu_detect.obj &
+                   $(BUILDDIR)\chipdet.obj &
+                   $(BUILDDIR)\bmtest.obj &
+                   $(BUILDDIR)\loader_cpudet.obj &
                    $(BUILDDIR)\loader_patch_apply.obj &
                    $(BUILDDIR)\pci_bios.obj &
-                   $(BUILDDIR)\3com_pci_detect.obj &
-                   $(BUILDDIR)\3com_vortex.obj &
-                   $(BUILDDIR)\3com_boomerang.obj &
-                   $(BUILDDIR)\pci_integration.obj &
-                   $(BUILDDIR)\pci_shim_enhanced.obj &
+                   $(BUILDDIR)\3cpcidet.obj &
+                   $(BUILDDIR)\3cvortex.obj &
+                   $(BUILDDIR)\3cboom.obj &
+                   $(BUILDDIR)\pciintg.obj &
+                   $(BUILDDIR)\pcishme.obj &
                    $(BUILDDIR)\smc_safety_patches.obj &
-                   $(BUILDDIR)\smc_serialization.obj &
-                   $(BUILDDIR)\cache_management.obj &
-                   $(BUILDDIR)\dma_policy.obj &
+                   $(BUILDDIR)\smcserl.obj &
+                   $(BUILDDIR)\cachemgt.obj &
+                   $(BUILDDIR)\dmapol.obj &
                    $(BUILDDIR)\vds.obj
 
 # --- Debug-only objects ---
-DEBUG_C_OBJS = $(BUILDDIR)\diagnostics.obj &
+DEBUG_C_OBJS = $(BUILDDIR)\diag.obj &
                $(BUILDDIR)\logging.obj &
                $(BUILDDIR)\stats.obj
 
@@ -268,14 +268,14 @@ pci-utils: .SYMBOLIC $(PCI_UTILS)
     @echo All PCI utilities built successfully
 
 $(BUILDDIR)\pcitest.exe: $(BUILDDIR)\pcitest.obj $(BUILDDIR)\pci_bios.obj &
-                         $(BUILDDIR)\pci_shim.obj $(BUILDDIR)\pci_shim_enhanced.obj &
+                         $(BUILDDIR)\pci_shim.obj $(BUILDDIR)\pcishme.obj &
                          $(BUILDDIR)\pci_io.obj $(BUILDDIR)\logging.obj
     @echo Linking PCI Test Suite...
     $(LINK) $(LFLAGS) file {$<} name $@
 
 $(BUILDDIR)\pciscan.exe: $(BUILDDIR)\pciscan.obj $(BUILDDIR)\pci_bios.obj &
-                         $(BUILDDIR)\pci_shim_enhanced.obj $(BUILDDIR)\pci_io.obj &
-                         $(BUILDDIR)\cpu_detect.obj $(BUILDDIR)\logging.obj
+                         $(BUILDDIR)\pcishme.obj $(BUILDDIR)\pci_io.obj &
+                         $(BUILDDIR)\cpudet.obj $(BUILDDIR)\logging.obj
     @echo Linking PCI Scanner...
     $(LINK) $(LFLAGS) file {$<} name $@
 
@@ -324,7 +324,7 @@ $(BUILDDIR)\hardware.obj: $(CDIR)\hardware.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\hardware_stubs.obj: $(CDIR)\hardware_stubs.c
+$(BUILDDIR)\hwstubs.obj: $(CDIR)\hwstubs.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -332,15 +332,15 @@ $(BUILDDIR)\memory.obj: $(CDIR)\memory.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\xms_detect.obj: $(CDIR)\xms_detect.c
+$(BUILDDIR)\xmsdet.obj: $(CDIR)\xmsdet.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\buffer_alloc.obj: $(CDIR)\buffer_alloc.c
+$(BUILDDIR)\bufaloc.obj: $(CDIR)\bufaloc.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\buffer_autoconfig.obj: $(CDIR)\buffer_autoconfig.c
+$(BUILDDIR)\bufauto.obj: $(CDIR)\bufauto.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -348,7 +348,7 @@ $(BUILDDIR)\routing.obj: $(CDIR)\routing.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\static_routing.obj: $(CDIR)\static_routing.c
+$(BUILDDIR)\statrt.obj: $(CDIR)\statrt.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -368,7 +368,7 @@ $(BUILDDIR)\3c509b.obj: $(CDIR)\3c509b.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\diagnostics.obj: $(CDIR)\diagnostics.c
+$(BUILDDIR)\diag.obj: $(CDIR)\diag.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -384,7 +384,7 @@ $(BUILDDIR)\pci_shim.obj: $(CDIR)\pci_shim.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pci_multiplex.obj: $(CDIR)\pci_multiplex.c
+$(BUILDDIR)\pcimux.obj: $(CDIR)\pcimux.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -392,51 +392,51 @@ $(BUILDDIR)\pci_bios.obj: $(CDIR)\pci_bios.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pci_shim_enhanced.obj: $(CDIR)\pci_shim_enhanced.c
+$(BUILDDIR)\pcishme.obj: $(CDIR)\pcishme.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pci_integration.obj: $(CDIR)\pci_integration.c
+$(BUILDDIR)\pciintg.obj: $(CDIR)\pciintg.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\3com_pci_detect.obj: $(CDIR)\3com_pci_detect.c
+$(BUILDDIR)\3cpcidet.obj: $(CDIR)\3cpcidet.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\3com_vortex.obj: $(CDIR)\3com_vortex.c
+$(BUILDDIR)\3cvortex.obj: $(CDIR)\3cvortex.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\3com_boomerang.obj: $(CDIR)\3com_boomerang.c
+$(BUILDDIR)\3cboom.obj: $(CDIR)\3cboom.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\dma_mapping.obj: $(CDIR)\dma_mapping.c
+$(BUILDDIR)\dmamap.obj: $(CDIR)\dmamap.c
     @echo Compiling (DMA): $[@
     $(CC) $(CFLAGS) -dPRODUCTION -dNO_LOGGING -dNDEBUG $[@ -fo=$@
 
-$(BUILDDIR)\dma_boundary.obj: $(CDIR)\dma_boundary.c
+$(BUILDDIR)\dmabnd.obj: $(CDIR)\dmabnd.c
     @echo Compiling (DMA): $[@
     $(CC) $(CFLAGS) -dPRODUCTION -dNO_LOGGING -dNDEBUG $[@ -fo=$@
 
-$(BUILDDIR)\hw_checksum.obj: $(CDIR)\hw_checksum.c
+$(BUILDDIR)\hwchksm.obj: $(CDIR)\hwchksm.c
     @echo Compiling (DMA): $[@
     $(CC) $(CFLAGS) -dPRODUCTION -dNO_LOGGING -dNDEBUG $[@ -fo=$@
 
-$(BUILDDIR)\dma_safety.obj: $(CDIR)\dma_safety.c
+$(BUILDDIR)\dmasafe.obj: $(CDIR)\dmasafe.c
     @echo Compiling (DMA): $[@
     $(CC) $(CFLAGS) -dPRODUCTION -dNO_LOGGING -dNDEBUG $[@ -fo=$@
 
-$(BUILDDIR)\dma_tests.obj: $(CDIR)\dma_tests.c
+$(BUILDDIR)\dmatest.obj: $(CDIR)\dmatest.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\dma_policy.obj: $(CDIR)\dma_policy.c
+$(BUILDDIR)\dmapol.obj: $(CDIR)\dmapol.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\dma_capability_test.obj: $(CDIR)\dma_capability_test.c
+$(BUILDDIR)\dmacap.obj: $(CDIR)\dmacap.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -448,11 +448,11 @@ $(BUILDDIR)\vds_core.obj: $(CDIR)\vds_core.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\vds_safety.obj: $(CDIR)\vds_safety.c
+$(BUILDDIR)\vdssafe.obj: $(CDIR)\vdssafe.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\vds_manager.obj: $(CDIR)\vds_manager.c
+$(BUILDDIR)\vdsmgr.obj: $(CDIR)\vdsmgr.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -464,43 +464,43 @@ $(BUILDDIR)\irq_bind.obj: $(CDIR)\irq_bind.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\runtime_config.obj: $(CDIR)\runtime_config.c
+$(BUILDDIR)\rtcfg.obj: $(CDIR)\rtcfg.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\interrupt_mitigation.obj: $(CDIR)\interrupt_mitigation.c
+$(BUILDDIR)\irqmit.obj: $(CDIR)\irqmit.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\rx_batch_refill.obj: $(CDIR)\rx_batch_refill.c
+$(BUILDDIR)\rxbatch.obj: $(CDIR)\rxbatch.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\tx_lazy_irq.obj: $(CDIR)\tx_lazy_irq.c
+$(BUILDDIR)\txlazy.obj: $(CDIR)\txlazy.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pcmcia_manager.obj: $(CDIR)\pcmcia_manager.c
+$(BUILDDIR)\pcmmgr.obj: $(CDIR)\pcmmgr.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pcmcia_snapshot.obj: $(CDIR)\pcmcia_snapshot.c
+$(BUILDDIR)\pcmsnap.obj: $(CDIR)\pcmsnap.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pcmcia_pe_backend.obj: $(CDIR)\pcmcia_pe_backend.c
+$(BUILDDIR)\pcmpebe.obj: $(CDIR)\pcmpebe.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pcmcia_ss_backend.obj: $(CDIR)\pcmcia_ss_backend.c
+$(BUILDDIR)\pcmssbe.obj: $(CDIR)\pcmssbe.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\flow_control.obj: $(CDIR)\flow_control.c
+$(BUILDDIR)\flowctl.obj: $(CDIR)\flowctl.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\umb_loader.obj: $(CDIR)\umb_loader.c
+$(BUILDDIR)\umbldr.obj: $(CDIR)\umbldr.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -508,19 +508,19 @@ $(BUILDDIR)\eeprom.obj: $(CDIR)\eeprom.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\entry_validation.obj: $(CDIR)\entry_validation.c
+$(BUILDDIR)\entval.obj: $(CDIR)\entval.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\platform_probe_early.obj: $(CDIR)\platform_probe_early.c
+$(BUILDDIR)\pltprob.obj: $(CDIR)\pltprob.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\tsr_manager.obj: $(CDIR)\tsr_manager.c
+$(BUILDDIR)\tsrmgr.obj: $(CDIR)\tsrmgr.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\extension_api.obj: $(CDIR)\extension_api.c
+$(BUILDDIR)\extapi.obj: $(CDIR)\extapi.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -528,11 +528,11 @@ $(BUILDDIR)\unwind.obj: $(CDIR)\unwind.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\chipset_detect.obj: $(CDIR)\chipset_detect.c
+$(BUILDDIR)\chipdet.obj: $(CDIR)\chipdet.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\busmaster_test.obj: $(CDIR)\busmaster_test.c
+$(BUILDDIR)\bmtest.obj: $(CDIR)\bmtest.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
@@ -540,16 +540,16 @@ $(BUILDDIR)\smc_safety_patches.obj: $(CDIR)\smc_safety_patches.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\smc_serialization.obj: $(CDIR)\smc_serialization.c
+$(BUILDDIR)\smcserl.obj: $(CDIR)\smcserl.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\cache_management.obj: $(CDIR)\cache_management.c
+$(BUILDDIR)\cachemgt.obj: $(CDIR)\cachemgt.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
 # Loader C files
-$(BUILDDIR)\loader_cpu_detect.obj: $(SRCDIR)\loader\cpu_detect.c
+$(BUILDDIR)\loader_cpudet.obj: $(SRCDIR)\loader\cpudet.c
     @echo Compiling (loader): $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
@@ -566,7 +566,7 @@ $(BUILDDIR)\pciscan.obj: $(CDIR)\pciscan.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)\pcictl.obj: $(CDIR)\pci_multiplex.c
+$(BUILDDIR)\pcictl.obj: $(CDIR)\pcimux.c
     @echo Compiling (standalone): $[@
     $(CC) $(CFLAGS) -dSTANDALONE_UTILITY $[@ -fo=$@
 
@@ -576,47 +576,47 @@ $(BUILDDIR)\pcidump.obj: $(CDIR)\pcidump.c
 
 # --- Assembly Source Compilation Rules ---
 
-$(BUILDDIR)\tsr_loader.obj: $(ASMDIR)\tsr_loader.asm
+$(BUILDDIR)\tsrldr.obj: $(ASMDIR)\tsrldr.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\packet_api_smc.obj: $(ASMDIR)\packet_api_smc.asm
+$(BUILDDIR)\pktapi.obj: $(ASMDIR)\pktapi.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\nic_irq_smc.obj: $(ASMDIR)\nic_irq_smc.asm
+$(BUILDDIR)\nicirq.obj: $(ASMDIR)\nicirq.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\hardware_smc.obj: $(ASMDIR)\hardware_smc.asm
+$(BUILDDIR)\hwsmc.obj: $(ASMDIR)\hwsmc.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\pcmcia_isr.obj: $(ASMDIR)\pcmcia_isr.asm
+$(BUILDDIR)\pcmisr.obj: $(ASMDIR)\pcmisr.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\flow_routing.obj: $(ASMDIR)\flow_routing.asm
+$(BUILDDIR)\flowrt.obj: $(ASMDIR)\flowrt.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\direct_pio.obj: $(ASMDIR)\direct_pio.asm
+$(BUILDDIR)\dirpio.obj: $(ASMDIR)\dirpio.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\packet_ops.obj: $(ASMDIR)\packet_ops.asm
+$(BUILDDIR)\pktops.obj: $(ASMDIR)\pktops.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\packet_copy_c_wrapper.obj: $(ASMDIR)\packet_copy_c_wrapper.asm
+$(BUILDDIR)\pktcopy.obj: $(ASMDIR)\pktcopy.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\tsr_common.obj: $(ASMDIR)\tsr_common.asm
+$(BUILDDIR)\tsrcom.obj: $(ASMDIR)\tsrcom.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\tsr_c_wrappers.obj: $(ASMDIR)\tsr_c_wrappers.asm
+$(BUILDDIR)\tsrwrap.obj: $(ASMDIR)\tsrwrap.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
@@ -624,11 +624,11 @@ $(BUILDDIR)\pci_io.obj: $(ASMDIR)\pci_io.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\pci_shim_isr.obj: $(ASMDIR)\pci_shim_isr.asm
+$(BUILDDIR)\pciisr.obj: $(ASMDIR)\pciisr.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\cpu_detect.obj: $(ASMDIR)\cpu_detect.asm
+$(BUILDDIR)\cpudet.obj: $(ASMDIR)\cpudet.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
@@ -640,11 +640,11 @@ $(BUILDDIR)\promisc.obj: $(ASMDIR)\promisc.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\smc_patches.obj: $(ASMDIR)\smc_patches.asm
+$(BUILDDIR)\smcpat.obj: $(ASMDIR)\smcpat.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
-$(BUILDDIR)\safety_stubs.obj: $(ASMDIR)\safety_stubs.asm
+$(BUILDDIR)\safestub.obj: $(ASMDIR)\safestub.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 

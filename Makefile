@@ -88,98 +88,98 @@ PCI_UTILS = $(BUILDDIR)/pcitest.exe \
 
 # HOT SECTION - Resident Assembly Objects (stay in memory after initialization)
 # These are patched by SMC and remain resident
-HOT_ASM_OBJS = $(BUILDDIR)/packet_api_smc.obj \
-               $(BUILDDIR)/nic_irq_smc.obj \
-               $(BUILDDIR)/hardware_smc.obj \
-               $(BUILDDIR)/pcmcia_isr.obj \
-               $(BUILDDIR)/flow_routing.obj \
-               $(BUILDDIR)/direct_pio.obj \
-               $(BUILDDIR)/packet_ops.obj \
-               $(BUILDDIR)/packet_copy_c_wrapper.obj \
-               $(BUILDDIR)/tsr_common.obj \
-               $(BUILDDIR)/tsr_c_wrappers.obj \
+HOT_ASM_OBJS = $(BUILDDIR)/pktapi.obj \
+               $(BUILDDIR)/nicirq.obj \
+               $(BUILDDIR)/hwsmc.obj \
+               $(BUILDDIR)/pcmisr.obj \
+               $(BUILDDIR)/flowrt.obj \
+               $(BUILDDIR)/dirpio.obj \
+               $(BUILDDIR)/pktops.obj \
+               $(BUILDDIR)/pktcopy.obj \
+               $(BUILDDIR)/tsrcom.obj \
+               $(BUILDDIR)/tsrwrap.obj \
                $(BUILDDIR)/pci_io.obj \
-               $(BUILDDIR)/pci_shim_isr.obj
+               $(BUILDDIR)/pciisr.obj
 
 # Main loader (contains both hot and cold sections)
-LOADER_OBJ = $(BUILDDIR)/tsr_loader.obj
+LOADER_OBJ = $(BUILDDIR)/tsrldr.obj
 
 # HOT SECTION - Resident C Objects (stay in memory after initialization)
 # Minimal runtime code only
 HOT_C_OBJS = $(BUILDDIR)/api.obj \
              $(BUILDDIR)/routing.obj \
-             $(BUILDDIR)/packet_ops.obj \
+             $(BUILDDIR)/pktops.obj \
              $(BUILDDIR)/pci_shim.obj \
-             $(BUILDDIR)/pci_multiplex.obj \
-             $(BUILDDIR)/dma_mapping.obj \
-             $(BUILDDIR)/dma_boundary.obj \
-             $(BUILDDIR)/hw_checksum.obj \
+             $(BUILDDIR)/pcimux.obj \
+             $(BUILDDIR)/dmamap.obj \
+             $(BUILDDIR)/dmabnd.obj \
+             $(BUILDDIR)/hwchksm.obj \
              $(BUILDDIR)/dos_idle.obj \
              $(BUILDDIR)/irq_bind.obj \
-             $(BUILDDIR)/runtime_config.obj \
-             $(BUILDDIR)/interrupt_mitigation.obj \
-             $(BUILDDIR)/rx_batch_refill.obj \
-             $(BUILDDIR)/tx_lazy_irq.obj
+             $(BUILDDIR)/rtcfg.obj \
+             $(BUILDDIR)/irqmit.obj \
+             $(BUILDDIR)/rxbatch.obj \
+             $(BUILDDIR)/txlazy.obj
 
 # COLD SECTION - Initialization Assembly Objects (discarded after initialization)
-COLD_ASM_OBJS = $(BUILDDIR)/cpu_detect.obj \
+COLD_ASM_OBJS = $(BUILDDIR)/cpudet.obj \
                 $(BUILDDIR)/pnp.obj \
                 $(BUILDDIR)/promisc.obj \
-                $(BUILDDIR)/smc_patches.obj \
-                $(BUILDDIR)/safety_stubs.obj \
+                $(BUILDDIR)/smcpat.obj \
+                $(BUILDDIR)/safestub.obj \
                 $(BUILDDIR)/quiesce.obj
 
 # COLD SECTION - Initialization C Objects (discarded after initialization)
 COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj \
                    $(BUILDDIR)/init.obj \
                    $(BUILDDIR)/config.obj \
-                   $(BUILDDIR)/pcmcia_manager.obj \
-                   $(BUILDDIR)/pcmcia_snapshot.obj \
-                   $(BUILDDIR)/flow_control.obj \
-                   $(BUILDDIR)/pcmcia_pe_backend.obj \
-                   $(BUILDDIR)/pcmcia_ss_backend.obj \
+                   $(BUILDDIR)/pcmmgr.obj \
+                   $(BUILDDIR)/pcmsnap.obj \
+                   $(BUILDDIR)/flowctl.obj \
+                   $(BUILDDIR)/pcmpebe.obj \
+                   $(BUILDDIR)/pcmssbe.obj \
                    $(BUILDDIR)/memory.obj \
-                   $(BUILDDIR)/xms_detect.obj \
-                   $(BUILDDIR)/umb_loader.obj \
+                   $(BUILDDIR)/xmsdet.obj \
+                   $(BUILDDIR)/umbldr.obj \
                    $(BUILDDIR)/eeprom.obj \
-                   $(BUILDDIR)/buffer_alloc.obj \
-                   $(BUILDDIR)/buffer_autoconfig.obj \
-                   $(BUILDDIR)/static_routing.obj \
+                   $(BUILDDIR)/bufaloc.obj \
+                   $(BUILDDIR)/bufauto.obj \
+                   $(BUILDDIR)/statrt.obj \
                    $(BUILDDIR)/arp.obj \
                    $(BUILDDIR)/nic_init.obj \
                    $(BUILDDIR)/hardware.obj \
-                   $(BUILDDIR)/hardware_stubs.obj \
+                   $(BUILDDIR)/hwstubs.obj \
                    $(BUILDDIR)/3c515.obj \
                    $(BUILDDIR)/3c509b.obj \
-                   $(BUILDDIR)/entry_validation.obj \
-                   $(BUILDDIR)/platform_probe_early.obj \
-                   $(BUILDDIR)/dma_capability_test.obj \
-                   $(BUILDDIR)/tsr_manager.obj \
-                   $(BUILDDIR)/dma_tests.obj \
-                   $(BUILDDIR)/dma_safety.obj \
+                   $(BUILDDIR)/entval.obj \
+                   $(BUILDDIR)/pltprob.obj \
+                   $(BUILDDIR)/dmacap.obj \
+                   $(BUILDDIR)/tsrmgr.obj \
+                   $(BUILDDIR)/dmatest.obj \
+                   $(BUILDDIR)/dmasafe.obj \
                    $(BUILDDIR)/vds_core.obj \
-                   $(BUILDDIR)/vds_safety.obj \
-                   $(BUILDDIR)/vds_manager.obj \
-                   $(BUILDDIR)/extension_api.obj \
+                   $(BUILDDIR)/vdssafe.obj \
+                   $(BUILDDIR)/vdsmgr.obj \
+                   $(BUILDDIR)/extapi.obj \
                    $(BUILDDIR)/unwind.obj \
-                   $(BUILDDIR)/chipset_detect.obj \
-                   $(BUILDDIR)/busmaster_test.obj \
-                   $(BUILDDIR)/loader/cpu_detect.obj \
+                   $(BUILDDIR)/chipdet.obj \
+                   $(BUILDDIR)/bmtest.obj \
+                   $(BUILDDIR)/loader/cpudet.obj \
                    $(BUILDDIR)/loader/patch_apply.obj \
                    $(BUILDDIR)/pci_bios.obj \
-                   $(BUILDDIR)/3com_pci_detect.obj \
-                   $(BUILDDIR)/3com_vortex.obj \
-                   $(BUILDDIR)/3com_boomerang.obj \
-                   $(BUILDDIR)/pci_integration.obj \
-                   $(BUILDDIR)/pci_shim_enhanced.obj \
+                   $(BUILDDIR)/3cpcidet.obj \
+                   $(BUILDDIR)/3cvortex.obj \
+                   $(BUILDDIR)/3cboom.obj \
+                   $(BUILDDIR)/pciintg.obj \
+                   $(BUILDDIR)/pcishme.obj \
                    $(BUILDDIR)/smc_safety_patches.obj \
-                   $(BUILDDIR)/smc_serialization.obj \
-                   $(BUILDDIR)/cache_management.obj \
-                   $(BUILDDIR)/dma_policy.obj \
+                   $(BUILDDIR)/smcserl.obj \
+                   $(BUILDDIR)/cachemgt.obj \
+                   $(BUILDDIR)/dmapol.obj \
                    $(BUILDDIR)/vds.obj
 
 # Debug-only objects (excluded in production)
-DEBUG_C_OBJS = $(BUILDDIR)/diagnostics.obj \
+DEBUG_C_OBJS = $(BUILDDIR)/diag.obj \
               $(BUILDDIR)/logging.obj \
               $(BUILDDIR)/stats.obj
 
@@ -291,7 +291,7 @@ production: PRODUCTION = 1
 production: export PRODUCTION
 production: $(BUILDDIR) 
 	@echo "Building PRODUCTION version (size-optimized with cold/hot separation)..."
-	@echo "Excluding: diagnostics, logging, stats"
+	@echo "Excluding: diag, logging, stats"
 	@echo "Cold section will be discarded after initialization"
 	@echo "Compiler flags: $(CFLAGS_PRODUCTION)"
 	@$(MAKE) PRODUCTION=1 $(TARGET)
@@ -319,27 +319,27 @@ release-legacy: $(BUILDDIR) $(TARGET)
 	@echo "Legacy release build complete. Binary: $(TARGET)"
 
 # Sprint 1.2: Direct PIO Performance Test
-test_direct_pio: $(BUILDDIR)/test_direct_pio.exe
+test_dirpio: $(BUILDDIR)/test_dirpio.exe
 	@echo "Running Direct PIO Performance Test..."
-	$(BUILDDIR)/test_direct_pio.exe
+	$(BUILDDIR)/test_dirpio.exe
 
-$(BUILDDIR)/test_direct_pio.exe: test_direct_pio.c $(ALL_OBJS) | $(BUILDDIR)
+$(BUILDDIR)/test_dirpio.exe: test_dirpio.c $(ALL_OBJS) | $(BUILDDIR)
 	@echo "Building Direct PIO Performance Test..."
-	$(CC) $(CFLAGS) test_direct_pio.c -o $(BUILDDIR)/test_direct_pio.obj
-	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_direct_pio.obj $(ALL_OBJS)} name $(BUILDDIR)/test_direct_pio.exe
+	$(CC) $(CFLAGS) test_dirpio.c -o $(BUILDDIR)/test_dirpio.obj
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_dirpio.obj $(ALL_OBJS)} name $(BUILDDIR)/test_dirpio.exe
 	@echo "Map file: $(BUILDDIR)/3cpd.map"
 
 # PCI Test Suite
-$(BUILDDIR)/pcitest.exe: $(CDIR)/pcitest.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
+$(BUILDDIR)/pcitest.exe: $(CDIR)/pcitest.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pcishme.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
 	@echo "Building PCI Test Suite..."
 	$(CC) $(CFLAGS) $(CDIR)/pcitest.c -fo=$(BUILDDIR)/pcitest.obj
-	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcitest.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pcitest.exe
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcitest.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim.obj $(BUILDDIR)/pcishme.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pcitest.exe
 
 # PCI Scanner
-$(BUILDDIR)/pciscan.exe: $(CDIR)/pciscan.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpu_detect.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
+$(BUILDDIR)/pciscan.exe: $(CDIR)/pciscan.c $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pcishme.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpudet.obj $(BUILDDIR)/logging.obj | $(BUILDDIR)
 	@echo "Building PCI Scanner..."
 	$(CC) $(CFLAGS) $(CDIR)/pciscan.c -fo=$(BUILDDIR)/pciscan.obj
-	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pciscan.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pci_shim_enhanced.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpu_detect.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pciscan.exe
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pciscan.obj $(BUILDDIR)/pci_bios.obj $(BUILDDIR)/pcishme.obj $(BUILDDIR)/pci_io.obj $(BUILDDIR)/cpudet.obj $(BUILDDIR)/logging.obj} name $(BUILDDIR)/pciscan.exe
 
 # Bus Master Test Utility
 $(BUILDDIR)/bmtest.exe: tools/bmtest.c $(BUILDDIR)/vds.obj | $(BUILDDIR)
@@ -353,9 +353,9 @@ bmtest: $(BUILDDIR)/bmtest.exe
 	@echo "Bus Master Test utility ready"
 
 # PCI Control utility (uses multiplex interface)
-$(BUILDDIR)/pcictl.exe: $(CDIR)/pci_multiplex.c | $(BUILDDIR)
+$(BUILDDIR)/pcictl.exe: $(CDIR)/pcimux.c | $(BUILDDIR)
 	@echo "Building PCI Control utility..."
-	$(CC) $(CFLAGS) -DSTANDALONE_UTILITY $(CDIR)/pci_multiplex.c -fo=$(BUILDDIR)/pcictl.obj
+	$(CC) $(CFLAGS) -DSTANDALONE_UTILITY $(CDIR)/pcimux.c -fo=$(BUILDDIR)/pcictl.obj
 	$(LINK) $(LFLAGS) file {$(BUILDDIR)/pcictl.obj} name $(BUILDDIR)/pcictl.exe
 
 # PCI Config Dump utility
@@ -386,19 +386,19 @@ $(TARGET): $(ALL_OBJS)
 # These use isolated flags to avoid global flag bleed
 DMA_OPT_FLAGS = -DPRODUCTION -DNO_LOGGING -DNDEBUG
 
-$(BUILDDIR)/dma_mapping.obj: $(CDIR)/dma_mapping.c | $(BUILDDIR)
+$(BUILDDIR)/dmamap.obj: $(CDIR)/dmamap.c | $(BUILDDIR)
 	@echo "Compiling (DMA optimized): $< -> $@"
 	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
 
-$(BUILDDIR)/dma_boundary.obj: $(CDIR)/dma_boundary.c | $(BUILDDIR)
+$(BUILDDIR)/dmabnd.obj: $(CDIR)/dmabnd.c | $(BUILDDIR)
 	@echo "Compiling (DMA optimized): $< -> $@"
 	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
 
-$(BUILDDIR)/hw_checksum.obj: $(CDIR)/hw_checksum.c | $(BUILDDIR)
+$(BUILDDIR)/hwchksm.obj: $(CDIR)/hwchksm.c | $(BUILDDIR)
 	@echo "Compiling (DMA optimized): $< -> $@"
 	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
 
-$(BUILDDIR)/dma_safety.obj: $(CDIR)/dma_safety.c | $(BUILDDIR)
+$(BUILDDIR)/dmasafe.obj: $(CDIR)/dmasafe.c | $(BUILDDIR)
 	@echo "Compiling (DMA optimized): $< -> $@"
 	$(CC) $(CFLAGS) $(DMA_OPT_FLAGS) -c $< -fo=$@
 
@@ -438,10 +438,10 @@ test:
 	@echo "All tests built successfully. Use run-* targets to execute."
 
 # Critical bug fix verification test
-$(BUILDDIR)/test_critical_bug_fixes.exe: test/test_critical_bug_fixes.c $(BUILDDIR)/tsr_c_wrappers.obj $(BUILDDIR)/cache_ops.obj | $(BUILDDIR)
+$(BUILDDIR)/test_critical_bug_fixes.exe: test/test_critical_bug_fixes.c $(BUILDDIR)/tsrwrap.obj $(BUILDDIR)/cache_ops.obj | $(BUILDDIR)
 	@echo "Building Critical Bug Fix Test..."
 	$(CC) $(CFLAGS) test/test_critical_bug_fixes.c -fo=$(BUILDDIR)/test_critical_bug_fixes.obj
-	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_critical_bug_fixes.obj $(BUILDDIR)/tsr_c_wrappers.obj $(BUILDDIR)/cache_ops.obj} name $(BUILDDIR)/test_critical_bug_fixes.exe
+	$(LINK) $(LFLAGS) file {$(BUILDDIR)/test_critical_bug_fixes.obj $(BUILDDIR)/tsrwrap.obj $(BUILDDIR)/cache_ops.obj} name $(BUILDDIR)/test_critical_bug_fixes.exe
 
 test-bug-fixes: $(BUILDDIR)/test_critical_bug_fixes.exe
 	@echo "Running Critical Bug Fix Verification..."

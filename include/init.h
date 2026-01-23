@@ -18,7 +18,7 @@ extern "C" {
 /* Includes */
 #include <stdint.h>
 #include "config.h"
-#include "platform_probe.h"
+#include "pltprob.h"
 
 /* CPU type definitions */
 #define CPU_TYPE_8086      0

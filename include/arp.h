@@ -17,7 +17,7 @@ extern "C" {
 
 /* Includes */
 #include "common.h"
-#include "static_routing.h"
+#include "statrt.h"
 
 /* ARP Constants from RFC 826 */
 #define ARP_HW_TYPE_ETHERNET        1       /* Ethernet hardware type */

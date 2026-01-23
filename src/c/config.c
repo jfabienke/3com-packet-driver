@@ -13,12 +13,12 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include "../include/config.h"
-#include "../include/static_routing.h"
+#include "../include/statrt.h"
 #include "../include/logging.h"
-#include "../include/cpu_detect.h"
-#include "../include/busmaster_test.h"
-#include "../include/production.h"
-#include "../include/buffer_config.h"
+#include "../include/cpudet.h"
+#include "../include/bmtest.h"
+#include "../include/prod.h"
+#include "../include/bufcfg.h"
 
 /* All functions in this file go to cold section (discarded after init) */
 #pragma code_seg("COLD_TEXT", "CODE")

@@ -11,7 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "../../include/vds_core.h"
-#include "../../include/cpu_detect.h"
+#include "../../include/cpudet.h"
 #include "../../include/logging.h"
 
 /* VDS interrupt vector */

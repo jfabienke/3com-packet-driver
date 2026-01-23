@@ -11,20 +11,20 @@
 #include "../include/nic_init.h"
 #include "../include/logging.h"
 #include "../include/memory.h"
-#include "../include/diagnostics.h"
+#include "../include/diag.h"
 #include "../include/3c509b.h"
 #include "../include/3c515.h"
 #include "../include/mii.h"
-#include "../include/mdio_lock.h"
+#include "../include/mdiolock.h"
 #include "../include/common.h"
-#include "../include/memory_barriers.h"
+#include "../include/membar.h"
 #include "../include/nic_defs.h"
 #include "../include/config.h"  /* For bus master testing integration */
-#include "../include/cache_coherency.h"  // Phase 4: Runtime cache coherency testing
-#include "../include/cache_management.h"  // Phase 4: Cache management system
-#include "../include/chipset_detect.h"  // Phase 4: Safe chipset detection
+#include "../include/cachecoh.h"  // Phase 4: Runtime cache coherency testing
+#include "../include/cachemgt.h"  // Phase 4: Cache management system
+#include "../include/chipdet.h"  // Phase 4: Safe chipset detection
 #include "../include/chipset_database.h"  // Phase 4: Community chipset database
-#include "../include/performance_enabler.h"  // Phase 4: Performance optimization guidance
+#include "../include/prfenbl.h"  // Phase 4: Performance optimization guidance
 #include <string.h>
 
 /* External DMA policy functions */

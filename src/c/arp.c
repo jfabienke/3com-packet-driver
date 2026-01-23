@@ -9,7 +9,7 @@
  */
 
 #include "../include/arp.h"
-#include "../include/packet_ops.h"
+#include "../include/pktops.h"
 #include "../include/hardware.h"
 #include "../include/logging.h"
 #include "../include/memory.h"

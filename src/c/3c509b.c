@@ -13,13 +13,13 @@
 #include "../include/logging.h"
 #include "../include/memory.h"
 #include "../include/common.h"
-#include "../include/buffer_alloc.h"
-#include "../include/packet_ops.h"
-#include "../include/media_control.h"
+#include "../include/bufaloc.h"
+#include "../include/pktops.h"
+#include "../include/medictl.h"
 #include "../include/nic_defs.h"
-#include "../include/interrupt_mitigation.h"
-#include "../include/hw_checksum.h"  // Phase 2.1: Hardware checksumming
-#include "../include/direct_pio_enhanced.h"  // Phase 1: CPU-optimized I/O operations
+#include "../include/irqmit.h"
+#include "../include/hwchksm.h"  // Phase 2.1: Hardware checksumming
+#include "../include/dirpioe.h"  // Phase 1: CPU-optimized I/O operations
 #include <string.h>
 
 /* Forward declarations for operations */
