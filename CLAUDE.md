@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> Last Updated: 2026-01-23 16:55 UTC
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -8,17 +10,32 @@ This is a DOS packet driver supporting 3Com 3C515-TX (100 Mbps) and 3C509B (10 M
 
 ## Build System
 
-The project uses Open Watcom C/C++ and NASM with a custom Makefile:
+The project uses Open Watcom C/C++ and NASM with two makefile options:
 
-### Build Commands
-- `wmake` or `wmake release` - Build optimized release version
-- `wmake debug` - Build debug version with symbols
-- `wmake clean` - Clean build directory
+### GNU Make (Cross-Compilation on Linux/macOS/Windows with GNU Make)
+```bash
+make release        # Build optimized release version
+make debug          # Build debug version with symbols
+make production     # Size-optimized build (excludes debug modules)
+make config-8086    # Build for 8086/8088 CPUs
+make clean          # Clean build directory
+```
+
+### Open Watcom wmake (Native DOS/Windows Build)
+```bash
+wmake -f Makefile.wat              # Release build (default)
+wmake -f Makefile.wat debug        # Debug build with symbols
+wmake -f Makefile.wat production   # Size-optimized production build
+wmake -f Makefile.wat config-8086  # Build for 8086/8088 CPUs
+wmake -f Makefile.wat pci-utils    # Build PCI diagnostic utilities
+wmake -f Makefile.wat clean        # Clean build directory
+wmake -f Makefile.wat info         # Show available targets
+```
 
 ### Requirements
 - Open Watcom C/C++ 1.9 or later
 - NASM (Netwide Assembler)
-- GNU Make compatible make utility
+- GNU Make (for cross-compilation) OR wmake (for native builds)
 
 ## Architecture
 
