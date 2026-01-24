@@ -8,20 +8,20 @@
  *
  */
 
-#include "../include/hardware.h"
-#include "../include/hwhal.h"
-#include "../include/nicctx.h"
-#include "../include/halerr.h"
-#include "../include/regacc.h"
-#include "../include/nic_init.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
-#include "../include/diag.h"
-#include "../include/3c509b.h"
-#include "../include/3c515.h"
-#include "../include/errhndl.h"
-#include "../include/bufaloc.h"
-#include "../include/nicbufp.h"
+#include "hardware.h"
+#include "hwhal.h"
+#include "nicctx.h"
+#include "halerr.h"
+#include "regacc.h"
+#include "nic_init.h"
+#include "logging.h"
+#include "memory.h"
+#include "diag.h"
+#include "3c509b.h"
+#include "3c515.h"
+#include "errhndl.h"
+#include "bufaloc.h"
+#include "nicbufp.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -108,19 +108,21 @@ static uint32_t hardware_calculate_recovery_timeout(int failure_type);
 
 /* Hardware initialization and cleanup */
 int hardware_init(void) {
+    int result;
+
     if (g_hardware_initialized) {
         return SUCCESS;
     }
-    
+
     LOG_INFO("Initializing hardware abstraction layer");
-    
+
     /* Initialize NIC array */
     memory_zero(g_nic_infos, sizeof(g_nic_infos));
     g_num_nics = 0;
-    
+
     /* Initialize statistics */
     hardware_reset_stats();
-    
+
     /* Initialize HAL vtables for assembly layer integration */
     result = hal_init_vtables();
     if (result != HAL_SUCCESS) {
@@ -150,7 +152,9 @@ int hardware_init(void) {
     }
     
     /* Create error handling contexts and register NICs with buffer system */
-    for (int i = 0; i < g_num_nics; i++) {
+    {
+        int i;
+        for (i = 0; i < g_num_nics; i++) {
         result = hardware_create_error_context(&g_nic_infos[i]);
         if (result != SUCCESS) {
             LOG_WARNING("Failed to create error context for NIC %d: %d", i, result);
@@ -161,8 +165,9 @@ int hardware_init(void) {
         if (result != SUCCESS) {
             LOG_WARNING("Failed to register NIC %d with buffer system: %d", i, result);
         }
+        }
     }
-    
+
     g_hardware_initialized = true;
     
     LOG_INFO("Hardware layer initialized with %d NICs and error handling", g_num_nics);
@@ -182,15 +187,18 @@ void hardware_cleanup(void) {
     nic_irq_uninstall();
     
     /* Cleanup all NICs */
-    for (int i = 0; i < g_num_nics; i++) {
+    {
+        int i;
+        for (i = 0; i < g_num_nics; i++) {
         /* Unregister from buffer system first */
         hardware_unregister_nic_from_buffer_system(i);
         
         if (g_nic_infos[i].ops && g_nic_infos[i].ops->cleanup) {
             g_nic_infos[i].ops->cleanup(&g_nic_infos[i]);
         }
+        }
     }
-    
+
     /* Cleanup NIC initialization system */
     nic_init_cleanup();
     
@@ -255,26 +263,28 @@ nic_info_t* hardware_get_nic(int index) {
 }
 
 nic_info_t* hardware_find_nic_by_type(nic_type_t type) {
-    for (int i = 0; i < g_num_nics; i++) {
+    int i;
+    for (i = 0; i < g_num_nics; i++) {
         if (g_nic_infos[i].type == type) {
             return &g_nic_infos[i];
         }
     }
-    
+
     return NULL;
 }
 
 nic_info_t* hardware_find_nic_by_mac(const uint8_t *mac) {
+    int i;
     if (!mac) {
         return NULL;
     }
-    
-    for (int i = 0; i < g_num_nics; i++) {
+
+    for (i = 0; i < g_num_nics; i++) {
         if (memory_compare(g_nic_infos[i].mac, mac, ETH_ALEN) == 0) {
             return &g_nic_infos[i];
         }
     }
-    
+
     return NULL;
 }
 
@@ -359,7 +369,8 @@ int hardware_receive_packet_from_nic(int nic_index, uint8_t *buffer, uint16_t *l
 
 /* Interrupt handling */
 void hardware_interrupt_handler(void) {
-    for (int i = 0; i < g_num_nics; i++) {
+    int i;
+    for (i = 0; i < g_num_nics; i++) {
         nic_info_t *nic = &g_nic_infos[i];
         
         if (!(nic->status & NIC_STATUS_ACTIVE) || !nic->ops) {
@@ -604,20 +615,23 @@ static int nic_3c509b_reset(struct nic_info *nic) {
     nic_delay_milliseconds(100);
     
     /* Wait for reset completion */
+    {
     int timeout = 1000;
+    uint16_t status;
     while (timeout-- > 0) {
-        uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
+        status = inw(nic->io_base + _3C509B_STATUS_REG);
         if (!(status & _3C509B_STATUS_CMD_BUSY)) {
             break;
         }
         nic_delay_milliseconds(1);
     }
-    
+
     if (timeout <= 0) {
         LOG_ERROR("3C509B reset timeout");
         return ERROR_TIMEOUT;
     }
-    
+    }
+
     return SUCCESS;
 }
 
@@ -686,20 +700,23 @@ static int nic_3c515_reset(struct nic_info *nic) {
     nic_delay_milliseconds(100);
     
     /* Wait for reset completion */
+    {
     int timeout = 1000;
+    uint16_t status;
     while (timeout-- > 0) {
-        uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+        status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
             break;
         }
         nic_delay_milliseconds(1);
     }
-    
+
     if (timeout <= 0) {
         LOG_ERROR("3C515-TX reset timeout");
         return ERROR_TIMEOUT;
     }
-    
+    }
+
     return SUCCESS;
 }
 
@@ -801,18 +818,20 @@ int hardware_add_nic(nic_info_t *nic) {
 }
 
 int hardware_remove_nic(int index) {
+    int i;
+    nic_info_t *nic;
     if (index < 0 || index >= g_num_nics) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Cleanup NIC */
-    nic_info_t *nic = &g_nic_infos[index];
+    nic = &g_nic_infos[index];
     if (nic->ops && nic->ops->cleanup) {
         nic->ops->cleanup(nic);
     }
-    
+
     /* Shift remaining NICs down */
-    for (int i = index; i < g_num_nics - 1; i++) {
+    for (i = index; i < g_num_nics - 1; i++) {
         memcpy(&g_nic_infos[i], &g_nic_infos[i + 1], sizeof(nic_info_t));
         g_nic_infos[i].index = i;
     }
@@ -832,11 +851,13 @@ int hardware_remove_nic(int index) {
 static int hardware_detect_failure(nic_info_t *nic) {
     uint32_t current_time;
     uint32_t error_rate;
-    
+    bool link_up;
+    uint32_t time_diff;
+
     if (!nic) {
         return HW_FAILURE_CRITICAL;
     }
-    
+
     current_time = get_system_timestamp_ms();
     
     /* Check if NIC is still present and responding */
@@ -846,7 +867,7 @@ static int hardware_detect_failure(nic_info_t *nic) {
     
     /* Check link status */
     if (nic->ops && nic->ops->get_link_status) {
-        bool link_up = nic->ops->get_link_status(nic);
+        link_up = nic->ops->get_link_status(nic);
         if (!link_up && nic->link_up) {
             /* Link just went down */
             nic->link_up = false;
@@ -872,7 +893,7 @@ static int hardware_detect_failure(nic_info_t *nic) {
     
     /* Check for interrupt storms */
     if (nic->interrupts > 0) {
-        uint32_t time_diff = current_time - g_error_recovery_state.last_error_time[nic->index];
+        time_diff = current_time - g_error_recovery_state.last_error_time[nic->index];
         if (time_diff < 100 && g_error_recovery_state.consecutive_errors[nic->index] > 10) {
             return HW_FAILURE_INTERRUPT_STORM;
         }
@@ -880,12 +901,13 @@ static int hardware_detect_failure(nic_info_t *nic) {
     
     /* Check for register corruption by attempting a basic read */
     if (nic->ops && nic->ops->self_test) {
-        int test_result = nic->ops->self_test(nic);
+        int test_result;
+        test_result = nic->ops->self_test(nic);
         if (test_result != SUCCESS) {
             return HW_FAILURE_REGISTER_CORRUPTION;
         }
     }
-    
+
     return HW_FAILURE_NONE;
 }
 
@@ -899,11 +921,11 @@ static int hardware_recover_nic(nic_info_t *nic, int failure_type) {
     int result;
     uint32_t timeout;
     int recovery_strategy;
-    
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_INFO("Attempting recovery of NIC %d from failure type %d", nic->index, failure_type);
     
     /* Update recovery statistics */
@@ -1041,27 +1063,29 @@ static int hardware_recover_nic(nic_info_t *nic, int failure_type) {
  */
 static int hardware_attempt_failover(int failed_nic_index) {
     int backup_nic_index = -1;
+    int i;
     nic_info_t *failed_nic, *backup_nic;
-    
+    nic_info_t *candidate;
+
     if (failed_nic_index < 0 || failed_nic_index >= g_num_nics) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (g_error_recovery_state.failover_in_progress) {
         LOG_WARNING("Failover already in progress, rejecting new failover request");
         return ERROR_BUSY;
     }
-    
+
     g_error_recovery_state.failover_in_progress = true;
     failed_nic = &g_nic_infos[failed_nic_index];
-    
+
     LOG_WARNING("Initiating failover from failed NIC %d", failed_nic_index);
-    
+
     /* Find a suitable backup NIC */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (i == failed_nic_index) continue;
-        
-        nic_info_t *candidate = &g_nic_infos[i];
+
+        candidate = &g_nic_infos[i];
         if ((candidate->status & NIC_STATUS_ACTIVE) && 
             (candidate->status & NIC_STATUS_LINK_UP) &&
             g_error_recovery_state.consecutive_errors[i] == 0) {
@@ -1094,8 +1118,9 @@ static int hardware_attempt_failover(int failed_nic_index) {
     
     /* Ensure backup NIC is fully operational */
     if (backup_nic->ops && backup_nic->ops->self_test) {
-        int result = backup_nic->ops->self_test(backup_nic);
-        if (result != SUCCESS) {
+        int test_result;
+        test_result = backup_nic->ops->self_test(backup_nic);
+        if (test_result != SUCCESS) {
             LOG_ERROR("Backup NIC %d failed self-test during failover", backup_nic_index);
             g_error_recovery_state.failover_in_progress = false;
             return ERROR_HARDWARE;
@@ -1155,15 +1180,17 @@ static int hardware_validate_recovery(nic_info_t *nic) {
     
     /* Run self-test if available */
     if (nic->ops && nic->ops->self_test) {
-        int result = nic->ops->self_test(nic);
-        if (result != SUCCESS) {
-            return result;
+        int test_result;
+        test_result = nic->ops->self_test(nic);
+        if (test_result != SUCCESS) {
+            return test_result;
         }
     }
-    
+
     /* Check link status */
     if (nic->ops && nic->ops->get_link_status) {
-        bool link_up = nic->ops->get_link_status(nic);
+        bool link_up;
+        link_up = nic->ops->get_link_status(nic);
         nic->link_up = link_up;
     }
     
@@ -1181,13 +1208,14 @@ static int hardware_validate_recovery(nic_info_t *nic) {
  * @param details Additional details
  */
 static void hardware_log_failure(nic_info_t *nic, int failure_type, const char* details) {
-    const char* failure_names[] = {
+    static const char* failure_names[] = {
         "None", "Link Lost", "TX Timeout", "RX Timeout", "FIFO Overrun",
-        "DMA Error", "Register Corruption", "Interrupt Storm", 
+        "DMA Error", "Register Corruption", "Interrupt Storm",
         "Memory Error", "Thermal", "Power", "Critical"
     };
-    
-    const char* failure_name = (failure_type >= 0 && failure_type <= HW_FAILURE_CRITICAL) ?
+    const char* failure_name;
+
+    failure_name = (failure_type >= 0 && failure_type <= HW_FAILURE_CRITICAL) ?
                               failure_names[failure_type] : "Unknown";
     
     LOG_ERROR("Hardware Failure - NIC %d: %s (%d) - %s", 
@@ -1274,19 +1302,21 @@ static int hardware_emergency_reset(nic_info_t *nic) {
     
     /* Force hardware reset */
     if (nic->ops && nic->ops->reset) {
-        int result = nic->ops->reset(nic);
+        int result;
+        result = nic->ops->reset(nic);
         if (result != SUCCESS) {
             LOG_ERROR("Emergency reset failed on NIC %d", nic->index);
             return result;
         }
     }
-    
+
     /* Wait longer for emergency reset */
     mdelay(500);
-    
+
     /* Attempt to re-initialize */
     if (nic->ops && nic->ops->init) {
-        int result = nic->ops->init(nic);
+        int result;
+        result = nic->ops->init(nic);
         if (result != SUCCESS) {
             LOG_ERROR("Post-emergency initialization failed on NIC %d", nic->index);
             return result;
@@ -1307,9 +1337,11 @@ static int hardware_emergency_reset(nic_info_t *nic) {
 int hardware_send_packet_with_recovery(nic_info_t *nic, const uint8_t *packet, uint16_t length) {
     int result;
     int retry_count = 0;
-    const int max_retries = 3;
+    int max_retries = 3;
     uint32_t start_time;
-    
+    int failure_type;
+    int detected_failure;
+
     if (!nic || !packet || length == 0) {
         hardware_update_packet_stats(true, false);
         return ERROR_INVALID_PARAM;
@@ -1324,7 +1356,7 @@ int hardware_send_packet_with_recovery(nic_info_t *nic, const uint8_t *packet, u
     
     while (retry_count <= max_retries) {
         /* Check for hardware failure before attempting send */
-        int failure_type = hardware_detect_failure(nic);
+        failure_type = hardware_detect_failure(nic);
         if (failure_type != HW_FAILURE_NONE) {
             LOG_WARNING("NIC %d failure detected (type %d) before send attempt", nic->index, failure_type);
             
@@ -1367,7 +1399,7 @@ int hardware_send_packet_with_recovery(nic_info_t *nic, const uint8_t *packet, u
         /* Determine if we should attempt recovery */
         if (result == ERROR_TIMEOUT || result == ERROR_IO || result == ERROR_HARDWARE) {
             /* Detect specific failure type based on error */
-            int detected_failure = (result == ERROR_TIMEOUT) ? HW_FAILURE_TX_TIMEOUT : 
+            detected_failure = (result == ERROR_TIMEOUT) ? HW_FAILURE_TX_TIMEOUT :
                           (result == ERROR_IO) ? HW_FAILURE_REGISTER_CORRUPTION :
                           HW_FAILURE_CRITICAL;
             
@@ -1419,9 +1451,12 @@ int hardware_send_packet_with_recovery(nic_info_t *nic, const uint8_t *packet, u
 int hardware_receive_packet_with_recovery(nic_info_t *nic, uint8_t *buffer, uint16_t *length) {
     int result;
     int retry_count = 0;
-    const int max_retries = 2;
+    int max_retries = 2;
     uint32_t start_time;
-    
+    int failure_type;
+    size_t recv_length;
+    int detected_failure;
+
     if (!nic || !buffer || !length) {
         hardware_update_packet_stats(false, false);
         return ERROR_INVALID_PARAM;
@@ -1436,7 +1471,7 @@ int hardware_receive_packet_with_recovery(nic_info_t *nic, uint8_t *buffer, uint
     
     while (retry_count <= max_retries) {
         /* Check for hardware failure before attempting receive */
-        int failure_type = hardware_detect_failure(nic);
+        failure_type = hardware_detect_failure(nic);
         if (failure_type != HW_FAILURE_NONE) {
             LOG_WARNING("NIC %d failure detected (type %d) during receive", nic->index, failure_type);
             
@@ -1462,7 +1497,7 @@ int hardware_receive_packet_with_recovery(nic_info_t *nic, uint8_t *buffer, uint
         }
         
         /* Attempt packet reception */
-        size_t recv_length = *length;
+        recv_length = *length;
         result = nic->ops->receive_packet(nic, buffer, &recv_length);
         *length = recv_length;
         
@@ -1486,7 +1521,7 @@ int hardware_receive_packet_with_recovery(nic_info_t *nic, uint8_t *buffer, uint
         
         /* Determine recovery strategy based on error type */
         if (result == ERROR_TIMEOUT || result == ERROR_IO) {
-            int detected_failure = (result == ERROR_TIMEOUT) ? HW_FAILURE_RX_TIMEOUT : HW_FAILURE_FIFO_OVERRUN;
+            detected_failure = (result == ERROR_TIMEOUT) ? HW_FAILURE_RX_TIMEOUT : HW_FAILURE_FIFO_OVERRUN;
             
             /* Attempt recovery if not too many consecutive errors */
             if (g_error_recovery_state.consecutive_errors[nic->index] < MAX_CONSECUTIVE_ERRORS) {
@@ -1532,31 +1567,33 @@ int hardware_receive_packet_with_recovery(nic_info_t *nic, uint8_t *buffer, uint
  * @return 0 on success, negative on error
  */
 int hardware_get_recovery_stats(hardware_recovery_stats_t *stats) {
+    int i;
+    int j;
     if (!stats) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     memset(stats, 0, sizeof(hardware_recovery_stats_t));
-    
+
     stats->total_failures = g_error_recovery_state.total_failures;
     stats->successful_recoveries = g_error_recovery_state.successful_recoveries;
     stats->failover_active = g_error_recovery_state.failover_in_progress;
     stats->primary_nic = g_error_recovery_state.primary_nic;
     stats->backup_nic = g_error_recovery_state.backup_nic;
-    
+
     /* Copy per-NIC statistics */
-    for (int i = 0; i < g_num_nics && i < MAX_NICS; i++) {
+    for (i = 0; i < g_num_nics && i < MAX_NICS; i++) {
         stats->nic_stats[i].consecutive_errors = g_error_recovery_state.consecutive_errors[i];
         stats->nic_stats[i].recovery_attempts = g_error_recovery_state.recovery_attempts[i];
         stats->nic_stats[i].last_error_time = g_error_recovery_state.last_error_time[i];
         stats->nic_stats[i].last_recovery_time = g_error_recovery_state.last_recovery_time[i];
-        
+
         /* Copy error counts by type */
-        for (int j = 0; j < 12; j++) {
+        for (j = 0; j < 12; j++) {
             stats->nic_stats[i].error_counts[j] = g_error_recovery_state.error_counts[i][j];
         }
     }
-    
+
     return SUCCESS;
 }
 
@@ -1567,20 +1604,23 @@ int hardware_get_recovery_stats(hardware_recovery_stats_t *stats) {
 int hardware_monitor_health(void) {
     int health_score = 0;
     int active_nics = 0;
-    
+    int i;
+    nic_info_t *nic;
+    int failure_type;
+
     if (!g_hardware_initialized) {
         return -100;  /* Critical: hardware not initialized */
     }
-    
-    for (int i = 0; i < g_num_nics; i++) {
-        nic_info_t *nic = &g_nic_infos[i];
-        
+
+    for (i = 0; i < g_num_nics; i++) {
+        nic = &g_nic_infos[i];
+
         if (!(nic->status & NIC_STATUS_PRESENT)) {
             continue;
         }
-        
+
         /* Check for hardware failures */
-        int failure_type = hardware_detect_failure(nic);
+        failure_type = hardware_detect_failure(nic);
         if (failure_type != HW_FAILURE_NONE) {
             if (hardware_is_critical_failure(failure_type)) {
                 LOG_ERROR("Critical failure detected on NIC %d: type %d", i, failure_type);
@@ -1605,16 +1645,18 @@ int hardware_monitor_health(void) {
             
             /* Check error rates */
             if (nic->tx_packets > 0) {
-                uint32_t tx_error_rate = (nic->tx_errors * 100) / nic->tx_packets;
+                uint32_t tx_error_rate;
+                tx_error_rate = (nic->tx_errors * 100) / nic->tx_packets;
                 if (tx_error_rate > 10) {
                     health_score -= 15;
                 } else if (tx_error_rate > 5) {
                     health_score -= 5;
                 }
             }
-            
+
             if (nic->rx_packets > 0) {
-                uint32_t rx_error_rate = (nic->rx_errors * 100) / nic->rx_packets;
+                uint32_t rx_error_rate;
+                rx_error_rate = (nic->rx_errors * 100) / nic->rx_packets;
                 if (rx_error_rate > 10) {
                     health_score -= 15;
                 } else if (rx_error_rate > 5) {
@@ -1652,19 +1694,20 @@ int hardware_monitor_health(void) {
  * @brief Print comprehensive hardware recovery statistics
  */
 void hardware_print_recovery_stats(void) {
+    int i;
     LOG_INFO("=== Hardware Recovery Statistics ===");
     LOG_INFO("Total Failures: %lu", g_error_recovery_state.total_failures);
     LOG_INFO("Successful Recoveries: %lu", g_error_recovery_state.successful_recoveries);
     LOG_INFO("Failover Active: %s", g_error_recovery_state.failover_in_progress ? "YES" : "NO");
-    
+
     if (g_error_recovery_state.primary_nic >= 0) {
         LOG_INFO("Primary NIC: %d", g_error_recovery_state.primary_nic);
     }
     if (g_error_recovery_state.backup_nic >= 0) {
         LOG_INFO("Backup NIC: %d", g_error_recovery_state.backup_nic);
     }
-    
-    for (int i = 0; i < g_num_nics; i++) {
+
+    for (i = 0; i < g_num_nics; i++) {
         if (g_error_recovery_state.consecutive_errors[i] > 0 || 
             g_error_recovery_state.recovery_attempts[i] > 0) {
             
@@ -1693,14 +1736,15 @@ void hardware_reset_recovery_stats(void) {
  */
 bool hardware_is_failure_resilient(void) {
     int active_nics = 0;
-    
-    for (int i = 0; i < g_num_nics; i++) {
-        if ((g_nic_infos[i].status & NIC_STATUS_ACTIVE) && 
+    int i;
+
+    for (i = 0; i < g_num_nics; i++) {
+        if ((g_nic_infos[i].status & NIC_STATUS_ACTIVE) &&
             (g_nic_infos[i].status & NIC_STATUS_LINK_UP)) {
             active_nics++;
         }
     }
-    
+
     return active_nics >= 2;
 }
 
@@ -1722,69 +1766,77 @@ int hardware_test_concurrent_operations(uint32_t test_duration_ms) {
         'C', 'O', 'N', 'C', 'U', 'R', 'R', 'E', 'N', 'T',  /* Payload */
         'T', 'E', 'S', 'T', 'P', 'K', 'T'
     };
-    
+
     uint32_t start_time = get_system_timestamp_ms();
     uint32_t tx_counts[MAX_NICS] = {0};
     uint32_t rx_counts[MAX_NICS] = {0};
     uint32_t errors[MAX_NICS] = {0};
     int active_nics = 0;
-    
+    int i;
+    int nic_idx;
+    nic_info_t *nic;
+    int tx_result;
+    uint8_t rx_buffer[256];
+    uint16_t rx_length;
+    int rx_result;
+    volatile int vi;
+    int failure;
+
     LOG_INFO("Starting concurrent multi-NIC operations test (duration: %lu ms)", test_duration_ms);
-    
+
     /* Count active NICs */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (hardware_is_nic_active(i)) {
             active_nics++;
         }
     }
-    
+
     if (active_nics < 2) {
         LOG_ERROR("Concurrent test requires at least 2 active NICs (found %d)", active_nics);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Main test loop - simulate concurrent operations */
     while ((get_system_timestamp_ms() - start_time) < test_duration_ms) {
-        for (int nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
+        for (nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
             if (!hardware_is_nic_active(nic_idx)) {
                 continue;
             }
-            
-            nic_info_t *nic = hardware_get_nic(nic_idx);
+
+            nic = hardware_get_nic(nic_idx);
             if (!nic) {
                 continue;
             }
-            
+
             /* Test concurrent TX operations */
-            if ((tx_counts[nic_idx] % 10) == nic_idx % 10) {  /* Staggered timing */
-                int tx_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
+            if ((tx_counts[nic_idx] % 10) == (uint32_t)(nic_idx % 10)) {  /* Staggered timing */
+                tx_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
                 if (tx_result == SUCCESS) {
                     tx_counts[nic_idx]++;
                 } else {
                     errors[nic_idx]++;
                 }
             }
-            
+
             /* Test concurrent RX operations */
-            uint8_t rx_buffer[256];
-            uint16_t rx_length = sizeof(rx_buffer);
-            int rx_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
+            rx_length = sizeof(rx_buffer);
+            rx_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
             if (rx_result == SUCCESS) {
                 rx_counts[nic_idx]++;
             } else if (rx_result != ERROR_NO_DATA) {
                 errors[nic_idx]++;
             }
-            
+
             /* Brief yield to simulate real concurrent access */
-            for (volatile int i = 0; i < 100; i++);
+            for (vi = 0; vi < 100; vi++);
         }
-        
+
         /* Check for any hardware failures during test */
-        for (int i = 0; i < g_num_nics; i++) {
+        for (i = 0; i < g_num_nics; i++) {
             if (hardware_is_nic_present(i)) {
-                int failure = hardware_detect_failure(&g_nic_infos[i]);
+                failure = hardware_detect_failure(&g_nic_infos[i]);
                 if (failure != HW_FAILURE_NONE) {
-                    LOG_WARNING("Hardware failure detected on NIC %d during concurrent test: type %d", 
+                    LOG_WARNING("Hardware failure detected on NIC %d during concurrent test: type %d",
                                i, failure);
                     errors[i]++;
                 }
@@ -1794,22 +1846,26 @@ int hardware_test_concurrent_operations(uint32_t test_duration_ms) {
     
     /* Report results */
     LOG_INFO("=== Concurrent Operations Test Results ===");
-    for (int i = 0; i < g_num_nics; i++) {
-        if (hardware_is_nic_present(i)) {
-            LOG_INFO("NIC %d: TX=%lu, RX=%lu, Errors=%lu", 
-                    i, tx_counts[i], rx_counts[i], errors[i]);
-            
-            /* Calculate error rates */
-            uint32_t total_ops = tx_counts[i] + rx_counts[i];
-            if (total_ops > 0) {
-                uint32_t error_rate = (errors[i] * 100) / total_ops;
-                if (error_rate > 5) {  /* > 5% error rate is concerning */
-                    LOG_WARNING("High error rate on NIC %d: %lu%%", i, error_rate);
+    {
+        uint32_t total_ops;
+        uint32_t error_rate;
+        for (i = 0; i < g_num_nics; i++) {
+            if (hardware_is_nic_present(i)) {
+                LOG_INFO("NIC %d: TX=%lu, RX=%lu, Errors=%lu",
+                        i, tx_counts[i], rx_counts[i], errors[i]);
+
+                /* Calculate error rates */
+                total_ops = tx_counts[i] + rx_counts[i];
+                if (total_ops > 0) {
+                    error_rate = (errors[i] * 100) / total_ops;
+                    if (error_rate > 5) {  /* > 5% error rate is concerning */
+                        LOG_WARNING("High error rate on NIC %d: %lu%%", i, error_rate);
+                    }
                 }
             }
         }
     }
-    
+
     LOG_INFO("Concurrent operations test completed successfully");
     return SUCCESS;
 }
@@ -1826,30 +1882,40 @@ int hardware_test_load_balancing(uint32_t num_packets) {
         0x08, 0x00,                          /* EtherType IP */
         'L', 'O', 'A', 'D', 'B', 'A', 'L', 'A', 'N', 'C', 'E'  /* Payload */
     };
-    
+
     uint32_t nic_packet_counts[MAX_NICS] = {0};
     uint32_t nic_error_counts[MAX_NICS] = {0};
     int active_nics = 0;
     int next_nic = 0;
-    
+    int i;
+    uint32_t pkt;
+    int attempts;
+    nic_info_t *nic;
+    int result;
+    volatile int vi;
+    uint32_t total_sent = 0;
+    uint32_t total_errors = 0;
+    uint32_t min_packets = UINT32_MAX;
+    uint32_t max_packets = 0;
+
     LOG_INFO("Starting load balancing test with %lu packets", num_packets);
-    
+
     /* Count active NICs */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (hardware_is_nic_active(i)) {
             active_nics++;
         }
     }
-    
+
     if (active_nics < 2) {
         LOG_ERROR("Load balancing test requires at least 2 active NICs (found %d)", active_nics);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Distribute packets across NICs using round-robin */
-    for (uint32_t pkt = 0; pkt < num_packets; pkt++) {
+    for (pkt = 0; pkt < num_packets; pkt++) {
         /* Find next active NIC */
-        int attempts = 0;
+        attempts = 0;
         while (attempts < g_num_nics) {
             if (hardware_is_nic_active(next_nic)) {
                 break;
@@ -1857,43 +1923,39 @@ int hardware_test_load_balancing(uint32_t num_packets) {
             next_nic = (next_nic + 1) % g_num_nics;
             attempts++;
         }
-        
+
         if (attempts >= g_num_nics) {
             LOG_ERROR("No active NICs found during load balancing test");
             return ERROR_HARDWARE;
         }
-        
+
         /* Modify packet to make it unique */
         test_packet[sizeof(test_packet) - 1] = (uint8_t)(pkt & 0xFF);
-        
+
         /* Send packet */
-        nic_info_t *nic = hardware_get_nic(next_nic);
-        int result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
-        
+        nic = hardware_get_nic(next_nic);
+        result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
+
         if (result == SUCCESS) {
             nic_packet_counts[next_nic]++;
         } else {
             nic_error_counts[next_nic]++;
             LOG_DEBUG("Packet %lu failed on NIC %d: %d", pkt, next_nic, result);
         }
-        
+
         /* Move to next NIC */
         next_nic = (next_nic + 1) % g_num_nics;
-        
+
         /* Brief delay to avoid overwhelming the NICs */
         if ((pkt % 100) == 0) {
-            for (volatile int i = 0; i < 1000; i++);
+            for (vi = 0; vi < 1000; vi++);
         }
     }
-    
+
     /* Analyze load distribution */
     LOG_INFO("=== Load Balancing Test Results ===");
-    uint32_t total_sent = 0;
-    uint32_t total_errors = 0;
-    uint32_t min_packets = UINT32_MAX;
-    uint32_t max_packets = 0;
-    
-    for (int i = 0; i < g_num_nics; i++) {
+
+    for (i = 0; i < g_num_nics; i++) {
         if (hardware_is_nic_present(i)) {
             LOG_INFO("NIC %d: Sent=%lu, Errors=%lu", i, nic_packet_counts[i], nic_error_counts[i]);
             
@@ -1909,23 +1971,27 @@ int hardware_test_load_balancing(uint32_t num_packets) {
     
     /* Calculate load balance quality */
     if (min_packets != UINT32_MAX && max_packets > 0) {
-        uint32_t balance_ratio = (min_packets * 100) / max_packets;
-        LOG_INFO("Load balance quality: %lu%% (min=%lu, max=%lu)", 
+        uint32_t balance_ratio;
+        balance_ratio = (min_packets * 100) / max_packets;
+        LOG_INFO("Load balance quality: %lu%% (min=%lu, max=%lu)",
                 balance_ratio, min_packets, max_packets);
-        
+
         if (balance_ratio < 80) {  /* Less than 80% balance */
             LOG_WARNING("Poor load balancing detected");
         }
     }
-    
-    uint32_t error_rate = (total_errors * 100) / num_packets;
+
+    {
+    uint32_t error_rate;
+    error_rate = (total_errors * 100) / num_packets;
     LOG_INFO("Overall: Sent=%lu/%lu, Error rate=%lu%%", total_sent, num_packets, error_rate);
     
     if (error_rate > 5) {
         LOG_ERROR("High error rate during load balancing test: %lu%%", error_rate);
         return ERROR_HARDWARE;
     }
-    
+    }
+
     LOG_INFO("Load balancing test completed successfully");
     return SUCCESS;
 }
@@ -1942,102 +2008,107 @@ int hardware_test_failover(int primary_nic) {
         0x08, 0x00,                          /* EtherType IP */
         'F', 'A', 'I', 'L', 'O', 'V', 'E', 'R', 'T', 'S', 'T'  /* Payload */
     };
-    
+
     nic_info_t *primary;
+    nic_info_t *backup;
     int backup_nic = -1;
     uint32_t original_status;
     uint32_t packets_before_failover = 0;
     uint32_t packets_after_failover = 0;
     uint32_t failover_time_ms;
     uint32_t start_time;
-    
+    int i;
+    int result;
+    int failover_result;
+    int recovery_result;
+
     LOG_INFO("Starting failover test with primary NIC %d", primary_nic);
-    
+
     /* Validate primary NIC */
     primary = hardware_get_nic(primary_nic);
     if (!primary || !hardware_is_nic_active(primary_nic)) {
         LOG_ERROR("Primary NIC %d is not active for failover test", primary_nic);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Find backup NIC */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (i != primary_nic && hardware_is_nic_active(i)) {
             backup_nic = i;
             break;
         }
     }
-    
+
     if (backup_nic == -1) {
         LOG_ERROR("No backup NIC available for failover test");
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_INFO("Using NIC %d as backup for failover test", backup_nic);
-    
+
     /* Test normal operation before failover */
     LOG_INFO("Testing normal operation before failover...");
-    for (int i = 0; i < 50; i++) {
-        int result = hardware_send_packet(primary, test_packet, sizeof(test_packet));
+    for (i = 0; i < 50; i++) {
+        result = hardware_send_packet(primary, test_packet, sizeof(test_packet));
         if (result == SUCCESS) {
             packets_before_failover++;
         }
     }
-    
+
     LOG_INFO("Sent %lu packets before failover", packets_before_failover);
-    
+
     /* Simulate primary NIC failure */
     LOG_INFO("Simulating primary NIC failure...");
     original_status = primary->status;
     start_time = get_system_timestamp_ms();
-    
+
     /* Mark primary NIC as failed */
     primary->status &= ~NIC_STATUS_ACTIVE;
     primary->status |= NIC_STATUS_ERROR;
-    
+
     /* Trigger failover */
-    int failover_result = hardware_attempt_failover(primary_nic);
+    failover_result = hardware_attempt_failover(primary_nic);
     failover_time_ms = get_system_timestamp_ms() - start_time;
-    
+
     if (failover_result != SUCCESS) {
         LOG_ERROR("Failover attempt failed: %d", failover_result);
         /* Restore original status */
         primary->status = original_status;
         return failover_result;
     }
-    
+
     LOG_INFO("Failover completed in %lu ms", failover_time_ms);
-    
+
     /* Test operation after failover using backup NIC */
     LOG_INFO("Testing operation after failover...");
-    nic_info_t *backup = hardware_get_nic(backup_nic);
-    
-    for (int i = 0; i < 50; i++) {
-        int result = hardware_send_packet(backup, test_packet, sizeof(test_packet));
+    backup = hardware_get_nic(backup_nic);
+
+    for (i = 0; i < 50; i++) {
+        result = hardware_send_packet(backup, test_packet, sizeof(test_packet));
         if (result == SUCCESS) {
             packets_after_failover++;
         }
     }
-    
+
     LOG_INFO("Sent %lu packets after failover", packets_after_failover);
-    
+
     /* Test primary NIC recovery */
     LOG_INFO("Testing primary NIC recovery...");
     primary->status = original_status;  /* Restore original status */
-    
+
     /* Validate recovery */
-    int recovery_result = hardware_validate_recovery(primary);
+    recovery_result = hardware_validate_recovery(primary);
     if (recovery_result == SUCCESS) {
         LOG_INFO("Primary NIC recovery successful");
     } else {
         LOG_WARNING("Primary NIC recovery failed: %d", recovery_result);
     }
-    
+
     /* Test failback to primary */
     if (recovery_result == SUCCESS) {
         LOG_INFO("Testing failback to primary NIC...");
-        for (int i = 0; i < 10; i++) {
-            int result = hardware_send_packet(primary, test_packet, sizeof(test_packet));
+        for (i = 0; i < 10; i++) {
+            result = hardware_send_packet(primary, test_packet, sizeof(test_packet));
             if (result != SUCCESS) {
                 LOG_WARNING("Failback test packet %d failed: %d", i, result);
             }
@@ -2078,11 +2149,21 @@ int hardware_test_resource_contention(uint32_t num_iterations) {
     uint32_t success_counts[MAX_NICS] = {0};
     uint32_t contention_errors[MAX_NICS] = {0};
     uint32_t timeout_errors[MAX_NICS] = {0};
-    
+    int i;
+    uint32_t iter;
+    uint32_t start_time;
+    int nic_idx;
+    nic_info_t *nic;
+    int result;
+    uint8_t rx_buffer[256];
+    uint16_t rx_length;
+    uint32_t iteration_time;
+    volatile int vi;
+
     LOG_INFO("Starting resource contention test (%lu iterations)", num_iterations);
-    
+
     /* Prepare unique test packets for each NIC */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (hardware_is_nic_present(i)) {
             /* Build unique packet for this NIC */
             memset(test_packets[i], 0, sizeof(test_packets[i]));
@@ -2098,25 +2179,25 @@ int hardware_test_resource_contention(uint32_t num_iterations) {
             sprintf((char*)&test_packets[i][14], \"CONTENTION_NIC_%d\", i);
         }
     }
-    
+
     /* Run contention test */
-    for (uint32_t iter = 0; iter < num_iterations; iter++) {
-        uint32_t start_time = get_system_timestamp_ms();
-        
+    for (iter = 0; iter < num_iterations; iter++) {
+        start_time = get_system_timestamp_ms();
+
         /* Attempt simultaneous operations on all NICs */
-        for (int nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
+        for (nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
             if (!hardware_is_nic_active(nic_idx)) {
                 continue;
             }
-            
-            nic_info_t *nic = hardware_get_nic(nic_idx);
+
+            nic = hardware_get_nic(nic_idx);
             if (!nic) {
                 continue;
             }
-            
+
             /* Try to send packet */
-            int result = hardware_send_packet(nic, test_packets[nic_idx], sizeof(test_packets[nic_idx]));
-            
+            result = hardware_send_packet(nic, test_packets[nic_idx], sizeof(test_packets[nic_idx]));
+
             if (result == SUCCESS) {
                 success_counts[nic_idx]++;
             } else if (result == ERROR_TIMEOUT) {
@@ -2124,70 +2205,76 @@ int hardware_test_resource_contention(uint32_t num_iterations) {
             } else if (result == ERROR_BUSY) {
                 contention_errors[nic_idx]++;
             }
-            
+
             /* Also test receive operations for contention */
-            uint8_t rx_buffer[256];
-            uint16_t rx_length = sizeof(rx_buffer);
+            rx_length = sizeof(rx_buffer);
             hardware_receive_packet(nic, rx_buffer, &rx_length);
         }
-        
-        uint32_t iteration_time = get_system_timestamp_ms() - start_time;
+
+        iteration_time = get_system_timestamp_ms() - start_time;
         if (iteration_time > 100) {  /* > 100ms for one iteration is slow */
             LOG_DEBUG("Slow iteration %lu: %lu ms", iter, iteration_time);
         }
-        
+
         /* Brief delay between iterations */
         if ((iter % 100) == 0) {
-            for (volatile int i = 0; i < 5000; i++);
+            for (vi = 0; vi < 5000; vi++);
         }
     }
     
     /* Analyze contention results */
     LOG_INFO("=== Resource Contention Test Results ===");
-    uint32_t total_attempts = 0;
-    uint32_t total_successes = 0;
-    uint32_t total_contentions = 0;
-    uint32_t total_timeouts = 0;
-    
-    for (int i = 0; i < g_num_nics; i++) {
-        if (hardware_is_nic_present(i)) {
-            uint32_t attempts = success_counts[i] + contention_errors[i] + timeout_errors[i];
-            
-            LOG_INFO("NIC %d: Success=%lu, Contention=%lu, Timeout=%lu (of %lu attempts)",
-                    i, success_counts[i], contention_errors[i], timeout_errors[i], attempts);
-            
-            if (attempts > 0) {
-                uint32_t success_rate = (success_counts[i] * 100) / attempts;
-                uint32_t contention_rate = (contention_errors[i] * 100) / attempts;
-                
-                LOG_INFO("  Success rate: %lu%%, Contention rate: %lu%%", 
-                        success_rate, contention_rate);
-                
-                if (contention_rate > 10) {  /* > 10% contention */
-                    LOG_WARNING("High contention rate on NIC %d: %lu%%", i, contention_rate);
+    {
+        uint32_t total_attempts = 0;
+        uint32_t total_successes = 0;
+        uint32_t total_contentions = 0;
+        uint32_t total_timeouts = 0;
+        uint32_t attempts;
+        uint32_t success_rate;
+        uint32_t contention_rate;
+
+        for (i = 0; i < g_num_nics; i++) {
+            if (hardware_is_nic_present(i)) {
+                attempts = success_counts[i] + contention_errors[i] + timeout_errors[i];
+
+                LOG_INFO("NIC %d: Success=%lu, Contention=%lu, Timeout=%lu (of %lu attempts)",
+                        i, success_counts[i], contention_errors[i], timeout_errors[i], attempts);
+
+                if (attempts > 0) {
+                    success_rate = (success_counts[i] * 100) / attempts;
+                    contention_rate = (contention_errors[i] * 100) / attempts;
+
+                    LOG_INFO("  Success rate: %lu%%, Contention rate: %lu%%",
+                            success_rate, contention_rate);
+
+                    if (contention_rate > 10) {  /* > 10% contention */
+                        LOG_WARNING("High contention rate on NIC %d: %lu%%", i, contention_rate);
+                    }
                 }
+
+                total_attempts += attempts;
+                total_successes += success_counts[i];
+                total_contentions += contention_errors[i];
+                total_timeouts += timeout_errors[i];
             }
-            
-            total_attempts += attempts;
-            total_successes += success_counts[i];
-            total_contentions += contention_errors[i];
-            total_timeouts += timeout_errors[i];
         }
-    }
     
     if (total_attempts > 0) {
-        uint32_t overall_success_rate = (total_successes * 100) / total_attempts;
-        uint32_t overall_contention_rate = (total_contentions * 100) / total_attempts;
-        
+        uint32_t overall_success_rate;
+        uint32_t overall_contention_rate;
+        overall_success_rate = (total_successes * 100) / total_attempts;
+        overall_contention_rate = (total_contentions * 100) / total_attempts;
+
         LOG_INFO("Overall: Success rate=%lu%%, Contention rate=%lu%%",
                 overall_success_rate, overall_contention_rate);
-        
+
         if (overall_contention_rate > 15) {
             LOG_ERROR("Excessive resource contention detected: %lu%%", overall_contention_rate);
             return ERROR_HARDWARE;
         }
     }
-    
+    }
+
     LOG_INFO("Resource contention test completed successfully");
     return SUCCESS;
 }
@@ -2205,9 +2292,23 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
     uint32_t error_counts[MAX_NICS] = {0};
     uint32_t total_bytes_tx = 0;
     uint32_t total_bytes_rx = 0;
-    
+    int nic_idx;
+    nic_info_t *nic;
+    int burst;
+    int tx_result;
+    uint8_t rx_buffer[1518];
+    uint16_t rx_length;
+    int rx_result;
+    uint32_t actual_duration;
+    uint32_t total_tx_packets = 0;
+    uint32_t total_rx_packets = 0;
+    uint32_t total_errors = 0;
+    int i;
+    uint32_t nic_tx_rate;
+    uint32_t nic_rx_rate;
+
     LOG_INFO("Starting multi-NIC performance test (duration: %lu ms)", test_duration_ms);
-    
+
     /* Prepare maximum-size test packet */
     memset(test_packet, 0xAA, sizeof(test_packet));
     /* Set Ethernet header */
@@ -2215,24 +2316,24 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
     test_packet[6] = 0x00; test_packet[7] = 0x20; test_packet[8] = 0xAF;
     test_packet[9] = 0x12; test_packet[10] = 0x34; test_packet[11] = 0x56;  /* Source */
     test_packet[12] = 0x08; test_packet[13] = 0x00;  /* EtherType IP */
-    
+
     start_time = get_system_timestamp_ms();
-    
+
     /* Performance test loop */
     while ((get_system_timestamp_ms() - start_time) < test_duration_ms) {
-        for (int nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
+        for (nic_idx = 0; nic_idx < g_num_nics; nic_idx++) {
             if (!hardware_is_nic_active(nic_idx)) {
                 continue;
             }
-            
-            nic_info_t *nic = hardware_get_nic(nic_idx);
+
+            nic = hardware_get_nic(nic_idx);
             if (!nic) {
                 continue;
             }
-            
+
             /* High-rate transmission test */
-            for (int burst = 0; burst < 5; burst++) {
-                int tx_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
+            for (burst = 0; burst < 5; burst++) {
+                tx_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
                 if (tx_result == SUCCESS) {
                     tx_counts[nic_idx]++;
                     total_bytes_tx += sizeof(test_packet);
@@ -2240,11 +2341,10 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
                     error_counts[nic_idx]++;
                 }
             }
-            
+
             /* Reception test */
-            uint8_t rx_buffer[1518];
-            uint16_t rx_length = sizeof(rx_buffer);
-            int rx_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
+            rx_length = sizeof(rx_buffer);
+            rx_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
             if (rx_result == SUCCESS) {
                 rx_counts[nic_idx]++;
                 total_bytes_rx += rx_length;
@@ -2253,25 +2353,21 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
             }
         }
     }
-    
-    uint32_t actual_duration = get_system_timestamp_ms() - start_time;
-    
+
+    actual_duration = get_system_timestamp_ms() - start_time;
+
     /* Calculate and report performance metrics */
     LOG_INFO("=== Multi-NIC Performance Test Results ===");
     LOG_INFO("Test duration: %lu ms", actual_duration);
-    
-    uint32_t total_tx_packets = 0;
-    uint32_t total_rx_packets = 0;
-    uint32_t total_errors = 0;
-    
-    for (int i = 0; i < g_num_nics; i++) {
+
+    for (i = 0; i < g_num_nics; i++) {
         if (hardware_is_nic_present(i)) {
-            uint32_t nic_tx_rate = (tx_counts[i] * 1000) / actual_duration;  /* packets/sec */
-            uint32_t nic_rx_rate = (rx_counts[i] * 1000) / actual_duration;  /* packets/sec */
-            
+            nic_tx_rate = (tx_counts[i] * 1000) / actual_duration;  /* packets/sec */
+            nic_rx_rate = (rx_counts[i] * 1000) / actual_duration;  /* packets/sec */
+
             LOG_INFO("NIC %d: TX=%lu pps, RX=%lu pps, Errors=%lu",
                     i, nic_tx_rate, nic_rx_rate, error_counts[i]);
-            
+
             total_tx_packets += tx_counts[i];
             total_rx_packets += rx_counts[i];
             total_errors += error_counts[i];
@@ -2279,32 +2375,42 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
     }
     
     /* Overall performance metrics */
-    uint32_t total_tx_rate = (total_tx_packets * 1000) / actual_duration;
-    uint32_t total_rx_rate = (total_rx_packets * 1000) / actual_duration;
-    uint32_t tx_throughput_kbps = (total_bytes_tx * 8) / actual_duration;  /* Kbps */
-    uint32_t rx_throughput_kbps = (total_bytes_rx * 8) / actual_duration;  /* Kbps */
-    
+    {
+    uint32_t total_tx_rate;
+    uint32_t total_rx_rate;
+    uint32_t tx_throughput_kbps;
+    uint32_t rx_throughput_kbps;
+    uint32_t expected_min_tx_rate;
+    uint32_t total_operations;
+
+    total_tx_rate = (total_tx_packets * 1000) / actual_duration;
+    total_rx_rate = (total_rx_packets * 1000) / actual_duration;
+    tx_throughput_kbps = (total_bytes_tx * 8) / actual_duration;  /* Kbps */
+    rx_throughput_kbps = (total_bytes_rx * 8) / actual_duration;  /* Kbps */
+
     LOG_INFO("=== Overall Performance ===");
     LOG_INFO("TX Rate: %lu packets/sec (%lu Kbps)", total_tx_rate, tx_throughput_kbps);
     LOG_INFO("RX Rate: %lu packets/sec (%lu Kbps)", total_rx_rate, rx_throughput_kbps);
     LOG_INFO("Total errors: %lu", total_errors);
-    
+
     /* Performance validation */
-    uint32_t expected_min_tx_rate = 1000;  /* Minimum 1000 pps expected */
+    expected_min_tx_rate = 1000;  /* Minimum 1000 pps expected */
     if (total_tx_rate < expected_min_tx_rate) {
-        LOG_WARNING("Low TX performance: %lu pps (expected > %lu pps)", 
+        LOG_WARNING("Low TX performance: %lu pps (expected > %lu pps)",
                    total_tx_rate, expected_min_tx_rate);
     }
-    
-    uint32_t total_operations = total_tx_packets + total_rx_packets;
+
+    total_operations = total_tx_packets + total_rx_packets;
     if (total_operations > 0) {
-        uint32_t error_rate = (total_errors * 100) / total_operations;
+        uint32_t error_rate;
+        error_rate = (total_errors * 100) / total_operations;
         if (error_rate > 3) {  /* > 3% error rate */
             LOG_ERROR("High error rate during performance test: %lu%%", error_rate);
             return ERROR_HARDWARE;
         }
     }
-    
+    }
+
     LOG_INFO("Multi-NIC performance test completed successfully");
     return SUCCESS;
 }
@@ -2408,15 +2514,17 @@ int hardware_run_multi_nic_tests(void) {
  * @return 0 on success, negative on error
  */
 int hardware_init_error_handling(void) {
+    int result;
+
     LOG_INFO("Initializing hardware error handling integration");
-    
+
     /* Initialize the global error handling system */
-    int result = error_handling_init();
+    result = error_handling_init();
     if (result != SUCCESS) {
         LOG_ERROR("Failed to initialize error handling system: %d", result);
         return result;
     }
-    
+
     LOG_INFO("Hardware error handling integration initialized successfully");
     return SUCCESS;
 }
@@ -2425,18 +2533,19 @@ int hardware_init_error_handling(void) {
  * @brief Cleanup error handling system for hardware layer
  */
 void hardware_cleanup_error_handling(void) {
+    int i;
     LOG_INFO("Cleaning up hardware error handling integration");
-    
+
     /* Cleanup error contexts for all NICs */
-    for (int i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         if (g_nic_infos[i].error_context) {
             hardware_destroy_error_context(&g_nic_infos[i]);
         }
     }
-    
+
     /* Cleanup global error handling system */
     error_handling_cleanup();
-    
+
     LOG_INFO("Hardware error handling integration cleanup completed");
 }
 
@@ -2649,17 +2758,19 @@ void hardware_print_error_statistics(nic_info_t *nic) {
  * @brief Print global error summary for all NICs
  */
 void hardware_print_global_error_summary(void) {
-    printf("\n=== Global Hardware Error Summary ===\n");
-    printf("Total NICs: %d\n", g_num_nics);
-    
     uint32_t total_errors = 0;
     uint32_t total_recoveries = 0;
     uint32_t disabled_nics = 0;
-    
-    for (int i = 0; i < g_num_nics; i++) {
-        nic_info_t *nic = &g_nic_infos[i];
+    int i;
+    nic_info_t *nic;
+
+    printf("\n=== Global Hardware Error Summary ===\n");
+    printf("Total NICs: %d\n", g_num_nics);
+
+    for (i = 0; i < g_num_nics; i++) {
+        nic = &g_nic_infos[i];
         if (nic->error_context) {
-            total_errors += nic->error_context->error_stats.rx_errors + 
+            total_errors += nic->error_context->error_stats.rx_errors +
                            nic->error_context->error_stats.tx_errors;
             total_recoveries += nic->error_context->error_stats.recoveries_attempted;
             if (nic->error_context->adapter_disabled) {
@@ -2667,14 +2778,14 @@ void hardware_print_global_error_summary(void) {
             }
         }
     }
-    
+
     printf("Total Errors: %lu\n", total_errors);
     printf("Total Recovery Attempts: %lu\n", total_recoveries);
     printf("Disabled NICs: %lu\n", disabled_nics);
-    
+
     /* Print global error handling statistics */
     print_global_error_summary();
-    
+
     printf("System Health: %d%%\n", hardware_get_system_health_status());
 }
 
@@ -2693,17 +2804,21 @@ int hardware_get_system_health_status(void) {
  * @return Number of bytes written
  */
 int hardware_export_error_log(char *buffer, size_t buffer_size) {
+    error_log_entry_t entries[100];
+    int num_entries;
+    size_t written = 0;
+    int i;
+    int len;
+
     if (!buffer || buffer_size == 0) {
         return 0;
     }
-    
+
     /* Read error log entries */
-    error_log_entry_t entries[100];
-    int num_entries = read_error_log_entries(entries, 100);
-    
-    size_t written = 0;
-    for (int i = 0; i < num_entries && written < buffer_size - 1; i++) {
-        int len = snprintf(buffer + written, buffer_size - written,
+    num_entries = read_error_log_entries(entries, 100);
+
+    for (i = 0; i < num_entries && written < buffer_size - 1; i++) {
+        len = snprintf(buffer + written, buffer_size - written,
                           "[%lu] %s NIC%d: %s\n",
                           entries[i].timestamp,
                           error_severity_to_string(entries[i].severity),
@@ -2713,7 +2828,7 @@ int hardware_export_error_log(char *buffer, size_t buffer_size) {
             written += len;
         }
     }
-    
+
     return (int)written;
 }
 
@@ -2980,13 +3095,17 @@ int hardware_rebalance_buffer_resources(void) {
  * @brief Print comprehensive hardware and buffer statistics
  */
 void hardware_print_comprehensive_stats(void) {
+    int i;
+    nic_info_t* nic;
+    buffer_pool_stats_t nic_stats;
+
     if (!g_hardware_initialized) {
         LOG_INFO("Hardware layer not initialized");
         return;
     }
-    
+
     LOG_INFO("=== Hardware Layer Comprehensive Statistics ===");
-    
+
     /* Print basic hardware statistics */
     LOG_INFO("Hardware Stats:");
     LOG_INFO("  Active NICs: %d", g_num_nics);
@@ -2998,24 +3117,23 @@ void hardware_print_comprehensive_stats(void) {
              g_hardware_stats.packets_received,
              g_hardware_stats.successful_receives,
              g_hardware_stats.packets_received - g_hardware_stats.successful_receives);
-    
+
     /* Print per-NIC information */
-    for (int i = 0; i < g_num_nics; i++) {
-        nic_info_t* nic = &g_nic_infos[i];
+    for (i = 0; i < g_num_nics; i++) {
+        nic = &g_nic_infos[i];
         LOG_INFO("NIC %d (%s): Status 0x%X, Type %d, I/O 0x%X, IRQ %d",
-                 i, nic->type == NIC_TYPE_3C509B ? "3C509B" : 
+                 i, nic->type == NIC_TYPE_3C509B ? "3C509B" :
                     (nic->type == NIC_TYPE_3C515_TX ? "3C515-TX" : "Unknown"),
                  nic->status, nic->type, nic->io_base, nic->irq);
-        
+
         /* Print buffer statistics for this NIC */
-        buffer_pool_stats_t nic_stats;
         if (hardware_get_nic_buffer_stats(i, &nic_stats) == SUCCESS) {
             LOG_INFO("  Buffer Stats: %lu allocs, %lu failures, %lu current, %lu peak",
                      nic_stats.total_allocations, nic_stats.allocation_failures,
                      nic_stats.current_allocated, nic_stats.peak_allocated);
         }
     }
-    
+
     /* Print comprehensive buffer statistics */
     buffer_print_comprehensive_stats();
 }
@@ -3024,43 +3142,47 @@ void hardware_print_comprehensive_stats(void) {
  * @brief Monitor hardware and buffer usage periodically
  */
 void hardware_monitor_and_maintain(void) {
+    static uint32_t last_monitor_time = 0;
+    uint32_t current_time;
+    int i;
+    nic_info_t* nic;
+    buffer_pool_stats_t stats;
+
     if (!g_hardware_initialized) {
         return;
     }
-    
-    static uint32_t last_monitor_time = 0;
-    uint32_t current_time = get_system_timestamp_ms();
-    
+
+    current_time = get_system_timestamp_ms();
+
     /* Monitor every 30 seconds */
     if (current_time - last_monitor_time < 30000) {
         return;
     }
-    
+
     LOG_DEBUG("Hardware maintenance and monitoring cycle");
-    
+
     /* Monitor buffer usage and rebalance if needed */
     buffer_monitor_and_rebalance();
-    
+
     /* Check for any NICs that need recovery */
-    for (int i = 0; i < g_num_nics; i++) {
-        nic_info_t* nic = &g_nic_infos[i];
-        
+    for (i = 0; i < g_num_nics; i++) {
+        nic = &g_nic_infos[i];
+
         /* Basic health check */
         if (nic->status & NIC_STATUS_ACTIVE) {
             /* Check for buffer allocation failures */
-            buffer_pool_stats_t stats;
             if (hardware_get_nic_buffer_stats(i, &stats) == SUCCESS) {
                 if (stats.allocation_failures > 0) {
-                    LOG_WARNING("NIC %d has %lu buffer allocation failures", 
+                    LOG_WARNING("NIC %d has %lu buffer allocation failures",
                                i, stats.allocation_failures);
-                    
+
                     /* Clear failure count after reporting */
                     /* Note: In a real implementation, we might want to trigger recovery */
                 }
             }
         }
     }
-    
+
     last_monitor_time = current_time;
 }
 
@@ -3183,21 +3305,24 @@ const char* hal_error_to_string(int error_code) {
  * @param count Number of devices detected
  */
 void hardware_set_pnp_detection_results(const nic_detect_info_t *results, int count) {
+    int i;
+    const char* type_name;
+
     if (!results || count <= 0 || count > MAX_NICS) {
         LOG_WARNING("Invalid PnP detection results: results=%p, count=%d", results, count);
         g_pnp_detection_count = 0;
         return;
     }
-    
+
     /* Store PnP detection results for later use during hardware initialization */
     memory_copy(g_pnp_detection_results, results, count * sizeof(nic_detect_info_t));
     g_pnp_detection_count = count;
-    
+
     LOG_DEBUG("Stored %d PnP detection results for hardware integration", count);
-    
+
     /* Log each detected device for debugging */
-    for (int i = 0; i < count; i++) {
-        const char* type_name = (results[i].type == NIC_TYPE_3C509B) ? "3C509B" : 
+    for (i = 0; i < count; i++) {
+        type_name = (results[i].type == NIC_TYPE_3C509B) ? "3C509B" :
                                (results[i].type == NIC_TYPE_3C515_TX) ? "3C515-TX" : "Unknown";
         LOG_DEBUG("PnP Device %d: %s at I/O 0x%X, IRQ %d", i, type_name,
                  results[i].io_base, results[i].irq);
@@ -3451,35 +3576,37 @@ static int hardware_recover_nic(nic_info_t *nic, int failure_type) {
  * @param failed_nic_index Index of failed NIC
  * @return SUCCESS if failover successful, error code otherwise
  */
-static int hardware_attempt_failover(int failed_nic_index) {
+static int hardware_attempt_failover_recovery(int failed_nic_index) {
+    int backup_nic = -1;
+    int i;
+
     if (failed_nic_index >= MAX_NICS) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_WARNING("Attempting failover from NIC %d", failed_nic_index);
-    
+
     /* Find a suitable backup NIC */
-    int backup_nic = -1;
-    for (int i = 0; i < g_num_nics; i++) {
-        if (i != failed_nic_index && 
+    for (i = 0; i < g_num_nics; i++) {
+        if (i != failed_nic_index &&
             (g_nic_infos[i].status & NIC_STATUS_ACTIVE) &&
             !(g_nic_infos[i].status & NIC_STATUS_ERROR)) {
             backup_nic = i;
             break;
         }
     }
-    
+
     if (backup_nic == -1) {
         LOG_ERROR("No suitable backup NIC found for failover");
         return ERROR_NOT_FOUND;
     }
-    
+
     /* Update failover state */
     g_error_recovery_state.failover_in_progress = true;
     g_error_recovery_state.primary_nic = backup_nic;
     g_error_recovery_state.backup_nic = failed_nic_index;
     g_error_recovery_state.failovers++;
-    
+
     /* Disable failed NIC */
     g_nic_infos[failed_nic_index].status |= NIC_STATUS_ERROR;
     g_nic_infos[failed_nic_index].status &= ~NIC_STATUS_ACTIVE;
@@ -3593,26 +3720,28 @@ static void hardware_log_failure(nic_info_t *nic, int failure_type, const char* 
  * @return SUCCESS if reset successful, error code otherwise
  */
 static int hardware_emergency_reset(nic_info_t *nic) {
+    int i;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_WARNING("Performing emergency reset on NIC %d", nic->index);
-    
+
     /* Perform low-level hardware reset */
     /* This would involve direct register manipulation */
-    
+
     /* Wait for reset to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         /* Delay and check for reset completion */
         /* Implementation would be NIC-specific */
     }
-    
+
     /* Reinitialize basic functionality */
     if (nic->ops && nic->ops->init) {
         return nic->ops->init(nic);
     }
-    
+
     return SUCCESS;
 }
 
@@ -3823,7 +3952,8 @@ int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket)
 /* Find NIC by I/O and IRQ */
 int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq)
 {
-    for (int i = 0; i < g_num_nics; i++) {
+    int i;
+    for (i = 0; i < g_num_nics; i++) {
         if (g_nics[i].io_base == io_base && g_nics[i].irq == irq) return i;
     }
     return -1;
@@ -3832,13 +3962,15 @@ int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq)
 /* Detach and remove NIC by index */
 int hardware_detach_nic_by_index(int index)
 {
+    int i;
+    nic_info_t *nic;
     if (index < 0 || index >= g_num_nics) return -1;
-    nic_info_t *nic = &g_nics[index];
+    nic = &g_nics[index];
     LOG_INFO("Detaching NIC #%d (IO=0x%04X IRQ=%u)", index, nic->io_base, nic->irq);
     if (nic->ops && nic->ops->cleanup) nic->ops->cleanup(nic);
     buffer_unregister_nic(index);
     /* Compact array */
-    for (int i = index; i < g_num_nics - 1; i++) {
+    for (i = index; i < g_num_nics - 1; i++) {
         g_nics[i] = g_nics[i + 1];
     }
     memset(&g_nics[g_num_nics - 1], 0, sizeof(nic_info_t));

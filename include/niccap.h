@@ -20,6 +20,7 @@ extern "C" {
 
 #include "common.h"
 #include "nic_defs.h"
+#include "stats.h"      /* For canonical nic_stats_t used in vtable */
 
 /* Forward declarations */
 struct nic_context;
@@ -141,12 +142,16 @@ typedef struct nic_info_entry {
 } nic_info_entry_t;
 
 /**
- * @brief NIC Context Structure
- * 
+ * @brief NIC Capability Context Structure
+ *
  * Runtime context for a NIC instance, containing both static information
  * from the database and dynamic runtime state.
+ *
+ * Note: Renamed from nic_context to nic_cap_context to avoid conflict
+ * with the primary nic_context_t defined in nicctx.h
  */
-typedef struct nic_context {
+#ifndef NIC_CONTEXT_T_DEFINED
+typedef struct nic_cap_context {
     /* Database reference */
     const nic_info_entry_t *info;       /* Pointer to static info */
     
@@ -181,14 +186,19 @@ typedef struct nic_context {
     void *private_data;                  /* NIC-specific private data */
     uint32_t flags;                      /* Driver flags */
     uint8_t state;                       /* Current state */
-} nic_context_t;
+} nic_cap_context_t;
+#endif /* NIC_CONTEXT_T_DEFINED */
 
 /**
- * @brief NIC Statistics Structure
- * 
+ * @brief NIC Capability Statistics Structure
+ *
  * Comprehensive statistics structure for capability-aware reporting.
+ *
+ * Note: Renamed from nic_stats to nic_cap_stats to avoid conflict
+ * with the primary nic_stats_t defined in stats.h
  */
-typedef struct nic_stats {
+#ifndef NIC_STATS_T_DEFINED
+typedef struct nic_cap_stats {
     /* Basic counters */
     uint32_t tx_packets;
     uint32_t rx_packets;
@@ -224,7 +234,8 @@ typedef struct nic_stats {
     uint32_t avg_latency_us;             /* Average packet latency */
     uint32_t peak_throughput_kbps;       /* Peak throughput */
     uint32_t utilization_percent;        /* Link utilization */
-} nic_stats_t;
+} nic_cap_stats_t;
+#endif /* NIC_STATS_T_DEFINED */
 
 /* ========================================================================== */
 /* CAPABILITY QUERY FUNCTIONS                                                */

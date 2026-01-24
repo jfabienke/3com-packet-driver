@@ -8,11 +8,11 @@
  *
  */
 
-#include "../include/arp.h"
-#include "../include/pktops.h"
-#include "../include/hardware.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
+#include "arp.h"
+#include "pktops.h"
+#include "hardware.h"
+#include "logging.h"
+#include "memory.h"
 
 /* Global ARP state */
 arp_cache_t g_arp_cache;
@@ -33,12 +33,14 @@ static void arp_update_cache_stats(bool hit);
 
 /* ARP initialization and cleanup */
 int arp_init(void) {
+    int result;
+
     if (g_arp_initialized) {
         return SUCCESS;
     }
-    
+
     /* Initialize ARP cache */
-    int result = arp_cache_init(&g_arp_cache, ARP_TABLE_SIZE);
+    result = arp_cache_init(&g_arp_cache, ARP_TABLE_SIZE);
     if (result != SUCCESS) {
         return result;
     }
@@ -92,26 +94,28 @@ bool arp_is_enabled(void) {
 
 /* ARP cache management */
 int arp_cache_init(arp_cache_t *cache, uint16_t max_entries) {
+    int i;
+
     if (!cache) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Allocate entry pool */
     cache->entries = (arp_cache_entry_t*)memory_alloc(
-        sizeof(arp_cache_entry_t) * max_entries, 
+        sizeof(arp_cache_entry_t) * max_entries,
         MEM_TYPE_DRIVER_DATA, 0);
     if (!cache->entries) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Initialize hash table */
-    for (int i = 0; i < ARP_HASH_SIZE; i++) {
+    for (i = 0; i < ARP_HASH_SIZE; i++) {
         cache->hash_table[i] = NULL;
     }
-    
+
     /* Initialize free list */
     cache->free_list = NULL;
-    for (int i = 0; i < max_entries; i++) {
+    for (i = 0; i < max_entries; i++) {
         arp_cache_entry_t *entry = &cache->entries[i];
         memory_zero(entry, sizeof(arp_cache_entry_t));
         entry->state = ARP_STATE_FREE;
@@ -131,18 +135,20 @@ int arp_cache_init(arp_cache_t *cache, uint16_t max_entries) {
 }
 
 void arp_cache_cleanup(arp_cache_t *cache) {
+    int i;
+
     if (!cache || !cache->initialized) {
         return;
     }
-    
+
     /* Free entry pool */
     if (cache->entries) {
         memory_free(cache->entries);
         cache->entries = NULL;
     }
-    
+
     /* Clear hash table */
-    for (int i = 0; i < ARP_HASH_SIZE; i++) {
+    for (i = 0; i < ARP_HASH_SIZE; i++) {
         cache->hash_table[i] = NULL;
     }
     
@@ -152,17 +158,20 @@ void arp_cache_cleanup(arp_cache_t *cache) {
 }
 
 arp_cache_entry_t* arp_cache_lookup(const ip_addr_t *ip) {
+    uint16_t hash;
+    arp_cache_entry_t *entry;
+
     if (!ip || !arp_is_enabled()) {
         return NULL;
     }
-    
+
     g_arp_cache.total_lookups++;
-    
+
     /* Calculate hash */
-    uint16_t hash = arp_calculate_hash(ip);
-    
+    hash = arp_calculate_hash(ip);
+
     /* Search hash bucket */
-    arp_cache_entry_t *entry = g_arp_cache.hash_table[hash];
+    entry = g_arp_cache.hash_table[hash];
     while (entry) {
         if (entry->state != ARP_STATE_FREE && ip_addr_equals(&entry->ip, ip)) {
             g_arp_cache.successful_lookups++;
@@ -177,12 +186,15 @@ arp_cache_entry_t* arp_cache_lookup(const ip_addr_t *ip) {
 }
 
 int arp_cache_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index, uint16_t flags) {
+    arp_cache_entry_t *existing;
+    arp_cache_entry_t *entry;
+
     if (!ip || !mac || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if entry already exists */
-    arp_cache_entry_t *existing = arp_cache_lookup(ip);
+    existing = arp_cache_lookup(ip);
     if (existing) {
         /* Update existing entry */
         memory_copy(existing->mac, mac, ETH_ALEN);
@@ -197,7 +209,7 @@ int arp_cache_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index, ui
     }
     
     /* Get free entry */
-    arp_cache_entry_t *entry = arp_find_free_entry();
+    entry = arp_find_free_entry();
     if (!entry) {
         /* Cache full - age out old entries */
         arp_cache_age_entries();
@@ -231,11 +243,13 @@ int arp_cache_update(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index)
 }
 
 int arp_cache_delete(const ip_addr_t *ip) {
+    arp_cache_entry_t *entry;
+
     if (!ip) {
         return ERROR_INVALID_PARAM;
     }
-    
-    arp_cache_entry_t *entry = arp_cache_lookup(ip);
+
+    entry = arp_cache_lookup(ip);
     if (!entry) {
         return ERROR_NOT_FOUND;
     }
@@ -254,16 +268,20 @@ int arp_cache_delete(const ip_addr_t *ip) {
 }
 
 void arp_cache_flush(void) {
+    int i;
+    arp_cache_entry_t *entry;
+    arp_cache_entry_t *next;
+
     if (!arp_is_enabled()) {
         return;
     }
-    
+
     /* Clear all non-permanent entries */
-    for (int i = 0; i < ARP_HASH_SIZE; i++) {
-        arp_cache_entry_t *entry = g_arp_cache.hash_table[i];
+    for (i = 0; i < ARP_HASH_SIZE; i++) {
+        entry = g_arp_cache.hash_table[i];
         while (entry) {
-            arp_cache_entry_t *next = entry->hash_next;
-            
+            next = entry->hash_next;
+
             if (!(entry->flags & ARP_FLAG_PERMANENT)) {
                 arp_remove_from_hash(entry);
                 entry->state = ARP_STATE_FREE;
@@ -271,40 +289,47 @@ void arp_cache_flush(void) {
                 g_arp_cache.free_list = entry;
                 g_arp_cache.entry_count--;
             }
-            
+
             entry = next;
         }
     }
 }
 
 void arp_cache_age_entries(void) {
+    int i;
+    uint32_t current_time;
+    uint32_t aged_count;
+    arp_cache_entry_t *entry;
+    arp_cache_entry_t *next;
+    bool expired;
+
     if (!arp_is_enabled()) {
         return;
     }
-    
-    uint32_t current_time = arp_get_timestamp();
-    uint32_t aged_count = 0;
-    
+
+    current_time = arp_get_timestamp();
+    aged_count = 0;
+
     /* Age entries in all hash buckets */
-    for (int i = 0; i < ARP_HASH_SIZE; i++) {
-        arp_cache_entry_t *entry = g_arp_cache.hash_table[i];
+    for (i = 0; i < ARP_HASH_SIZE; i++) {
+        entry = g_arp_cache.hash_table[i];
         while (entry) {
-            arp_cache_entry_t *next = entry->hash_next;
-            
+            next = entry->hash_next;
+
             /* Skip permanent entries */
             if (entry->flags & ARP_FLAG_PERMANENT) {
                 entry = next;
                 continue;
             }
-            
+
             /* Check if entry has expired */
-            bool expired = false;
+            expired = false;
             if (entry->state == ARP_STATE_COMPLETE) {
                 expired = (current_time - entry->timestamp) > g_arp_timeout;
             } else if (entry->state == ARP_STATE_INCOMPLETE) {
                 expired = (current_time - entry->last_request_time) > g_request_timeout;
             }
-            
+
             if (expired) {
                 arp_remove_from_hash(entry);
                 entry->state = ARP_STATE_FREE;
@@ -313,42 +338,45 @@ void arp_cache_age_entries(void) {
                 g_arp_cache.entry_count--;
                 aged_count++;
             }
-            
+
             entry = next;
         }
     }
-    
+
     g_arp_stats.cache_timeouts += aged_count;
 }
 
 /* ARP packet processing */
 int arp_process_packet(const uint8_t *packet, uint16_t length, uint8_t src_nic) {
+    const arp_packet_t *arp_pkt;
+    uint16_t operation;
+    int result;
+
     if (!packet || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Validate minimum packet size */
     if (length < sizeof(arp_packet_t)) {
         g_arp_stats.invalid_packets++;
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Parse ARP packet */
-    const arp_packet_t *arp_pkt = (const arp_packet_t*)packet;
-    
+    arp_pkt = (const arp_packet_t*)packet;
+
     /* Validate packet */
     if (!arp_validate_packet(arp_pkt, length)) {
         g_arp_stats.invalid_packets++;
         return ERROR_INVALID_PARAM;
     }
-    
+
     g_arp_stats.packets_received++;
-    
+
     /* Convert operation from network byte order */
-    uint16_t operation = ntohs(arp_pkt->operation);
-    
+    operation = ntohs(arp_pkt->operation);
+
     /* Process based on operation */
-    int result;
     switch (operation) {
         case ARP_OP_REQUEST:
             g_arp_stats.requests_received++;
@@ -370,23 +398,25 @@ int arp_process_packet(const uint8_t *packet, uint16_t length, uint8_t src_nic) 
 }
 
 int arp_handle_request(const arp_packet_t *arp_pkt, uint8_t src_nic) {
+    ip_addr_t sender_ip;
+    ip_addr_t target_ip;
+    int result;
+
     if (!arp_pkt) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Extract sender information */
-    ip_addr_t sender_ip;
-    ip_addr_t target_ip;
     memory_copy(sender_ip.addr, arp_pkt->sender_proto, 4);
     memory_copy(target_ip.addr, arp_pkt->target_proto, 4);
-    
+
     /* Update cache with sender info (defensive learning) */
     arp_cache_update(&sender_ip, arp_pkt->sender_hw, src_nic);
-    
+
     /* Check if target IP is one of our local addresses */
     if (arp_is_local_ip(&target_ip)) {
         /* Send ARP reply */
-        int result = arp_send_reply(&target_ip, arp_pkt->sender_hw, &sender_ip, src_nic);
+        result = arp_send_reply(&target_ip, arp_pkt->sender_hw, &sender_ip, src_nic);
         if (result == SUCCESS) {
             g_arp_stats.replies_sent++;
         }
@@ -410,17 +440,19 @@ int arp_handle_request(const arp_packet_t *arp_pkt, uint8_t src_nic) {
 }
 
 int arp_handle_reply(const arp_packet_t *arp_pkt, uint8_t src_nic) {
+    ip_addr_t sender_ip;
+    int result;
+
     if (!arp_pkt) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Extract sender information */
-    ip_addr_t sender_ip;
     memory_copy(sender_ip.addr, arp_pkt->sender_proto, 4);
-    
+
     /* Update cache with reply information */
-    int result = arp_cache_update(&sender_ip, arp_pkt->sender_hw, src_nic);
-    
+    result = arp_cache_update(&sender_ip, arp_pkt->sender_hw, src_nic);
+
     return result;
 }
 
@@ -446,55 +478,61 @@ bool arp_validate_packet(const arp_packet_t *arp_pkt, uint16_t length) {
     }
     
     /* Validate operation */
-    uint16_t operation = ntohs(arp_pkt->operation);
-    if (operation != ARP_OP_REQUEST && operation != ARP_OP_REPLY) {
-        return false;
+    {
+        uint16_t operation = ntohs(arp_pkt->operation);
+        if (operation != ARP_OP_REQUEST && operation != ARP_OP_REPLY) {
+            return false;
+        }
     }
-    
+
     return true;
 }
 
 /* ARP packet generation */
 int arp_send_request(const ip_addr_t *target_ip, uint8_t nic_index) {
+    nic_info_t *nic;
+    ip_addr_t local_ip;
+    subnet_info_t *subnet;
+    arp_packet_t arp_pkt;
+    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t zero_mac[ETH_ALEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    int result;
+    arp_cache_entry_t *entry;
+
     if (!target_ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get NIC information */
-    nic_info_t *nic = hardware_get_nic(nic_index);
+    nic = hardware_get_nic(nic_index);
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get local IP for this NIC */
-    ip_addr_t local_ip;
-    subnet_info_t *subnet = static_subnet_find_by_nic(nic_index);
+    subnet = static_subnet_find_by_nic(nic_index);
     if (!subnet) {
         /* No local IP configured for this NIC */
         return ERROR_NOT_FOUND;
     }
     ip_addr_copy(&local_ip, &subnet->network);
-    
+
     /* Build ARP request packet */
-    arp_packet_t arp_pkt;
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uint8_t zero_mac[ETH_ALEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    
-    int result = arp_build_packet(&arp_pkt, ARP_OP_REQUEST,
+    result = arp_build_packet(&arp_pkt, ARP_OP_REQUEST,
                                   nic->mac, &local_ip,
                                   zero_mac, target_ip);
     if (result != SUCCESS) {
         return result;
     }
-    
+
     /* Send packet */
     result = arp_send_packet(&arp_pkt, nic_index, true);
     if (result == SUCCESS) {
         g_arp_stats.packets_sent++;
         g_arp_stats.requests_sent++;
-        
+
         /* Add incomplete entry to cache */
-        arp_cache_entry_t *entry = arp_find_free_entry();
+        entry = arp_find_free_entry();
         if (entry) {
             ip_addr_copy(&entry->ip, target_ip);
             memory_zero(entry->mac, ETH_ALEN);
@@ -515,64 +553,69 @@ int arp_send_request(const ip_addr_t *target_ip, uint8_t nic_index) {
 
 int arp_send_reply(const ip_addr_t *target_ip, const uint8_t *target_mac,
                    const ip_addr_t *sender_ip, uint8_t nic_index) {
+    nic_info_t *nic;
+    arp_packet_t arp_pkt;
+    int result;
+
     if (!target_ip || !target_mac || !sender_ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get NIC information */
-    nic_info_t *nic = hardware_get_nic(nic_index);
+    nic = hardware_get_nic(nic_index);
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Build ARP reply packet */
-    arp_packet_t arp_pkt;
-    int result = arp_build_packet(&arp_pkt, ARP_OP_REPLY,
+    result = arp_build_packet(&arp_pkt, ARP_OP_REPLY,
                                   nic->mac, sender_ip,
                                   target_mac, target_ip);
     if (result != SUCCESS) {
         return result;
     }
-    
+
     /* Send packet (unicast to target) */
     result = arp_send_packet(&arp_pkt, nic_index, false);
     if (result == SUCCESS) {
         g_arp_stats.packets_sent++;
         g_arp_stats.replies_sent++;
     }
-    
+
     return result;
 }
 
 int arp_send_gratuitous(const ip_addr_t *ip, uint8_t nic_index) {
+    nic_info_t *nic;
+    arp_packet_t arp_pkt;
+    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    int result;
+
     if (!ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get NIC information */
-    nic_info_t *nic = hardware_get_nic(nic_index);
+    nic = hardware_get_nic(nic_index);
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Build gratuitous ARP (request with our IP as both sender and target) */
-    arp_packet_t arp_pkt;
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    
-    int result = arp_build_packet(&arp_pkt, ARP_OP_REQUEST,
+    result = arp_build_packet(&arp_pkt, ARP_OP_REQUEST,
                                   nic->mac, ip,
                                   broadcast_mac, ip);
     if (result != SUCCESS) {
         return result;
     }
-    
+
     /* Send packet */
     result = arp_send_packet(&arp_pkt, nic_index, true);
     if (result == SUCCESS) {
         g_arp_stats.packets_sent++;
         g_arp_stats.gratuitous_arps++;
     }
-    
+
     return result;
 }
 
@@ -601,39 +644,46 @@ int arp_build_packet(arp_packet_t *arp_pkt, uint16_t operation,
 
 /* ARP resolution */
 int arp_resolve(const ip_addr_t *ip, uint8_t *mac, uint8_t *nic_index) {
+    arp_cache_entry_t *entry;
+    uint8_t nic;
+    int result;
+
     if (!ip || !mac || !nic_index || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Look up in cache */
-    arp_cache_entry_t *entry = arp_cache_lookup(ip);
+    entry = arp_cache_lookup(ip);
     if (entry && entry->state == ARP_STATE_COMPLETE) {
         memory_copy(mac, entry->mac, ETH_ALEN);
         *nic_index = entry->nic_index;
         return SUCCESS;
     }
-    
+
     /* Not in cache or incomplete - initiate ARP request */
-    uint8_t nic = arp_get_nic_for_ip(ip);
-    int result = arp_resolve_async(ip, nic);
+    nic = arp_get_nic_for_ip(ip);
+    result = arp_resolve_async(ip, nic);
     if (result != SUCCESS) {
         return result;
     }
-    
+
     /* Return pending status */
     return ERROR_BUSY;
 }
 
 int arp_resolve_async(const ip_addr_t *ip, uint8_t nic_index) {
+    arp_cache_entry_t *entry;
+    uint32_t current_time;
+
     if (!ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if already resolving */
-    arp_cache_entry_t *entry = arp_cache_lookup(ip);
+    entry = arp_cache_lookup(ip);
     if (entry && entry->state == ARP_STATE_INCOMPLETE) {
         /* Check if we should retry */
-        uint32_t current_time = arp_get_timestamp();
+        current_time = arp_get_timestamp();
         if ((current_time - entry->last_request_time) > g_request_timeout) {
             if (entry->retry_count < g_max_retries) {
                 entry->retry_count++;
@@ -648,53 +698,62 @@ int arp_resolve_async(const ip_addr_t *ip, uint8_t nic_index) {
         }
         return SUCCESS; /* Still waiting */
     }
-    
+
     /* Send ARP request */
     return arp_send_request(ip, nic_index);
 }
 
 bool arp_is_resolved(const ip_addr_t *ip) {
+    arp_cache_entry_t *entry;
+
     if (!ip || !arp_is_enabled()) {
         return false;
     }
-    
-    arp_cache_entry_t *entry = arp_cache_lookup(ip);
+
+    entry = arp_cache_lookup(ip);
     return (entry && entry->state == ARP_STATE_COMPLETE);
 }
 
 /* ARP utilities */
 uint16_t arp_calculate_hash(const ip_addr_t *ip) {
+    uint32_t hash;
+
     if (!ip) {
         return 0;
     }
-    
+
     /* Simple hash using XOR of IP address bytes */
-    uint32_t hash = ip_addr_to_uint32(ip);
+    hash = ip_addr_to_uint32(ip);
     hash ^= (hash >> 16);
     hash ^= (hash >> 8);
-    
+
     return (uint16_t)(hash & ARP_HASH_MASK);
 }
 
 arp_cache_entry_t* arp_find_free_entry(void) {
+    arp_cache_entry_t *entry;
+
     if (!g_arp_cache.free_list) {
         return NULL;
     }
-    
-    arp_cache_entry_t *entry = g_arp_cache.free_list;
+
+    entry = g_arp_cache.free_list;
     g_arp_cache.free_list = entry->next;
     entry->next = NULL;
-    
+
     return entry;
 }
 
 void arp_remove_from_hash(arp_cache_entry_t *entry) {
+    uint16_t hash;
+    arp_cache_entry_t **current;
+
     if (!entry) {
         return;
     }
-    
-    uint16_t hash = arp_calculate_hash(&entry->ip);
-    arp_cache_entry_t **current = &g_arp_cache.hash_table[hash];
+
+    hash = arp_calculate_hash(&entry->ip);
+    current = &g_arp_cache.hash_table[hash];
     
     while (*current) {
         if (*current == entry) {
@@ -707,36 +766,42 @@ void arp_remove_from_hash(arp_cache_entry_t *entry) {
 }
 
 void arp_add_to_hash(arp_cache_entry_t *entry) {
+    uint16_t hash;
+
     if (!entry) {
         return;
     }
-    
-    uint16_t hash = arp_calculate_hash(&entry->ip);
+
+    hash = arp_calculate_hash(&entry->ip);
     entry->hash_next = g_arp_cache.hash_table[hash];
     g_arp_cache.hash_table[hash] = entry;
 }
 
 bool arp_is_local_ip(const ip_addr_t *ip) {
+    subnet_info_t *subnet;
+
     if (!ip) {
         return false;
     }
-    
+
     /* Check if IP belongs to any of our configured subnets */
-    subnet_info_t *subnet = static_subnet_lookup(ip);
+    subnet = static_subnet_lookup(ip);
     return (subnet != NULL);
 }
 
 uint8_t arp_get_nic_for_ip(const ip_addr_t *ip) {
+    subnet_info_t *subnet;
+
     if (!ip) {
         return 0;
     }
-    
+
     /* Find subnet containing this IP */
-    subnet_info_t *subnet = static_subnet_lookup(ip);
+    subnet = static_subnet_lookup(ip);
     if (subnet) {
         return subnet->nic_index;
     }
-    
+
     /* Use static routing to determine NIC */
     return static_routing_get_output_nic(ip);
 }
@@ -750,32 +815,36 @@ static uint32_t arp_get_timestamp(void) {
 }
 
 static int arp_send_packet(const arp_packet_t *arp_pkt, uint8_t nic_index, bool broadcast) {
+    nic_info_t *nic;
+    uint8_t frame[ETH_HEADER_LEN + sizeof(arp_packet_t)];
+    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    const uint8_t *dest_mac;
+    int result;
+
     if (!arp_pkt) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get NIC information */
-    nic_info_t *nic = hardware_get_nic(nic_index);
+    nic = hardware_get_nic(nic_index);
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Build Ethernet frame */
-    uint8_t frame[ETH_HEADER_LEN + sizeof(arp_packet_t)];
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    
+
     /* Set destination MAC */
-    const uint8_t *dest_mac = broadcast ? broadcast_mac : arp_pkt->target_hw;
-    
+    dest_mac = broadcast ? broadcast_mac : arp_pkt->target_hw;
+
     /* Build Ethernet header */
-    int result = ethernet_build_header(frame, dest_mac, nic->mac, ETH_P_ARP);
+    result = ethernet_build_header(frame, dest_mac, nic->mac, ETH_P_ARP);
     if (result != SUCCESS) {
         return result;
     }
-    
+
     /* Copy ARP packet */
     memory_copy(frame + ETH_HEADER_LEN, arp_pkt, sizeof(arp_packet_t));
-    
+
     /* Send frame */
     return hardware_send_packet(nic, frame, sizeof(frame));
 }
@@ -864,36 +933,42 @@ int arp_set_proxy_enabled(bool enable) {
 
 /* Integration functions */
 bool arp_is_arp_packet(const uint8_t *packet, uint16_t length) {
+    uint16_t ethertype;
+
     if (!packet || length < ETH_HEADER_LEN + sizeof(arp_packet_t)) {
         return false;
     }
-    
+
     /* Check Ethernet type */
-    uint16_t ethertype = packet_get_ethertype(packet);
+    ethertype = packet_get_ethertype(packet);
     return (ethertype == ETH_P_ARP);
 }
 
 int arp_process_received_packet(const uint8_t *packet, uint16_t length, uint8_t src_nic) {
+    const uint8_t *arp_data;
+    uint16_t arp_length;
+
     if (!packet || length < ETH_HEADER_LEN + sizeof(arp_packet_t)) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Skip Ethernet header to get ARP packet */
-    const uint8_t *arp_data = packet + ETH_HEADER_LEN;
-    uint16_t arp_length = length - ETH_HEADER_LEN;
-    
+    arp_data = packet + ETH_HEADER_LEN;
+    arp_length = length - ETH_HEADER_LEN;
+
     return arp_process_packet(arp_data, arp_length, src_nic);
 }
 
 /* Implement remaining functions for completeness */
 int arp_wait_for_resolution(const ip_addr_t *ip, uint32_t timeout_ms) {
+    arp_cache_entry_t *entry;
+
     /* Implement waiting with timeout - simplified implementation */
     if (!ip) return ERROR_INVALID_PARAM;
-    
+
     /* In full implementation would poll cache with timeout */
-    arp_cache_entry_t *entry = arp_cache_lookup(&g_arp_cache, ip);
+    entry = arp_cache_lookup(&g_arp_cache, ip);
     return entry ? SUCCESS : ERROR_TIMEOUT;
-    return ERROR_NOT_SUPPORTED;
 }
 
 int arp_add_proxy_entry(const ip_addr_t *ip, uint8_t nic_index) {
@@ -927,9 +1002,11 @@ void arp_print_stats(void) {
 }
 
 void arp_print_cache(void) {
+    int i;
+
     /* Implement cache printing */
     printf("ARP Cache:\n");
-    for (int i = 0; i < g_arp_cache.max_entries; i++) {
+    for (i = 0; i < g_arp_cache.max_entries; i++) {
         arp_cache_entry_t *entry = &g_arp_cache.entries[i];
         if (entry->flags & ARP_FLAG_VALID) {
             printf("  Entry %d: IP=%d.%d.%d.%d MAC=%02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -965,9 +1042,11 @@ void arp_dump_cache_entry(const arp_cache_entry_t *entry) {
 }
 
 void arp_dump_cache(void) {
+    int i;
+
     /* Implement cache dumping */
     printf("Complete ARP Cache Dump:\n");
-    for (int i = 0; i < g_arp_cache.max_entries; i++) {
+    for (i = 0; i < g_arp_cache.max_entries; i++) {
         arp_cache_entry_t *entry = &g_arp_cache.entries[i];
         if (entry->flags & ARP_FLAG_VALID) {
             printf("Entry %d: ", i);
@@ -997,11 +1076,13 @@ int arp_register_with_pipeline(void) {
 
 /* Helper functions for ARP implementation */
 static bool arp_can_proxy_for_ip(const ip_addr_t *ip) {
+    int i;
+
     if (!ip) return false;
-    
+
     /* Conservative proxy ARP - only proxy for configured subnets */
     /* Check if IP is in same subnet as any of our NICs */
-    for (int i = 0; i < hardware_get_nic_count(); i++) {
+    for (i = 0; i < hardware_get_nic_count(); i++) {
         nic_info_t *nic = hardware_get_nic(i);
         if (nic && hardware_is_nic_active(i)) {
             /* In a full implementation, would check IP/subnet configuration */

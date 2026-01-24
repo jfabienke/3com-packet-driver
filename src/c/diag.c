@@ -8,16 +8,16 @@
  *
  */
 
-#include "../include/diag.h"
-#include "../include/hardware.h"
-#include "../include/memory.h"
-#include "../include/arp.h"
-#include "../include/routing.h"
-#include "../include/api.h"
-#include "../include/common.h"
-#include "../include/eeprom.h"
-#include "../include/errhndl.h"
-#include "../include/logging.h"
+#include "diag.h"
+#include "hardware.h"
+#include "memory.h"
+#include "arp.h"
+#include "routing.h"
+#include "api.h"
+#include "common.h"
+#include "eeprom.h"
+#include "errhndl.h"
+#include "logging.h"
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -306,8 +306,9 @@ int diag_run_all_tests(nic_info_t *nic, diag_result_t *results, uint32_t max_res
     }
     
     int total_passed = 0;
-    
-    for (uint32_t i = 0; i < test_count; i++) {
+    uint32_t i;
+
+    for (i = 0; i < test_count; i++) {
         int result = diag_run_test(tests[i], nic, &results[i]);
         if (result == SUCCESS && results[i].passed) {
             total_passed++;
@@ -384,24 +385,25 @@ int diag_memory_test(diag_result_t *result) {
         /* Test 2: Memory write/read integrity */
         memory_set(test_ptr, 0, 1024);  /* Clear first */
         uint8_t *byte_ptr = (uint8_t*)test_ptr;
-        
+        int mem_i;
+
         /* Write test patterns */
-        for (int i = 0; i < 1024; i += 4) {
-            byte_ptr[i] = 0xAA;
-            if (i+1 < 1024) byte_ptr[i+1] = 0x55;
-            if (i+2 < 1024) byte_ptr[i+2] = 0xFF;
-            if (i+3 < 1024) byte_ptr[i+3] = 0x00;
+        for (mem_i = 0; mem_i < 1024; mem_i += 4) {
+            byte_ptr[mem_i] = 0xAA;
+            if (mem_i+1 < 1024) byte_ptr[mem_i+1] = 0x55;
+            if (mem_i+2 < 1024) byte_ptr[mem_i+2] = 0xFF;
+            if (mem_i+3 < 1024) byte_ptr[mem_i+3] = 0x00;
         }
-        
+
         /* Verify test patterns */
-        for (int i = 0; i < 1024; i += 4) {
-            if (byte_ptr[i] != 0xAA || 
-                (i+1 < 1024 && byte_ptr[i+1] != 0x55) ||
-                (i+2 < 1024 && byte_ptr[i+2] != 0xFF) || 
-                (i+3 < 1024 && byte_ptr[i+3] != 0x00)) {
+        for (mem_i = 0; mem_i < 1024; mem_i += 4) {
+            if (byte_ptr[mem_i] != 0xAA ||
+                (mem_i+1 < 1024 && byte_ptr[mem_i+1] != 0x55) ||
+                (mem_i+2 < 1024 && byte_ptr[mem_i+2] != 0xFF) ||
+                (mem_i+3 < 1024 && byte_ptr[mem_i+3] != 0x00)) {
                 memory_test_passed = false;
                 test_error_flags |= 0x02;
-                LOG_ERROR("Memory integrity test failed at offset %d", i);
+                LOG_ERROR("Memory integrity test failed at offset %d", mem_i);
                 break;
             }
         }
@@ -412,20 +414,21 @@ int diag_memory_test(diag_result_t *result) {
     /* Test 3: Multiple allocation/deallocation stress test */
     void *stress_ptrs[10];
     int stress_alloc_count = 0;
-    
-    for (int i = 0; i < 10; i++) {
-        stress_ptrs[i] = memory_alloc(256, MEM_TYPE_GENERAL, 0);
-        if (stress_ptrs[i]) {
+    int stress_i;
+
+    for (stress_i = 0; stress_i < 10; stress_i++) {
+        stress_ptrs[stress_i] = memory_alloc(256, MEM_TYPE_GENERAL, 0);
+        if (stress_ptrs[stress_i]) {
             stress_alloc_count++;
         } else {
             test_error_flags |= 0x04;
         }
     }
-    
+
     /* Free all stress test allocations */
-    for (int i = 0; i < 10; i++) {
-        if (stress_ptrs[i]) {
-            memory_free(stress_ptrs[i]);
+    for (stress_i = 0; stress_i < 10; stress_i++) {
+        if (stress_ptrs[stress_i]) {
+            memory_free(stress_ptrs[stress_i]);
         }
     }
     
@@ -448,17 +451,25 @@ int diag_memory_test(diag_result_t *result) {
 }
 
 int diag_interrupt_test(nic_info_t *nic, diag_result_t *result) {
+    uint32_t start_time;
+    bool interrupt_test_passed = true;
+    uint32_t int_error_flags = 0;
+    uint32_t interrupts_before;
+    uint32_t interrupts_after;
+    int trigger_result;
+    volatile int delay;
+    uint32_t elapsed_ms;
+    uint32_t interrupt_rate;
+
     if (!nic || !result) {
         return ERROR_INVALID_PARAM;
     }
-    
-    uint32_t start_time = diagnostics_get_system_time();
-    
+
+    start_time = diagnostics_get_system_time();
+
     memory_copy(result->description, "Interrupt functionality test", 28);
-    
+
     /* Comprehensive Interrupt Test Implementation */
-    bool interrupt_test_passed = true;
-    uint32_t int_error_flags = 0;
     
     /* Test 1: Check if NIC has valid IRQ */
     if (nic->irq == 0 || nic->irq > 15) {
@@ -470,23 +481,23 @@ int diag_interrupt_test(nic_info_t *nic, diag_result_t *result) {
     /* Test 2: Check interrupt handler installation */
     if (interrupt_test_passed && nic->irq_handler_installed) {
         /* Verify interrupt handler is properly installed */
-        uint32_t interrupts_before = nic->interrupts;
-        
+        interrupts_before = nic->interrupts;
+
         /* Generate a test interrupt by triggering NIC (carefully) */
         if (nic->ops && nic->ops->trigger_interrupt) {
-            int trigger_result = nic->ops->trigger_interrupt(nic);
+            trigger_result = nic->ops->trigger_interrupt(nic);
             if (trigger_result != SUCCESS) {
                 int_error_flags |= 0x02;
                 LOG_WARNING("Cannot trigger test interrupt for NIC %d", nic->index);
             }
         }
-        
+
         /* Small delay to allow interrupt processing */
-        for (volatile int delay = 0; delay < 10000; delay++) {
+        for (delay = 0; delay < 10000; delay++) {
             /* Brief delay loop */
         }
-        
-        uint32_t interrupts_after = nic->interrupts;
+
+        interrupts_after = nic->interrupts;
         
         /* Check if interrupt count increased (basic test) */
         if (interrupts_after <= interrupts_before) {
@@ -501,9 +512,9 @@ int diag_interrupt_test(nic_info_t *nic, diag_result_t *result) {
     
     /* Test 3: Check for interrupt storms or stuck interrupts */
     if (nic->interrupts > 0) {
-        uint32_t elapsed_ms = diagnostics_get_system_time() - g_perf_counters.start_time;
+        elapsed_ms = diagnostics_get_system_time() - g_perf_counters.start_time;
         if (elapsed_ms > 0) {
-            uint32_t interrupt_rate = (nic->interrupts * 1000) / elapsed_ms;
+            interrupt_rate = (nic->interrupts * 1000) / elapsed_ms;
             if (interrupt_rate > 10000) {  /* More than 10K interrupts per second */
                 interrupt_test_passed = false;
                 int_error_flags |= 0x08;
@@ -541,58 +552,67 @@ int diag_interrupt_test(nic_info_t *nic, diag_result_t *result) {
 }
 
 int diag_loopback_test(nic_info_t *nic, diag_result_t *result) {
+    uint32_t start_time;
+    bool loopback_passed = true;
+    uint32_t loopback_error_flags = 0;
+    int loopback_result;
+    uint8_t test_packet[64];
+    int payload_i;
+    uint32_t packets_before;
+    int send_result;
+    uint32_t timeout;
+    uint32_t wait_start;
+    volatile int delay_i;
+
     if (!nic || !result) {
         return ERROR_INVALID_PARAM;
     }
-    
-    uint32_t start_time = diagnostics_get_system_time();
-    
+
+    start_time = diagnostics_get_system_time();
+
     memory_copy(result->description, "Network loopback test", 21);
-    
+
     /* Comprehensive Loopback Test Implementation */
-    bool loopback_passed = true;
-    uint32_t loopback_error_flags = 0;
-    
+
     /* Check if NIC supports loopback mode */
     if (!nic->link_up) {
         loopback_passed = false;
         loopback_error_flags |= 0x01;
         LOG_WARNING("Cannot perform loopback test: link is down");
     }
-    
+
     if (loopback_passed && nic->ops && nic->ops->set_loopback_mode) {
         /* Enable internal loopback mode */
-        int loopback_result = nic->ops->set_loopback_mode(nic, true);
+        loopback_result = nic->ops->set_loopback_mode(nic, true);
         if (loopback_result == SUCCESS) {
             /* Create test packet */
-            uint8_t test_packet[64];
             memory_set(test_packet, 0, sizeof(test_packet));
-            
+
             /* Ethernet header: dest MAC, src MAC, ethertype */
             memory_copy(test_packet, nic->mac_address, 6);      /* dest = our MAC */
             memory_copy(test_packet + 6, nic->mac_address, 6);  /* src = our MAC */
             test_packet[12] = 0x08; test_packet[13] = 0x00;     /* IP ethertype */
-            
+
             /* Simple test payload */
-            for (int i = 14; i < 64; i++) {
-                test_packet[i] = (uint8_t)(i & 0xFF);
+            for (payload_i = 14; payload_i < 64; payload_i++) {
+                test_packet[payload_i] = (uint8_t)(payload_i & 0xFF);
             }
-            
+
             /* Send test packet */
-            uint32_t packets_before = nic->rx_packets;
+            packets_before = nic->rx_packets;
             if (nic->ops->send_packet) {
-                int send_result = nic->ops->send_packet(nic, test_packet, sizeof(test_packet));
+                send_result = nic->ops->send_packet(nic, test_packet, sizeof(test_packet));
                 if (send_result == SUCCESS) {
                     /* Wait for loopback packet to be received */
-                    uint32_t timeout = 100;  /* 100ms timeout */
-                    uint32_t wait_start = diagnostics_get_system_time();
-                    
+                    timeout = 100;  /* 100ms timeout */
+                    wait_start = diagnostics_get_system_time();
+
                     while ((diagnostics_get_system_time() - wait_start) < timeout) {
                         if (nic->rx_packets > packets_before) {
                             break;  /* Packet received */
                         }
                         /* Small delay */
-                        for (volatile int i = 0; i < 1000; i++) {}
+                        for (delay_i = 0; delay_i < 1000; delay_i++) {}
                     }
                     
                     if (nic->rx_packets <= packets_before) {
@@ -737,17 +757,38 @@ int diag_network_test(nic_info_t *nic, diag_result_t *result) {
 }
 
 int diag_performance_test(nic_info_t *nic, diag_result_t *result) {
+    uint32_t start_time;
+    bool performance_passed = true;
+    uint32_t perf_error_flags = 0;
+    uint32_t test_start_time;
+    uint32_t packets_sent_before;
+    uint32_t bytes_sent_before;
+    uint8_t test_frame[1500];  /* Maximum Ethernet frame */
+    int packets_to_send;
+    int successful_sends;
+    int pkt_i;
+    volatile int delay;
+    int send_result;
+    uint32_t test_duration;
+    uint32_t throughput;
+    uint32_t expected_min_throughput;
+    uint32_t interrupt_count_before;
+    uint32_t interrupt_test_start;
+    uint32_t interrupt_wait_timeout;
+    volatile int delay_i;
+    uint32_t interrupt_test_duration;
+    uint32_t interrupts_processed;
+    uint32_t avg_interrupt_interval;
+
     if (!nic || !result) {
         return ERROR_INVALID_PARAM;
     }
-    
-    uint32_t start_time = diagnostics_get_system_time();
-    
+
+    start_time = diagnostics_get_system_time();
+
     memory_copy(result->description, "Performance benchmark test", 26);
-    
+
     /* Comprehensive Performance Benchmark Test */
-    bool performance_passed = true;
-    uint32_t perf_error_flags = 0;
     
     /* Check if NIC is ready for performance testing */
     if (!nic->link_up) {
@@ -757,36 +798,35 @@ int diag_performance_test(nic_info_t *nic, diag_result_t *result) {
     }
     
     if (performance_passed) {
-        uint32_t test_start_time = diagnostics_get_system_time();
-        
+        test_start_time = diagnostics_get_system_time();
+
         /* Performance Test 1: Throughput measurement */
-        uint32_t packets_sent_before = nic->tx_packets;
-        uint32_t bytes_sent_before = nic->tx_bytes;
-        
+        packets_sent_before = nic->tx_packets;
+        bytes_sent_before = nic->tx_bytes;
+
         /* Simulate packet transmission load */
         if (nic->ops && nic->ops->send_packet) {
-            uint8_t test_frame[1500];  /* Maximum Ethernet frame */
             memory_set(test_frame, 0xAA, sizeof(test_frame));
-            
+
             /* Send test packets */
-            int packets_to_send = 100;
-            int successful_sends = 0;
-            
-            for (int i = 0; i < packets_to_send; i++) {
-                int send_result = nic->ops->send_packet(nic, test_frame, sizeof(test_frame));
+            packets_to_send = 100;
+            successful_sends = 0;
+
+            for (pkt_i = 0; pkt_i < packets_to_send; pkt_i++) {
+                send_result = nic->ops->send_packet(nic, test_frame, sizeof(test_frame));
                 if (send_result == SUCCESS) {
                     successful_sends++;
                 }
-                
+
                 /* Small delay between packets */
-                for (volatile int delay = 0; delay < 100; delay++) {}
+                for (delay = 0; delay < 100; delay++) {}
             }
-            
-            uint32_t test_duration = diagnostics_get_system_time() - test_start_time;
-            
+
+            test_duration = diagnostics_get_system_time() - test_start_time;
+
             if (test_duration > 0) {
-                uint32_t throughput = (successful_sends * 1500 * 8 * 1000) / test_duration;  /* bps */
-                uint32_t expected_min_throughput = (nic->link_speed * 1000000) / 10;  /* 10% of link speed */
+                throughput = (successful_sends * 1500 * 8 * 1000) / test_duration;  /* bps */
+                expected_min_throughput = (nic->link_speed * 1000000) / 10;  /* 10% of link speed */
                 
                 LOG_DEBUG("Performance test: %d/%d packets sent, throughput: %lu bps", 
                          successful_sends, packets_to_send, throughput);
@@ -807,24 +847,24 @@ int diag_performance_test(nic_info_t *nic, diag_result_t *result) {
         }
         
         /* Performance Test 2: Interrupt response time */
-        uint32_t interrupt_count_before = nic->interrupts;
-        uint32_t interrupt_test_start = diagnostics_get_system_time();
-        
+        interrupt_count_before = nic->interrupts;
+        interrupt_test_start = diagnostics_get_system_time();
+
         /* Wait for some interrupts to occur */
-        uint32_t interrupt_wait_timeout = 1000;  /* 1 second */
+        interrupt_wait_timeout = 1000;  /* 1 second */
         while ((diagnostics_get_system_time() - interrupt_test_start) < interrupt_wait_timeout) {
             if (nic->interrupts > interrupt_count_before + 5) {
                 break;
             }
             /* Brief delay */
-            for (volatile int i = 0; i < 1000; i++) {}
+            for (delay_i = 0; delay_i < 1000; delay_i++) {}
         }
-        
-        uint32_t interrupt_test_duration = diagnostics_get_system_time() - interrupt_test_start;
-        uint32_t interrupts_processed = nic->interrupts - interrupt_count_before;
-        
+
+        interrupt_test_duration = diagnostics_get_system_time() - interrupt_test_start;
+        interrupts_processed = nic->interrupts - interrupt_count_before;
+
         if (interrupts_processed > 0) {
-            uint32_t avg_interrupt_interval = interrupt_test_duration / interrupts_processed;
+            avg_interrupt_interval = interrupt_test_duration / interrupts_processed;
             LOG_DEBUG("Interrupt performance: %lu interrupts in %lu ms (avg interval: %lu ms)", 
                      interrupts_processed, interrupt_test_duration, avg_interrupt_interval);
             
@@ -840,8 +880,9 @@ int diag_performance_test(nic_info_t *nic, diag_result_t *result) {
         
         if (large_buffer) {
             /* Memory copy performance test */
-            for (int i = 0; i < 100; i++) {
-                memory_set(large_buffer, (uint8_t)(i & 0xFF), 8192);
+            int mem_perf_i;
+            for (mem_perf_i = 0; mem_perf_i < 100; mem_perf_i++) {
+                memory_set(large_buffer, (uint8_t)(mem_perf_i & 0xFF), 8192);
             }
             
             uint32_t memory_test_duration = diagnostics_get_system_time() - memory_test_start;
@@ -1005,8 +1046,9 @@ static void diagnostics_add_log_entry(diag_level_t level, uint32_t category,
 static void diagnostics_cleanup_old_logs(void) {
     /* Remove oldest entries to make room */
     uint32_t entries_to_remove = MAX_LOG_ENTRIES / 4; /* Remove 25% */
-    
-    for (uint32_t i = 0; i < entries_to_remove && g_log_head; i++) {
+    uint32_t log_i;
+
+    for (log_i = 0; log_i < entries_to_remove && g_log_head; log_i++) {
         log_entry_t *to_remove = g_log_head;
         g_log_head = g_log_head->next;
         
@@ -1044,10 +1086,13 @@ int diag_health_init(void) {
     memory_zero(&g_network_health, sizeof(network_health_t));
     g_network_health.overall_score = 100;
     g_network_health.last_update = diagnostics_get_system_time();
-    
+
     /* Initialize per-NIC health scores */
-    for (int i = 0; i < MAX_NICS; i++) {
-        g_network_health.nic_health[i] = 100;
+    {
+        int nic_init_i;
+        for (nic_init_i = 0; nic_init_i < MAX_NICS; nic_init_i++) {
+            g_network_health.nic_health[nic_init_i] = 100;
+        }
     }
     
     /* Initialize system state */
@@ -1070,10 +1115,11 @@ void diag_health_update(void) {
     }
     
     uint32_t current_time = diagnostics_get_system_time();
-    
+    int health_i;
+
     /* Update individual NIC health scores */
-    for (int i = 0; i < MAX_NICS; i++) {
-        g_network_health.nic_health[i] = diag_calculate_nic_health(i);
+    for (health_i = 0; health_i < MAX_NICS; health_i++) {
+        g_network_health.nic_health[health_i] = diag_calculate_nic_health(health_i);
     }
     
     /* Calculate overall network health */
@@ -1118,9 +1164,10 @@ uint8_t diag_calculate_network_health(void) {
     /* Factor in NIC health (0-30 point penalty) */
     uint32_t nic_health_sum = 0;
     uint8_t active_nics = 0;
-    for (int i = 0; i < MAX_NICS; i++) {
-        if (g_network_health.nic_health[i] > 0) {
-            nic_health_sum += g_network_health.nic_health[i];
+    int nic_health_i;
+    for (nic_health_i = 0; nic_health_i < MAX_NICS; nic_health_i++) {
+        if (g_network_health.nic_health[nic_health_i] > 0) {
+            nic_health_sum += g_network_health.nic_health[nic_health_i];
             active_nics++;
         }
     }
@@ -1630,31 +1677,35 @@ int diag_check_hardware_registers(nic_info_t *nic) {
 static int diag_test_3c509b_registers(nic_info_t *nic) {
     uint16_t test_patterns[] = {0x0000, 0xFFFF, 0x5555, 0xAAAA, 0x1234};
     int num_patterns = sizeof(test_patterns) / sizeof(test_patterns[0]);
-    
+    int pat_i;
+    int window;
+    uint16_t orig_cmd;
+    uint16_t status;
+
     /* Test Command Register */
-    uint16_t orig_cmd = inw(nic->io_base + _3C509B_COMMAND_REG);
-    
-    for (int i = 0; i < num_patterns; i++) {
+    orig_cmd = inw(nic->io_base + _3C509B_COMMAND_REG);
+
+    for (pat_i = 0; pat_i < num_patterns; pat_i++) {
         /* Write test pattern to a safe register (avoid destructive operations) */
         outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SELECT_WINDOW | 0);
-        
+
         /* Verify window selection worked */
         _3C509B_SELECT_WINDOW(nic->io_base, 0);
-        
+
         /* Read back and verify basic functionality */
-        uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
+        status = inw(nic->io_base + _3C509B_STATUS_REG);
         if (status == 0xFFFF) {
             LOG_ERROR("3C509B register test failed - NIC not responding");
             return ERROR_HARDWARE;
         }
     }
-    
+
     /* Test different register windows */
-    for (int window = 0; window < 8; window++) {
+    for (window = 0; window < 8; window++) {
         _3C509B_SELECT_WINDOW(nic->io_base, window);
-        
+
         /* Verify window was selected */
-        uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
+        status = inw(nic->io_base + _3C509B_STATUS_REG);
         if ((status & 0x1F00) != (window << 8)) {
             LOG_ERROR("3C509B window %d selection failed", window);
             return ERROR_HARDWARE;
@@ -1673,43 +1724,48 @@ static int diag_test_3c509b_registers(nic_info_t *nic) {
 static int diag_test_3c515_registers(nic_info_t *nic) {
     uint16_t test_patterns[] = {0x0000, 0xFFFF, 0x5555, 0xAAAA, 0x1234};
     int num_patterns = sizeof(test_patterns) / sizeof(test_patterns[0]);
-    
+    int pat_i;
+    int window;
+    uint16_t orig_cmd;
+    uint16_t status;
+    uint16_t internal_config;
+
     /* Test Command Register */
-    uint16_t orig_cmd = inw(nic->io_base + _3C515_TX_COMMAND_REG);
-    
-    for (int i = 0; i < num_patterns; i++) {
+    orig_cmd = inw(nic->io_base + _3C515_TX_COMMAND_REG);
+
+    for (pat_i = 0; pat_i < num_patterns; pat_i++) {
         /* Write test pattern to a safe register */
         outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_SELECT_WINDOW | 0);
-        
+
         /* Verify window selection worked */
         _3C515_TX_SELECT_WINDOW(nic->io_base, 0);
-        
+
         /* Read back and verify basic functionality */
-        uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+        status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (status == 0xFFFF) {
             LOG_ERROR("3C515-TX register test failed - NIC not responding");
             return ERROR_HARDWARE;
         }
     }
-    
+
     /* Test different register windows */
-    for (int window = 0; window < 8; window++) {
+    for (window = 0; window < 8; window++) {
         _3C515_TX_SELECT_WINDOW(nic->io_base, window);
-        
+
         /* Verify window was selected */
-        uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+        status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if ((status & 0x1F00) != (window << 8)) {
             LOG_ERROR("3C515-TX window %d selection failed", window);
             return ERROR_HARDWARE;
         }
     }
-    
+
     /* Test bus mastering capabilities if supported */
     if (nic->capabilities & HW_CAP_BUS_MASTER) {
         _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_3);
-        
+
         /* Test internal configuration register */
-        uint16_t internal_config = inw(nic->io_base + _3C515_TX_INTERNAL_CONFIG_REG);
+        internal_config = inw(nic->io_base + _3C515_TX_INTERNAL_CONFIG_REG);
         if (internal_config == 0xFFFF) {
             LOG_ERROR("3C515-TX internal config register test failed");
             return ERROR_HARDWARE;
@@ -1745,12 +1801,13 @@ static int diag_test_eeprom_integrity(nic_info_t *nic) {
 static int diag_test_3c509b_eeprom(nic_info_t *nic) {
     uint16_t eeprom_data[16];
     uint16_t checksum = 0;
-    
+    int eeprom_i;
+
     /* Read EEPROM contents */
-    for (int i = 0; i < 16; i++) {
-        eeprom_data[i] = nic_read_eeprom_3c509b(nic->io_base, i);
-        if (i < 15) {  /* Don't include checksum in checksum calculation */
-            checksum ^= eeprom_data[i];
+    for (eeprom_i = 0; eeprom_i < 16; eeprom_i++) {
+        eeprom_data[eeprom_i] = nic_read_eeprom_3c509b(nic->io_base, eeprom_i);
+        if (eeprom_i < 15) {  /* Don't include checksum in checksum calculation */
+            checksum ^= eeprom_data[eeprom_i];
         }
     }
     
@@ -1780,12 +1837,13 @@ static int diag_test_3c509b_eeprom(nic_info_t *nic) {
 static int diag_test_3c515_eeprom(nic_info_t *nic) {
     uint16_t eeprom_data[32];
     uint16_t checksum = 0;
-    
+    int eeprom_i;
+
     /* Read EEPROM contents */
-    for (int i = 0; i < 32; i++) {
-        eeprom_data[i] = nic_read_eeprom_3c515(nic->io_base, i);
-        if (i < 31) {  /* Don't include checksum in checksum calculation */
-            checksum ^= eeprom_data[i];
+    for (eeprom_i = 0; eeprom_i < 32; eeprom_i++) {
+        eeprom_data[eeprom_i] = nic_read_eeprom_3c515(nic->io_base, eeprom_i);
+        if (eeprom_i < 31) {  /* Don't include checksum in checksum calculation */
+            checksum ^= eeprom_data[eeprom_i];
         }
     }
     
@@ -1813,26 +1871,28 @@ static int diag_test_3c515_eeprom(nic_info_t *nic) {
  * @return 0 on success, negative on error
  */
 static int diag_validate_mac_address(nic_info_t *nic) {
-    LOG_DEBUG("Validating MAC address for NIC %d", nic->index);
-    
-    /* Check for all zeros */
+    int mac_i;
     bool all_zero = true;
-    for (int i = 0; i < ETH_ALEN; i++) {
-        if (nic->mac[i] != 0) {
+    bool all_ff = true;
+
+    LOG_DEBUG("Validating MAC address for NIC %d", nic->index);
+
+    /* Check for all zeros */
+    for (mac_i = 0; mac_i < ETH_ALEN; mac_i++) {
+        if (nic->mac[mac_i] != 0) {
             all_zero = false;
             break;
         }
     }
-    
+
     if (all_zero) {
         LOG_ERROR("Invalid MAC address: all zeros");
         return ERROR_HARDWARE;
     }
-    
+
     /* Check for all 0xFF */
-    bool all_ff = true;
-    for (int i = 0; i < ETH_ALEN; i++) {
-        if (nic->mac[i] != 0xFF) {
+    for (mac_i = 0; mac_i < ETH_ALEN; mac_i++) {
+        if (nic->mac[mac_i] != 0xFF) {
             all_ff = false;
             break;
         }
@@ -1869,14 +1929,20 @@ static int diag_validate_mac_address(nic_info_t *nic) {
  * @return 0 on success, negative on error
  */
 int diag_test_hardware_interrupts(nic_info_t *nic) {
+    uint32_t orig_int_count;
+    int result;
+    uint32_t timeout;
+    uint32_t start_time;
+    volatile int delay_i;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Testing interrupt generation for NIC %d", nic->index);
-    
+
     /* Store original interrupt count */
-    uint32_t orig_int_count = nic->interrupts;
+    orig_int_count = nic->interrupts;
     
     /* Disable interrupts first */
     if (nic->ops && nic->ops->disable_interrupts) {
@@ -1892,7 +1958,7 @@ int diag_test_hardware_interrupts(nic_info_t *nic) {
     
     /* Enable specific test interrupt */
     if (nic->ops && nic->ops->enable_interrupts) {
-        int result = nic->ops->enable_interrupts(nic);
+        result = nic->ops->enable_interrupts(nic);
         if (result != SUCCESS) {
             LOG_ERROR("Failed to enable interrupts for testing");
             return result;
@@ -1909,18 +1975,18 @@ int diag_test_hardware_interrupts(nic_info_t *nic) {
     }
     
     /* Wait for interrupt to be processed */
-    uint32_t timeout = 1000;  /* 1 second timeout */
-    uint32_t start_time = diagnostics_get_system_time();
-    
+    timeout = 1000;  /* 1 second timeout */
+    start_time = diagnostics_get_system_time();
+
     while ((diagnostics_get_system_time() - start_time) < timeout) {
         /* Check if interrupt was handled */
         if (nic->interrupts > orig_int_count) {
             LOG_DEBUG("Interrupt test passed for NIC %d", nic->index);
             return SUCCESS;
         }
-        
+
         /* Small delay */
-        for (volatile int i = 0; i < 1000; i++);
+        for (delay_i = 0; delay_i < 1000; delay_i++);
     }
     
     LOG_ERROR("Interrupt test timeout for NIC %d", nic->index);
@@ -1948,8 +2014,9 @@ static int diag_test_dma_capability(nic_info_t *nic) {
     
     /* Fill buffer with test pattern */
     uint8_t *test_data = (uint8_t*)dma_buffer;
-    for (int i = 0; i < 256; i++) {
-        test_data[i] = (uint8_t)(i & 0xFF);
+    int dma_i;
+    for (dma_i = 0; dma_i < 256; dma_i++) {
+        test_data[dma_i] = (uint8_t)(dma_i & 0xFF);
     }
     
     /* Test DMA descriptor setup */
@@ -1982,8 +2049,6 @@ static int diag_test_dma_capability(nic_info_t *nic) {
  * @return 0 on success, negative on error
  */
 static int diag_test_internal_loopback(nic_info_t *nic) {
-    LOG_DEBUG("Testing internal loopback for NIC %d", nic->index);
-    
     /* Create test packet */
     uint8_t test_packet[] = {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  /* Destination MAC (broadcast) */
@@ -1995,43 +2060,51 @@ static int diag_test_internal_loopback(nic_info_t *nic) {
         0x7F, 0x00, 0x00, 0x01,              /* Dest IP (127.0.0.1) */
         'T', 'E', 'S', 'T'                   /* Test payload */
     };
-    
+    uint16_t media_options;
+    int send_result;
+    uint8_t rx_buffer[256];
+    uint16_t rx_length;
+    int timeout;
+    int recv_result;
+    volatile int delay_i;
+
+    LOG_DEBUG("Testing internal loopback for NIC %d", nic->index);
+
     /* Enable internal loopback mode */
     if (nic->type == NIC_TYPE_3C509B) {
         _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);
         outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | 0x01); /* Loopback */
     } else if (nic->type == NIC_TYPE_3C515_TX) {
         _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_2);
-        uint16_t media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);
+        media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);
         outw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG, media_options | 0x0008); /* Internal loopback */
     }
-    
+
     /* Send test packet */
-    int send_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
+    send_result = hardware_send_packet(nic, test_packet, sizeof(test_packet));
     if (send_result != SUCCESS) {
         LOG_ERROR("Failed to send loopback test packet: %d", send_result);
         return send_result;
     }
-    
+
     /* Try to receive the loopback packet */
-    uint8_t rx_buffer[256];
-    uint16_t rx_length = sizeof(rx_buffer);
-    
+    rx_length = sizeof(rx_buffer);
+
     /* Wait for packet to loop back */
-    int timeout = 100;  /* 100ms timeout */
+    timeout = 100;  /* 100ms timeout */
     while (timeout-- > 0) {
-        int recv_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
+        recv_result = hardware_receive_packet(nic, rx_buffer, &rx_length);
         if (recv_result == SUCCESS) {
             /* Verify received packet matches sent packet */
-            if (rx_length >= sizeof(test_packet) && 
+            if (rx_length >= sizeof(test_packet) &&
                 memcmp(rx_buffer, test_packet, sizeof(test_packet)) == 0) {
                 LOG_DEBUG("Internal loopback test passed");
                 return SUCCESS;
             }
         }
-        
+
         /* Small delay */
-        for (volatile int i = 0; i < 1000; i++);
+        for (delay_i = 0; delay_i < 1000; delay_i++);
     }
     
     LOG_ERROR("Internal loopback test failed - no packet received");
@@ -2044,53 +2117,56 @@ static int diag_test_internal_loopback(nic_info_t *nic) {
  * @return 0 on success, negative on error
  */
 static int diag_test_buffer_management(nic_info_t *nic) {
-    LOG_DEBUG("Testing buffer management for NIC %d", nic->index);
-    
     /* Test buffer allocation and deallocation */
     buffer_desc_t *test_buffers[10];
     int allocated_count = 0;
-    
+    int buf_i;
+    int data_j;
+    uint8_t test_data[32];
+    uint8_t *buffer_data;
+
+    LOG_DEBUG("Testing buffer management for NIC %d", nic->index);
+
     /* Allocate multiple buffers */
-    for (int i = 0; i < 10; i++) {
-        test_buffers[i] = buffer_alloc_ethernet_frame(64 + (i * 64), BUFFER_TYPE_TX);
-        if (test_buffers[i]) {
+    for (buf_i = 0; buf_i < 10; buf_i++) {
+        test_buffers[buf_i] = buffer_alloc_ethernet_frame(64 + (buf_i * 64), BUFFER_TYPE_TX);
+        if (test_buffers[buf_i]) {
             allocated_count++;
-            
+
             /* Verify buffer is valid */
-            if (!buffer_is_valid(test_buffers[i])) {
-                LOG_ERROR("Buffer validation failed for buffer %d", i);
+            if (!buffer_is_valid(test_buffers[buf_i])) {
+                LOG_ERROR("Buffer validation failed for buffer %d", buf_i);
                 return ERROR_INVALID_HANDLE;
             }
-            
+
             /* Test buffer data operations */
-            uint8_t test_data[32];
-            for (int j = 0; j < 32; j++) {
-                test_data[j] = (uint8_t)(i + j);
+            for (data_j = 0; data_j < 32; data_j++) {
+                test_data[data_j] = (uint8_t)(buf_i + data_j);
             }
-            
-            if (buffer_set_data(test_buffers[i], test_data, 32) != SUCCESS) {
-                LOG_ERROR("Buffer data set failed for buffer %d", i);
+
+            if (buffer_set_data(test_buffers[buf_i], test_data, 32) != SUCCESS) {
+                LOG_ERROR("Buffer data set failed for buffer %d", buf_i);
                 return ERROR_IO;
             }
-            
+
             /* Verify data was set correctly */
-            uint8_t *buffer_data = (uint8_t*)buffer_get_data_ptr(test_buffers[i]);
+            buffer_data = (uint8_t*)buffer_get_data_ptr(test_buffers[buf_i]);
             if (!buffer_data || memcmp(buffer_data, test_data, 32) != 0) {
-                LOG_ERROR("Buffer data verification failed for buffer %d", i);
+                LOG_ERROR("Buffer data verification failed for buffer %d", buf_i);
                 return ERROR_INVALID_DATA;
             }
         }
     }
-    
+
     if (allocated_count == 0) {
         LOG_ERROR("Failed to allocate any test buffers");
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Free all allocated buffers */
-    for (int i = 0; i < 10; i++) {
-        if (test_buffers[i]) {
-            buffer_free_any(test_buffers[i]);
+    for (buf_i = 0; buf_i < 10; buf_i++) {
+        if (test_buffers[buf_i]) {
+            buffer_free_any(test_buffers[buf_i]);
         }
     }
     
@@ -2161,9 +2237,12 @@ static void diag_dump_3c509b_registers(nic_info_t *nic) {
     /* Window 2 - Station Address */
     _3C509B_SELECT_WINDOW(nic->io_base, 2);
     LOG_INFO("  Window 2 (Station Address):");
-    for (int i = 0; i < 3; i++) {
-        uint16_t addr_word = inw(nic->io_base + (i * 2));
-        LOG_INFO("    Address Word %d: 0x%04X", i, addr_word);
+    {
+        int addr_i;
+        for (addr_i = 0; addr_i < 3; addr_i++) {
+            uint16_t addr_word = inw(nic->io_base + (addr_i * 2));
+            LOG_INFO("    Address Word %d: 0x%04X", addr_i, addr_word);
+        }
     }
     
     /* Window 3 - FIFO Management */
@@ -2206,11 +2285,14 @@ static void diag_dump_3c515_registers(nic_info_t *nic) {
     /* Window 2 - Station Address */
     _3C515_TX_SELECT_WINDOW(nic->io_base, 2);
     LOG_INFO("  Window 2 (Station Address):");
-    for (int i = 0; i < 3; i++) {
-        uint16_t addr_word = inw(nic->io_base + (i * 2));
-        LOG_INFO("    Address Word %d: 0x%04X", i, addr_word);
+    {
+        int addr_i;
+        for (addr_i = 0; addr_i < 3; addr_i++) {
+            uint16_t addr_word = inw(nic->io_base + (addr_i * 2));
+            LOG_INFO("    Address Word %d: 0x%04X", addr_i, addr_word);
+        }
     }
-    
+
     /* Window 3 - Internal Configuration and MAC Control */
     _3C515_TX_SELECT_WINDOW(nic->io_base, 3);
     LOG_INFO("  Window 3 (MAC Control):");
@@ -2394,16 +2476,19 @@ void diag_print_driver_info(void) {
 }
 
 void diag_print_hardware_info(void) {
+    int nic_count;
+    int hw_i;
+
     LOG_INFO("=== Hardware Information ===");
-    
+
     /* Get NIC count */
-    int nic_count = hardware_get_nic_count();
+    nic_count = hardware_get_nic_count();
     LOG_INFO("Detected NICs: %d", nic_count);
-    
-    for (int i = 0; i < nic_count && i < MAX_NICS; i++) {
-        nic_info_t *nic = hardware_get_nic(i);
+
+    for (hw_i = 0; hw_i < nic_count && hw_i < MAX_NICS; hw_i++) {
+        nic_info_t *nic = hardware_get_nic(hw_i);
         if (nic && (nic->status & NIC_STATUS_PRESENT)) {
-            LOG_INFO("NIC %d Information:", i);
+            LOG_INFO("NIC %d Information:", hw_i);
             
             /* NIC type and model */
             const char* nic_type_str = (nic->type == NIC_TYPE_3C509B) ? "3C509B" : 
@@ -2554,9 +2639,13 @@ void diag_print_network_info(void) {
     int nic_count = hardware_get_nic_count();
     int active_nics = 0;
     int healthy_nics = 0;
-    
-    for (int i = 0; i < nic_count && i < MAX_NICS; i++) {
-        nic_info_t *nic = hardware_get_nic(i);
+    int stat_i;
+    uint32_t total_tx_packets = 0, total_rx_packets = 0;
+    uint32_t total_tx_bytes = 0, total_rx_bytes = 0;
+    uint32_t total_errors = 0;
+
+    for (stat_i = 0; stat_i < nic_count && stat_i < MAX_NICS; stat_i++) {
+        nic_info_t *nic = hardware_get_nic(stat_i);
         if (nic && (nic->status & NIC_STATUS_PRESENT)) {
             if (nic->status & NIC_STATUS_ACTIVE) {
                 active_nics++;
@@ -2566,17 +2655,14 @@ void diag_print_network_info(void) {
             }
         }
     }
-    
-    LOG_INFO("NIC Status: %d total, %d active, %d healthy", 
+
+    LOG_INFO("NIC Status: %d total, %d active, %d healthy",
              nic_count, active_nics, healthy_nics);
-    
+
     /* Traffic statistics */
-    uint32_t total_tx_packets = 0, total_rx_packets = 0;
-    uint32_t total_tx_bytes = 0, total_rx_bytes = 0;
-    uint32_t total_errors = 0;
-    
-    for (int i = 0; i < nic_count && i < MAX_NICS; i++) {
-        nic_info_t *nic = hardware_get_nic(i);
+
+    for (stat_i = 0; stat_i < nic_count && stat_i < MAX_NICS; stat_i++) {
+        nic_info_t *nic = hardware_get_nic(stat_i);
         if (nic && (nic->status & NIC_STATUS_PRESENT)) {
             total_tx_packets += nic->tx_packets;
             total_rx_packets += nic->rx_packets;
@@ -2620,9 +2706,9 @@ void diag_print_network_info(void) {
     /* Recent network activity */
     uint32_t current_time = diagnostics_get_system_time();
     uint32_t most_recent_activity = 0;
-    
-    for (int i = 0; i < nic_count && i < MAX_NICS; i++) {
-        nic_info_t *nic = hardware_get_nic(i);
+
+    for (stat_i = 0; stat_i < nic_count && stat_i < MAX_NICS; stat_i++) {
+        nic_info_t *nic = hardware_get_nic(stat_i);
         if (nic && nic->last_activity > most_recent_activity) {
             most_recent_activity = nic->last_activity;
         }
@@ -2958,8 +3044,10 @@ int diag_integrate_api_stats(void) {
     
     /* Iterate through available handles to gather statistics */
     /* Note: We can't directly access static arrays, so we use API functions */
-    for (uint16_t handle = 1; handle <= 16; handle++) {
-        pd_handle_stats_t handle_stats;
+    {
+        uint16_t handle;
+        for (handle = 1; handle <= 16; handle++) {
+            pd_handle_stats_t handle_stats;
         
         /* Try to get handle statistics */
         if (pd_get_statistics(handle, &handle_stats) == API_SUCCESS) {
@@ -2995,29 +3083,33 @@ int diag_integrate_api_stats(void) {
                 }
             }
         }
+        }
     }
-    
+
     /* Check NIC status and load balancing effectiveness */
-    for (uint8_t nic = 0; nic < MAX_NICS; nic++) {
-        pd_nic_status_t nic_status;
-        if (pd_get_nic_status(nic, &nic_status) == API_SUCCESS) {
-            /* Update NIC health based on API perspective */
-            if (nic_status.status == NIC_STATUS_ERROR || nic_status.status == NIC_STATUS_DOWN) {
-                g_network_health.nic_health[nic] = 0;
-                LOG_NET_ERROR("NIC %d reported as %s by API layer", nic, nic_status.status_text);
-            } else if (nic_status.status == NIC_STATUS_DEGRADED) {
-                g_network_health.nic_health[nic] = 50;
-                LOG_NET_WARNING("NIC %d degraded performance: %s", nic, nic_status.status_text);
+    {
+        uint8_t nic_idx;
+        for (nic_idx = 0; nic_idx < MAX_NICS; nic_idx++) {
+            pd_nic_status_t nic_status;
+            if (pd_get_nic_status(nic_idx, &nic_status) == API_SUCCESS) {
+                /* Update NIC health based on API perspective */
+                if (nic_status.status == NIC_STATUS_ERROR || nic_status.status == NIC_STATUS_DOWN) {
+                    g_network_health.nic_health[nic_idx] = 0;
+                    LOG_NET_ERROR("NIC %d reported as %s by API layer", nic_idx, nic_status.status_text);
+                } else if (nic_status.status == NIC_STATUS_DEGRADED) {
+                    g_network_health.nic_health[nic_idx] = 50;
+                    LOG_NET_WARNING("NIC %d degraded performance: %s", nic_idx, nic_status.status_text);
+                }
+
+                /* Check utilization */
+                if (nic_status.utilization > 90) {
+                    LOG_NET_WARNING("NIC %d high utilization: %d%%", nic_idx, nic_status.utilization);
+                    diag_generate_alert(ALERT_TYPE_UTILIZATION_HIGH, "NIC utilization critical");
+                }
+
+                /* Track error counts */
+                total_api_errors += nic_status.error_count;
             }
-            
-            /* Check utilization */
-            if (nic_status.utilization > 90) {
-                LOG_NET_WARNING("NIC %d high utilization: %d%%", nic, nic_status.utilization);
-                diag_generate_alert(ALERT_TYPE_UTILIZATION_HIGH, "NIC utilization critical");
-            }
-            
-            /* Track error counts */
-            total_api_errors += nic_status.error_count;
         }
     }
     
@@ -3142,23 +3234,26 @@ int diag_detect_bottlenecks(void) {
     }
     
     /* Check NIC utilization imbalance */
-    uint32_t max_nic_packets = 0, min_nic_packets = UINT32_MAX;
-    for (int i = 0; i < MAX_NICS; i++) {
-        /* Get actual per-NIC packet counts from hardware layer */
-        nic_info_t *nic = hardware_get_nic(i);
-        uint32_t nic_packets = nic ? (nic->stats.packets_in + nic->stats.packets_out) : 0;
-        if (nic_packets > max_nic_packets) max_nic_packets = nic_packets;
-        if (nic_packets < min_nic_packets && nic_packets > 0) min_nic_packets = nic_packets;
-    }
+    {
+        uint32_t max_nic_packets = 0, min_nic_packets = UINT32_MAX;
+        int util_i;
+        for (util_i = 0; util_i < MAX_NICS; util_i++) {
+            /* Get actual per-NIC packet counts from hardware layer */
+            nic_info_t *nic = hardware_get_nic(util_i);
+            uint32_t nic_packets = nic ? (nic->stats.packets_in + nic->stats.packets_out) : 0;
+            if (nic_packets > max_nic_packets) max_nic_packets = nic_packets;
+            if (nic_packets < min_nic_packets && nic_packets > 0) min_nic_packets = nic_packets;
+        }
     
-    if (max_nic_packets > 0 && min_nic_packets < UINT32_MAX) {
-        uint32_t imbalance_ratio = max_nic_packets / (min_nic_packets + 1);
-        if (imbalance_ratio > 10) { /* 10:1 imbalance */
-            diag_generate_alert(ALERT_TYPE_BOTTLENECK_DETECTED, "NIC load imbalance detected");
-            bottlenecks_detected++;
+        if (max_nic_packets > 0 && min_nic_packets < UINT32_MAX) {
+            uint32_t imbalance_ratio = max_nic_packets / (min_nic_packets + 1);
+            if (imbalance_ratio > 10) { /* 10:1 imbalance */
+                diag_generate_alert(ALERT_TYPE_BOTTLENECK_DETECTED, "NIC load imbalance detected");
+                bottlenecks_detected++;
+            }
         }
     }
-    
+
     LOG_DEBUG("Bottleneck detection complete: %d issues found", bottlenecks_detected);
     return bottlenecks_detected;
 }
@@ -3390,11 +3485,14 @@ int diag_correlate_errors(void) {
     }
     
     /* Check for NIC-specific error concentration */
-    for (int i = 0; i < MAX_NICS; i++) {
-        if (nic_error_counts[i] > (g_error_count / 2) && g_error_count > 10) {
-            LOG_WARNING("Error concentration detected on NIC %d: %d of %d errors", 
-                       i, nic_error_counts[i], g_error_count);
-            diag_generate_alert(ALERT_TYPE_NIC_FAILURE, "NIC error concentration detected");
+    {
+        int err_i;
+        for (err_i = 0; err_i < MAX_NICS; err_i++) {
+            if (nic_error_counts[err_i] > (g_error_count / 2) && g_error_count > 10) {
+                LOG_WARNING("Error concentration detected on NIC %d: %d of %d errors",
+                           err_i, nic_error_counts[err_i], g_error_count);
+                diag_generate_alert(ALERT_TYPE_NIC_FAILURE, "NIC error concentration detected");
+            }
         }
     }
     
@@ -3438,34 +3536,40 @@ void diag_pattern_analysis(void) {
     }
     
     /* Look for periodic patterns */
-    bool periodic_pattern = true;
-    for (int i = 0; i < 8; i += 2) {
-        if (time_buckets[i] == 0 || time_buckets[i+1] > time_buckets[i]) {
-            periodic_pattern = false;
-            break;
+    {
+        bool periodic_pattern = true;
+        int periodic_i;
+        for (periodic_i = 0; periodic_i < 8; periodic_i += 2) {
+            if (time_buckets[periodic_i] == 0 || time_buckets[periodic_i+1] > time_buckets[periodic_i]) {
+                periodic_pattern = false;
+                break;
+            }
+        }
+
+        if (periodic_pattern && time_buckets[0] > 2) {
+            LOG_WARNING("Periodic error pattern detected - possible hardware issue");
+            diag_generate_alert(ALERT_TYPE_NIC_FAILURE, "Periodic error pattern suggests hardware issue");
         }
     }
-    
-    if (periodic_pattern && time_buckets[0] > 2) {
-        LOG_WARNING("Periodic error pattern detected - possible hardware issue");
-        diag_generate_alert(ALERT_TYPE_NIC_FAILURE, "Periodic error pattern suggests hardware issue");
-    }
-    
+
     /* Analyze error type distribution */
-    uint32_t type_counts[9] = {0}; /* Error types 1-8 */
-    current = g_error_history;
-    while (current) {
-        if (current->error_type > 0 && current->error_type <= 8) {
-            type_counts[current->error_type]++;
+    {
+        uint32_t type_counts[9] = {0}; /* Error types 1-8 */
+        int type_i;
+        current = g_error_history;
+        while (current) {
+            if (current->error_type > 0 && current->error_type <= 8) {
+                type_counts[current->error_type]++;
+            }
+            current = current->next;
         }
-        current = current->next;
-    }
-    
-    /* Check for dominant error types */
-    for (int i = 1; i <= 8; i++) {
-        if (type_counts[i] > (g_error_count * 7 / 10)) { /* > 70% of errors */
-            LOG_WARNING("Dominant error type %d detected (%d of %d errors)", 
-                       i, type_counts[i], g_error_count);
+
+        /* Check for dominant error types */
+        for (type_i = 1; type_i <= 8; type_i++) {
+            if (type_counts[type_i] > (g_error_count * 7 / 10)) { /* > 70% of errors */
+                LOG_WARNING("Dominant error type %d detected (%d of %d errors)",
+                           type_i, type_counts[type_i], g_error_count);
+            }
         }
     }
 }
@@ -3586,23 +3690,25 @@ static void diag_cleanup_old_errors(void) {
 
 static int diag_check_error_patterns(void) {
     int patterns_found = 0;
-    
-    for (int p = 0; p < NUM_ERROR_PATTERNS; p++) {
+    int p;
+
+    for (p = 0; p < NUM_ERROR_PATTERNS; p++) {
         const error_pattern_t *pattern = &g_error_patterns[p];
         uint32_t current_time = diagnostics_get_system_time();
         uint32_t window_start = current_time - pattern->time_window_ms;
-        
+
         /* Count occurrences of this pattern */
         uint32_t pattern_count = 0;
         error_event_t *current = g_error_history;
-        
+
         while (current && current->timestamp >= window_start) {
             /* Check if this error starts a pattern match */
             bool pattern_match = true;
             error_event_t *check = current;
-            
-            for (int i = 0; i < pattern->sequence_length && check; i++) {
-                if (check->error_type != pattern->error_sequence[i]) {
+            int seq_i;
+
+            for (seq_i = 0; seq_i < pattern->sequence_length && check; seq_i++) {
+                if (check->error_type != pattern->error_sequence[seq_i]) {
                     pattern_match = false;
                     break;
                 }
@@ -3612,23 +3718,23 @@ static int diag_check_error_patterns(void) {
                     break;
                 }
             }
-            
+
             if (pattern_match) {
                 pattern_count++;
             }
-            
+
             current = current->next;
         }
-        
+
         /* Check if pattern threshold is exceeded */
         if (pattern_count >= pattern->threshold_count) {
-            LOG_WARNING("Error pattern detected: %s (occurred %d times)", 
+            LOG_WARNING("Error pattern detected: %s (occurred %d times)",
                        pattern->description, pattern_count);
             diag_generate_alert(ALERT_TYPE_PERFORMANCE_DEGRADED, pattern->description);
             patterns_found++;
         }
     }
-    
+
     return patterns_found;
 }
 

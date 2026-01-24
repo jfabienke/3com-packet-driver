@@ -17,10 +17,10 @@
  * 3Com Packet Driver - Support for 3C515-TX and 3C509B NICs
  */
 
-#include "../include/eeprom.h"
-#include "../include/logging.h"
-#include "../include/common.h"
-#include "../include/cpuopt.h"
+#include "eeprom.h"
+#include "logging.h"
+#include "common.h"
+#include "cpuopt.h"
 #include <string.h>
 
 /* Global EEPROM statistics */
@@ -93,8 +93,9 @@ int read_3c515_eeprom(uint16_t iobase, eeprom_config_t *config) {
     /* Read entire EEPROM with timeout protection */
     uint16_t eeprom_data[EEPROM_MAX_SIZE];
     uint32_t successful_reads = 0;
-    
-    for (int i = 0; i < EEPROM_MAX_SIZE; i++) {
+    int i;
+
+    for (i = 0; i < EEPROM_MAX_SIZE; i++) {
         uint16_t word_data;
         int read_result = eeprom_read_with_verify(iobase, i, &word_data, true);
         
@@ -169,8 +170,9 @@ int read_3c509b_eeprom(uint16_t iobase, eeprom_config_t *config) {
     /* Read EEPROM (3C509B has 32 words) with timeout protection */
     uint16_t eeprom_data[32];
     uint32_t successful_reads = 0;
-    
-    for (int i = 0; i < 32; i++) {
+    int i;
+
+    for (i = 0; i < 32; i++) {
         uint16_t word_data;
         int read_result = eeprom_read_with_verify(iobase, i, &word_data, false);
         
@@ -370,12 +372,13 @@ int eeprom_parse_config(const uint16_t *eeprom_data, int size,
 }
 
 int eeprom_extract_mac_address(const uint16_t *eeprom_data, uint8_t *mac_address, bool is_3c515) {
+    int i;
     if (!eeprom_data || !mac_address) {
         return EEPROM_ERROR_INVALID_ADDR;
     }
-    
+
     /* MAC address is stored in first 3 words (bytes 0-5) for both NICs */
-    for (int i = 0; i < 3; i++) {
+    for (i = 0; i < 3; i++) {
         uint16_t word = eeprom_data[i];
         mac_address[i * 2] = word & 0xFF;           /* Low byte */
         mac_address[i * 2 + 1] = (word >> 8) & 0xFF; /* High byte */
@@ -582,9 +585,10 @@ static uint16_t eeprom_calculate_checksum(const uint16_t *data, int size, bool i
     }
     
     uint16_t checksum = 0;
-    
+    int i;
+
     /* Calculate sum of all words except checksum */
-    for (int i = 0; i < size; i++) {
+    for (i = 0; i < size; i++) {
         checksum += data[i];
     }
     
@@ -593,23 +597,27 @@ static uint16_t eeprom_calculate_checksum(const uint16_t *data, int size, bool i
 }
 
 static bool eeprom_is_valid_mac(const uint8_t *mac) {
+    int i;
+    bool all_zero;
+    bool all_ff;
+
     if (!mac) {
         return false;
     }
-    
+
     /* Check for all zeros */
-    bool all_zero = true;
-    for (int i = 0; i < 6; i++) {
+    all_zero = true;
+    for (i = 0; i < 6; i++) {
         if (mac[i] != 0) {
             all_zero = false;
             break;
         }
     }
     if (all_zero) return false;
-    
+
     /* Check for all 0xFF */
-    bool all_ff = true;
-    for (int i = 0; i < 6; i++) {
+    all_ff = true;
+    for (i = 0; i < 6; i++) {
         if (mac[i] != 0xFF) {
             all_ff = false;
             break;
@@ -726,12 +734,13 @@ int eeprom_dump_contents(uint16_t iobase, bool is_3c515, char *output_buffer, si
     int written = 0;
     
     int max_words = is_3c515 ? EEPROM_MAX_SIZE : 32;
-    
+    int i;
+
     written = snprintf(ptr, remaining, "EEPROM Dump (%s):\n", is_3c515 ? "3C515-TX" : "3C509B");
     ptr += written;
     remaining -= written;
-    
-    for (int i = 0; i < max_words && remaining > 20; i++) {
+
+    for (i = 0; i < max_words && remaining > 20; i++) {
         uint16_t data;
         int result;
         

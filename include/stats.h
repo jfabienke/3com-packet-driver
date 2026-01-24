@@ -11,6 +11,9 @@
 #ifndef _STATS_H_
 #define _STATS_H_
 
+/* Guard for nic_stats_t to prevent redefinition conflicts */
+#define NIC_STATS_T_DEFINED 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -68,6 +71,32 @@ typedef struct {
     uint32_t overrun_errors;        /* Overrun errors */
     uint32_t last_activity;         /* Last activity timestamp */
 } nic_stats_t;
+
+/* Hardware register statistics (raw values read from NIC) */
+typedef struct {
+    int nic_id;                     /* NIC identifier */
+    uint32_t timestamp;             /* Timestamp of register read */
+    int register_count;             /* Number of registers read */
+    uint32_t register_values[32];   /* Raw register values */
+    uint32_t status_reg;            /* Status register value */
+    uint32_t tx_status;             /* TX status register */
+    uint32_t rx_status;             /* RX status register */
+    uint32_t carrier_lost;          /* Carrier lost counter */
+    uint32_t sqe_errors;            /* SQE test errors */
+    uint32_t multiple_collisions;   /* Multiple collision counter */
+    uint32_t single_collisions;     /* Single collision counter */
+    uint32_t late_collisions;       /* Late collision counter */
+    uint32_t rx_overruns;           /* Receive overrun counter */
+    uint32_t frames_xmitted;        /* Frames transmitted counter */
+    uint32_t frames_received;       /* Frames received counter */
+    uint32_t bytes_received;        /* Bytes received counter */
+    uint32_t frame_alignment;       /* Frame alignment error counter */
+    uint32_t tx_bytes_ok;           /* TX bytes OK counter */
+    uint32_t rx_bytes_ok;           /* RX bytes OK counter */
+    uint8_t tx_active;              /* TX in progress flag */
+    uint8_t rx_active;              /* RX in progress flag */
+    uint8_t error_flags;            /* Error flag bits */
+} hardware_register_stats_t;
 
 /* Function prototypes */
 uint32_t stats_get_timestamp(void);

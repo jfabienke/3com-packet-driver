@@ -10,13 +10,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "../include/common.h"
-#include "../include/hardware.h"
-#include "../include/dmacap.h"
-#include "../include/dmamap.h"
-#include "../include/logging.h"
-#include "../include/cpudet.h"
-#include "../include/telemetr.h"
+#include "common.h"
+#include "hardware.h"
+#include "dmacap.h"
+#include "dmamap.h"
+#include "logging.h"
+#include "cpudet.h"
+#include "telemetr.h"
 
 /* Global capability results */
 dma_capabilities_t g_dma_caps = {0};
@@ -752,10 +752,13 @@ int test_cache_coherency_loopback(nic_info_t *nic, dma_test_results_t *results) 
         uint32_t start_time, flush_time;
         
         LOG_INFO("  Test C: Measuring cache flush overhead...");
-        
+
         start_time = get_timestamp_us();
-        for (int i = 0; i < 100; i++) {
-            cache_flush_range(test_buf, TEST_SIZE);
+        {
+            int i;
+            for (i = 0; i < 100; i++) {
+                cache_flush_range(test_buf, TEST_SIZE);
+            }
         }
         flush_time = get_timestamp_us() - start_time;
         
@@ -769,12 +772,15 @@ int test_cache_coherency_loopback(nic_info_t *nic, dma_test_results_t *results) 
     results->misalignment_safe = true;  /* Assume safe until proven otherwise */
     
     /* Test various offsets to stress cache line boundaries */
-    uint16_t test_offsets[] = {2, 4, 8, 14, 31};
-    for (int i = 0; i < 5; i++) {
-        if (test_coherency_with_offset(nic, results, test_offsets[i]) != SUCCESS) {
-            LOG_WARNING("    Misalignment test failed at offset %u", test_offsets[i]);
-            results->misalignment_safe = false;
-            break;
+    {
+        uint16_t test_offsets[] = {2, 4, 8, 14, 31};
+        int i;
+        for (i = 0; i < 5; i++) {
+            if (test_coherency_with_offset(nic, results, test_offsets[i]) != SUCCESS) {
+                LOG_WARNING("    Misalignment test failed at offset %u", test_offsets[i]);
+                results->misalignment_safe = false;
+                break;
+            }
         }
     }
     
@@ -900,107 +906,114 @@ int benchmark_pio_vs_dma(nic_info_t *nic, dma_test_results_t *results) {
     }
     
     /* Test each packet size */
-    for (int i = 0; i < 6; i++) {
-        uint16_t size = test_sizes[i];
-        uint32_t start_time, elapsed;
-        
-        LOG_INFO("  Testing %u byte packets...", size);
-        
-        /* Fill buffer with test pattern */
-        fill_pattern(test_buf, TEST_PATTERN_C, size);
-        memset(rx_buf, 0, size);
-        
-        /* Benchmark PIO TX+RX end-to-end */
-        start_time = get_timestamp_us();
-        for (int j = 0; j < ITERATIONS; j++) {
-            /* TX */
-            if (hardware_pio_write(nic, test_buf, size) != SUCCESS) {
-                LOG_ERROR("PIO write failed");
-                goto cleanup;
+    {
+        int i;
+        for (i = 0; i < 6; i++) {
+            uint16_t size = test_sizes[i];
+            uint32_t start_time, elapsed;
+            int j;
+
+            LOG_INFO("  Testing %u byte packets...", size);
+
+            /* Fill buffer with test pattern */
+            fill_pattern(test_buf, TEST_PATTERN_C, size);
+            memset(rx_buf, 0, size);
+
+            /* Benchmark PIO TX+RX end-to-end */
+            start_time = get_timestamp_us();
+            for (j = 0; j < ITERATIONS; j++) {
+                /* TX */
+                if (hardware_pio_write(nic, test_buf, size) != SUCCESS) {
+                    LOG_ERROR("PIO write failed");
+                    goto cleanup;
+                }
+                /* RX (loopback should make packet available) */
+                if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                    hardware_pio_read(nic, rx_buf, size);
+                }
             }
-            /* RX (loopback should make packet available) */
-            if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
-                hardware_pio_read(nic, rx_buf, size);
+            elapsed = get_timestamp_us() - start_time;
+            pio_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
+
+            /* Brief delay between tests */
+            delay_ms(10);
+
+            /* Benchmark DMA TX+RX end-to-end */
+            start_time = get_timestamp_us();
+            for (j = 0; j < ITERATIONS; j++) {
+                /* TX with completion wait */
+                if (hardware_dma_write(nic, test_buf, size) != SUCCESS) {
+                    LOG_ERROR("DMA write failed");
+                    goto cleanup;
+                }
+                if (hardware_wait_tx_complete(nic, 1000) != SUCCESS) {
+                    LOG_WARNING("TX completion timeout");
+                }
+                /* RX with DMA */
+                if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                    hardware_dma_read(nic, rx_buf, size);
+                }
             }
+            elapsed = get_timestamp_us() - start_time;
+            dma_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
+
+            LOG_INFO("    PIO: %lu us, DMA: %lu us (end-to-end)", pio_times[i], dma_times[i]);
         }
-        elapsed = get_timestamp_us() - start_time;
-        pio_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
-        
-        /* Brief delay between tests */
-        delay_ms(10);
-        
-        /* Benchmark DMA TX+RX end-to-end */
-        start_time = get_timestamp_us();
-        for (int j = 0; j < ITERATIONS; j++) {
-            /* TX with completion wait */
-            if (hardware_dma_write(nic, test_buf, size) != SUCCESS) {
-                LOG_ERROR("DMA write failed");
-                goto cleanup;
-            }
-            if (hardware_wait_tx_complete(nic, 1000) != SUCCESS) {
-                LOG_WARNING("TX completion timeout");
-            }
-            /* RX with DMA */
-            if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
-                hardware_dma_read(nic, rx_buf, size);
-            }
-        }
-        elapsed = get_timestamp_us() - start_time;
-        dma_times[i] = elapsed / ITERATIONS;  /* Average per round-trip */
-        
-        LOG_INFO("    PIO: %lu us, DMA: %lu us (end-to-end)", pio_times[i], dma_times[i]);
     }
     
     /* Calculate optimal copybreak threshold */
-    uint16_t copybreak = 64;  /* Default to smallest size */
-    
-    for (int i = 0; i < 6; i++) {
-        /* Find crossover point where DMA becomes faster */
-        if (dma_times[i] < pio_times[i]) {
-            /* DMA is faster for this size */
-            if (i > 0) {
-                /* Interpolate between previous and current size */
-                copybreak = (test_sizes[i-1] + test_sizes[i]) / 2;
-            } else {
-                /* DMA faster even at smallest size */
-                copybreak = test_sizes[0];
-            }
-            break;
-        }
-    }
-    
-    /* Calculate performance gain for specific sizes */
-    if (pio_times[2] > 0) {  /* 256 byte index */
-        results->dma_gain_256b = ((int32_t)pio_times[2] - (int32_t)dma_times[2]) * 100 / pio_times[2];
-    }
-    
-    if (pio_times[5] > 0) {  /* 1514 byte index */
-        results->dma_gain_1514b = ((int32_t)pio_times[5] - (int32_t)dma_times[5]) * 100 / pio_times[5];
-    }
-    
-    results->optimal_copybreak = copybreak;
-    
-    LOG_INFO("  Optimal copybreak threshold: %u bytes", copybreak);
-    LOG_INFO("  DMA gain at 256B: %d%%", results->dma_gain_256b);
-    LOG_INFO("  DMA gain at 1514B: %d%%", results->dma_gain_1514b);
-    
-    /* Check if we need cache flush overhead adjustment */
-    if (!results->cache_coherent && results->cache_flush_overhead_us > 0) {
-        /* Adjust copybreak for cache flush overhead */
-        uint32_t flush_penalty = results->cache_flush_overhead_us;
-        
-        /* Recalculate with overhead */
-        for (int i = 0; i < 6; i++) {
-            uint32_t dma_with_flush = dma_times[i] + (flush_penalty * test_sizes[i] / 1024);
-            
-            if (dma_with_flush < pio_times[i]) {
-                copybreak = (i > 0) ? (test_sizes[i-1] + test_sizes[i]) / 2 : test_sizes[0];
+    {
+        uint16_t copybreak = 64;  /* Default to smallest size */
+        int i;
+
+        for (i = 0; i < 6; i++) {
+            /* Find crossover point where DMA becomes faster */
+            if (dma_times[i] < pio_times[i]) {
+                /* DMA is faster for this size */
+                if (i > 0) {
+                    /* Interpolate between previous and current size */
+                    copybreak = (test_sizes[i-1] + test_sizes[i]) / 2;
+                } else {
+                    /* DMA faster even at smallest size */
+                    copybreak = test_sizes[0];
+                }
                 break;
             }
         }
-        
-        results->adjusted_copybreak = copybreak;
-        LOG_INFO("  Adjusted copybreak (with cache overhead): %u bytes", copybreak);
+
+        /* Calculate performance gain for specific sizes */
+        if (pio_times[2] > 0) {  /* 256 byte index */
+            results->dma_gain_256b = ((int32_t)pio_times[2] - (int32_t)dma_times[2]) * 100 / pio_times[2];
+        }
+
+        if (pio_times[5] > 0) {  /* 1514 byte index */
+            results->dma_gain_1514b = ((int32_t)pio_times[5] - (int32_t)dma_times[5]) * 100 / pio_times[5];
+        }
+
+        results->optimal_copybreak = copybreak;
+
+        LOG_INFO("  Optimal copybreak threshold: %u bytes", copybreak);
+        LOG_INFO("  DMA gain at 256B: %d%%", results->dma_gain_256b);
+        LOG_INFO("  DMA gain at 1514B: %d%%", results->dma_gain_1514b);
+
+        /* Check if we need cache flush overhead adjustment */
+        if (!results->cache_coherent && results->cache_flush_overhead_us > 0) {
+            /* Adjust copybreak for cache flush overhead */
+            uint32_t flush_penalty = results->cache_flush_overhead_us;
+
+            /* Recalculate with overhead */
+            for (i = 0; i < 6; i++) {
+                uint32_t dma_with_flush = dma_times[i] + (flush_penalty * test_sizes[i] / 1024);
+
+                if (dma_with_flush < pio_times[i]) {
+                    copybreak = (i > 0) ? (test_sizes[i-1] + test_sizes[i]) / 2 : test_sizes[0];
+                    break;
+                }
+            }
+
+            results->adjusted_copybreak = copybreak;
+            LOG_INFO("  Adjusted copybreak (with cache overhead): %u bytes", copybreak);
+        }
     }
     
     ret = SUCCESS;

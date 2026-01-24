@@ -13,10 +13,10 @@
  *
  */
 
-#include "../include/chipdet.h"
-#include "../include/logging.h"
-#include "../include/hardware.h"
-#include "../include/common.h"
+#include "chipdet.h"
+#include "logging.h"
+#include "hardware.h"
+#include "common.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -198,8 +198,11 @@ static bool has_pnp_isa_bios(void) {
         uint8_t length = signature[5];  /* Structure length at offset 5 */
         uint8_t checksum = 0;
         
-        for (uint8_t i = 0; i < length; i++) {
-            checksum += signature[i];
+        {
+            uint8_t i;
+            for (i = 0; i < length; i++) {
+                checksum += signature[i];
+            }
         }
         
         if (checksum == 0) {  /* Valid checksum sums to 0 */
@@ -365,10 +368,13 @@ static uint32_t pci_read_config_dword(uint8_t bus, uint8_t device, uint8_t funct
  * Look up chipset information in known database
  */
 static const chipset_info_t* lookup_chipset_info(uint16_t vendor_id, uint16_t device_id) {
-    for (int i = 0; known_chipsets[i].name != NULL; i++) {
-        if (known_chipsets[i].vendor_id == vendor_id &&
-            known_chipsets[i].device_id == device_id) {
-            return &known_chipsets[i];
+    {
+        int i;
+        for (i = 0; known_chipsets[i].name != NULL; i++) {
+            if (known_chipsets[i].vendor_id == vendor_id &&
+                known_chipsets[i].device_id == device_id) {
+                return &known_chipsets[i];
+            }
         }
     }
     return NULL;
@@ -396,17 +402,21 @@ bool verify_isa_slots_present(const chipset_additional_info_t* info) {
     }
     
     /* 2. Check against known LPC-only bridges */
-    for (int i = 0; i < info->pci_device_count; i++) {
-        uint16_t vendor = info->pci_devices[i].vendor_id;
-        uint16_t device = info->pci_devices[i].device_id;
-        
-        /* Check if this is a known LPC-only bridge */
-        for (size_t j = 0; j < sizeof(lpc_only_bridges)/sizeof(lpc_only_bridges[0]); j++) {
-            if (vendor == lpc_only_bridges[j][0] && 
-                device >= lpc_only_bridges[j][1]) {
-                /* This is an LPC-only bridge, no physical ISA slots */
-                log_info("LPC-only bridge detected, no physical ISA slots");
-                return false;
+    {
+        int i;
+        for (i = 0; i < info->pci_device_count; i++) {
+            uint16_t vendor = info->pci_devices[i].vendor_id;
+            uint16_t device = info->pci_devices[i].device_id;
+            size_t j;
+
+            /* Check if this is a known LPC-only bridge */
+            for (j = 0; j < sizeof(lpc_only_bridges)/sizeof(lpc_only_bridges[0]); j++) {
+                if (vendor == lpc_only_bridges[j][0] &&
+                    device >= lpc_only_bridges[j][1]) {
+                    /* This is an LPC-only bridge, no physical ISA slots */
+                    log_info("LPC-only bridge detected, no physical ISA slots");
+                    return false;
+                }
             }
         }
     }
@@ -470,62 +480,77 @@ chipset_additional_info_t scan_additional_pci_devices(void) {
     chipset_additional_info_t info = {0};
     
     log_debug("Scanning additional PCI devices...");
-    
+
     /* Scan all PCI buses and functions */
-    for (uint8_t bus = 0; bus < 4; bus++) {  /* Scan up to 4 buses */
-        for (uint8_t dev = 0; dev < 32; dev++) {
-            uint16_t vendor = pci_read_config_word(bus, dev, 0, 0x00);
-            if (vendor == 0xFFFF) continue;
-            
-            /* Check if multi-function device */
-            uint8_t header_type = pci_read_config_byte(bus, dev, 0, 0x0E);
-            uint8_t max_func = (header_type & 0x80) ? 8 : 1;
-            
-            for (uint8_t func = 0; func < max_func; func++) {
-                if (func > 0) {
-                    vendor = pci_read_config_word(bus, dev, func, 0x00);
-                    if (vendor == 0xFFFF) continue;
-                }
-                
-                uint16_t device = pci_read_config_word(bus, dev, func, 0x02);
-                
-                /* Check PCI class code for ISA bridge */
-                uint32_t class_rev = pci_read_config_dword(bus, dev, func, 0x08);
-                uint8_t base_class = (class_rev >> 24) & 0xFF;
-                uint8_t sub_class = (class_rev >> 16) & 0xFF;
-                
-                if (base_class == 0x06 && sub_class == 0x01) {
-                    /* This is an ISA/LPC bridge by class code */
-                    info.has_isa_bridge = true;
-                    
-                    /* Try to identify specific bridge */
-                    bool found_name = false;
-                    for (size_t j = 0; j < sizeof(isa_bridges)/sizeof(isa_bridges[0]); j++) {
-                        if (vendor == isa_bridges[j].vendor_id && 
-                            device == isa_bridges[j].device_id) {
-                            strncpy(info.isa_bridge_name, isa_bridges[j].name, 
-                                    sizeof(info.isa_bridge_name) - 1);
-                            info.isa_bridge_name[sizeof(info.isa_bridge_name) - 1] = '\0';
-                            found_name = true;
-                            break;
+    {
+        uint8_t bus;
+        for (bus = 0; bus < 4; bus++) {  /* Scan up to 4 buses */
+            uint8_t dev;
+            for (dev = 0; dev < 32; dev++) {
+                uint16_t vendor = pci_read_config_word(bus, dev, 0, 0x00);
+                uint8_t header_type;
+                uint8_t max_func;
+                uint8_t func;
+
+                if (vendor == 0xFFFF) continue;
+
+                /* Check if multi-function device */
+                header_type = pci_read_config_byte(bus, dev, 0, 0x0E);
+                max_func = (header_type & 0x80) ? 8 : 1;
+
+                for (func = 0; func < max_func; func++) {
+                    uint16_t device;
+                    uint32_t class_rev;
+                    uint8_t base_class;
+                    uint8_t sub_class;
+
+                    if (func > 0) {
+                        vendor = pci_read_config_word(bus, dev, func, 0x00);
+                        if (vendor == 0xFFFF) continue;
+                    }
+
+                    device = pci_read_config_word(bus, dev, func, 0x02);
+
+                    /* Check PCI class code for ISA bridge */
+                    class_rev = pci_read_config_dword(bus, dev, func, 0x08);
+                    base_class = (class_rev >> 24) & 0xFF;
+                    sub_class = (class_rev >> 16) & 0xFF;
+
+                    if (base_class == 0x06 && sub_class == 0x01) {
+                        /* This is an ISA/LPC bridge by class code */
+                        bool found_name = false;
+                        size_t j;
+
+                        info.has_isa_bridge = true;
+
+                        /* Try to identify specific bridge */
+                        for (j = 0; j < sizeof(isa_bridges)/sizeof(isa_bridges[0]); j++) {
+                            if (vendor == isa_bridges[j].vendor_id &&
+                                device == isa_bridges[j].device_id) {
+                                strncpy(info.isa_bridge_name, isa_bridges[j].name,
+                                        sizeof(info.isa_bridge_name) - 1);
+                                info.isa_bridge_name[sizeof(info.isa_bridge_name) - 1] = '\0';
+                                found_name = true;
+                                break;
+                            }
                         }
+
+                        if (!found_name) {
+                            /* Generic name for unknown ISA bridge */
+                            sprintf(info.isa_bridge_name, "ISA Bridge (%04X:%04X)", vendor, device);
+                        }
+
+                        log_debug("Found ISA bridge: %s", info.isa_bridge_name);
                     }
-                    
-                    if (!found_name) {
-                        /* Generic name for unknown ISA bridge */
-                        sprintf(info.isa_bridge_name, "ISA Bridge (%04X:%04X)", vendor, device);
+
+                    /* Store device info */
+                    if (info.pci_device_count < MAX_ADDITIONAL_PCI_DEVICES) {
+                        info.pci_devices[info.pci_device_count].vendor_id = vendor;
+                        info.pci_devices[info.pci_device_count].device_id = device;
+                        info.pci_device_count++;
                     }
-                    
-                    log_debug("Found ISA bridge: %s", info.isa_bridge_name);
+                    info.total_pci_devices_found++;
                 }
-                
-                /* Store device info */
-                if (info.pci_device_count < MAX_ADDITIONAL_PCI_DEVICES) {
-                    info.pci_devices[info.pci_device_count].vendor_id = vendor;
-                    info.pci_devices[info.pci_device_count].device_id = device;
-                    info.pci_device_count++;
-                }
-                info.total_pci_devices_found++;
             }
         }
     }

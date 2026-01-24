@@ -14,6 +14,9 @@
 #ifndef _NIC_CONTEXT_H_
 #define _NIC_CONTEXT_H_
 
+/* Guard for nic_context_t to prevent redefinition conflicts */
+#define NIC_CONTEXT_T_DEFINED 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +24,7 @@ extern "C" {
 /* Includes */
 #include "common.h"
 #include "errhndl.h"
+#include "nic_defs.h"    /* Canonical nic_type_t definition */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -31,12 +35,11 @@ typedef struct hardware_hal_vtable hardware_hal_vtable_t;
 /* Pack structures for DOS compatibility */
 #pragma pack(push, 1)
 
-/* NIC types */
-typedef enum {
-    NIC_TYPE_UNKNOWN = 0,
-    NIC_TYPE_3C509B  = 1,
-    NIC_TYPE_3C515TX = 2
-} nic_type_t;
+/* NIC type compatibility - use canonical enum from nic_defs.h */
+/* NIC_TYPE_3C515TX maps to NIC_TYPE_3C515_TX from nic_defs.h */
+#ifndef NIC_TYPE_3C515TX
+#define NIC_TYPE_3C515TX NIC_TYPE_3C515_TX
+#endif
 
 /* NIC operational states */
 typedef enum {

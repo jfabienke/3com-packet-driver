@@ -14,11 +14,11 @@
  */
 
 #include <string.h>
-#include "../include/common.h"
-#include "../include/hardware.h"
-#include "../include/stats.h"
-#include "../include/logging.h"
-#include "../include/flowctl.h"
+#include "common.h"
+#include "hardware.h"
+#include "stats.h"
+#include "logging.h"
+#include "flowctl.h"
 
 /* PAUSE destination multicast MAC */
 static const uint8_t k_pause_dest[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x01};
@@ -50,8 +50,9 @@ static uint32_t fc_quanta_to_ms(uint16_t quanta, uint32_t link_speed_mbps) {
 
 int flow_control_init(void) {
     if (!g_fc_initialized) {
+        int i;
         memset(g_fc_state, 0, sizeof(g_fc_state));
-        for (int i = 0; i < MAX_NICS; i++) {
+        for (i = 0; i < MAX_NICS; i++) {
             g_fc_state[i].enabled = true;
             g_fc_state[i].initialized = true;
         }
@@ -105,7 +106,8 @@ void flow_control_wait_for_resume(int nic_index, uint32_t pause_ms) {
 }
 
 static bool fc_is_pause_dest(const uint8_t *mac) {
-    for (int i = 0; i < 6; i++) {
+    int i;
+    for (i = 0; i < 6; i++) {
         if (mac[i] != k_pause_dest[i]) return false;
     }
     return true;

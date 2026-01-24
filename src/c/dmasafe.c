@@ -411,8 +411,11 @@ dma_buffer_descriptor_t* dma_allocate_buffer(uint32_t size, uint32_t alignment,
                        retry_count, MAX_RETRY_COUNT);
             
             /* Exponential backoff delay */
-            for (int delay = 0; delay < RETRY_DELAY_BASE * (1 << retry_count); delay++) {
-                IO_DELAY();
+            {
+                int delay;
+                for (delay = 0; delay < RETRY_DELAY_BASE * (1 << retry_count); delay++) {
+                    IO_DELAY();
+                }
             }
             
             /* Try emergency recovery between retries */
@@ -1539,9 +1542,12 @@ static uint16_t calculate_descriptor_checksum(const dma_buffer_descriptor_t __fa
     uint16_t checksum_offset = offsetof(dma_buffer_descriptor_t, checksum) / 2;
     
     /* Sum all 16-bit words except the checksum field */
-    for (uint16_t i = 0; i < words; i++) {
-        if (i != checksum_offset) {
-            sum += ptr[i];
+    {
+        uint16_t i;
+        for (i = 0; i < words; i++) {
+            if (i != checksum_offset) {
+                sum += ptr[i];
+            }
         }
     }
     
@@ -1921,23 +1927,26 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
         }
         
         /* Convert VDS fragments to internal format */
-        uint32_t remaining = len;
-        for (uint16_t i = 0; i < vds_count && remaining > 0; ++i) {
-            uint32_t p = vds_frags[i].phys;
-            uint32_t l = vds_frags[i].len;
-            if (l > remaining) l = remaining;
+        {
+            uint32_t remaining = len;
+            uint16_t i;
+            for (i = 0; i < vds_count && remaining > 0; ++i) {
+                uint32_t p = vds_frags[i].phys;
+                uint32_t l = vds_frags[i].len;
+                if (l > remaining) l = remaining;
 
-            if (tmp_in_count >= DMA_MAX_SG_INTERNAL) {
-                log_error("DMA map: too many VDS fragments");
-                vds_unlock_region_sg(vds_handle);
-                lock_out->vds_used = 0;
-                return false;
+                if (tmp_in_count >= DMA_MAX_SG_INTERNAL) {
+                    log_error("DMA map: too many VDS fragments");
+                    vds_unlock_region_sg(vds_handle);
+                    lock_out->vds_used = 0;
+                    return false;
+                }
+
+                tmp_in[tmp_in_count].phys = p;
+                tmp_in[tmp_in_count].len = (uint16_t)l;
+                tmp_in_count++;
+                remaining -= l;
             }
-
-            tmp_in[tmp_in_count].phys = p;
-            tmp_in[tmp_in_count].len = (uint16_t)l;
-            tmp_in_count++;
-            remaining -= l;
         }
     } else {
         /* GPT-5 Critical Fix: Check if we're in V86 mode without VDS */
@@ -1991,41 +2000,45 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
     }
 
     /* Split fragments at 64KB boundaries */
-    for (uint16_t i = 0; i < tmp_in_count; ++i) {
-        uint16_t produced = split_at_64k_boundaries(tmp_in[i].phys, tmp_in[i].len,
-                                                    &tmp_out[tmp_out_count],
-                                                    (uint16_t)(DMA_MAX_SG_INTERNAL - tmp_out_count));
-        if (produced == 0) {
-            log_error("DMA map: insufficient space for 64KB split");
-            if (lock_out->vds_used) {
-                vds_unlock_region_sg(lock_out->vds_handle);
-                lock_out->vds_used = 0;
+    {
+        uint16_t i;
+        for (i = 0; i < tmp_in_count; ++i) {
+            uint16_t produced = split_at_64k_boundaries(tmp_in[i].phys, tmp_in[i].len,
+                                                        &tmp_out[tmp_out_count],
+                                                        (uint16_t)(DMA_MAX_SG_INTERNAL - tmp_out_count));
+            if (produced == 0) {
+                log_error("DMA map: insufficient space for 64KB split");
+                if (lock_out->vds_used) {
+                    vds_unlock_region_sg(lock_out->vds_handle);
+                    lock_out->vds_used = 0;
+                }
+                return false;
             }
-            return false;
+            tmp_out_count = (uint16_t)(tmp_out_count + produced);
         }
-        tmp_out_count = (uint16_t)(tmp_out_count + produced);
     }
 
     /* GPT-5 Fix: Alignment is now checked in split_at_64k_boundaries for ALL fragments */
     
     /* GPT-5 Fix: Check ISA addressing limit only for ISA devices */
     if (device_type == DMA_DEVICE_ISA) {
-        for (uint16_t i = 0; i < tmp_out_count; ++i) {
+        uint16_t i;
+        for (i = 0; i < tmp_out_count; ++i) {
             uint32_t frag_start = tmp_out[i].phys;
             uint32_t frag_end = frag_start + tmp_out[i].len - 1;
-            
+
             /* Check both start AND end addresses are within 24-bit window */
             if (frag_start >= 0x01000000UL || frag_end > 0x00FFFFFFUL) {
-                log_warning("DMA map: ISA fragment exceeds 16MB limit (start=0x%08lX, end=0x%08lX)", 
+                log_warning("DMA map: ISA fragment exceeds 16MB limit (start=0x%08lX, end=0x%08lX)",
                           frag_start, frag_end);
                 log_info("DMA map: Using bounce buffer for ISA constraint violation");
-                
+
                 /* Unlock VDS if we used it */
                 if (lock_out->vds_used) {
                     vds_unlock_region_sg(lock_out->vds_handle);
                     lock_out->vds_used = 0;
                 }
-                
+
                 /* Use bounce buffer for ISA constraint violation */
                 return dma_use_bounce_buffer(buf, len, direction, lock_out, frags, frag_cnt);
             }
@@ -2060,8 +2073,11 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
     }
 
     /* Copy fragments to caller's buffer */
-    for (uint16_t i = 0; i < tmp_out_count; ++i) {
-        frags[i] = tmp_out[i];
+    {
+        uint16_t i;
+        for (i = 0; i < tmp_out_count; ++i) {
+            frags[i] = tmp_out[i];
+        }
     }
     
     /* GPT-5 Fix: Set output count to actual fragments used */

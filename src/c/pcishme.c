@@ -77,17 +77,18 @@ static config_cache_entry_t* get_cache_entry(uint8_t bus, uint8_t dev, uint8_t f
     uint16_t bdf = (bus << 8) | (dev << 3) | func;
     int oldest_idx = -1;
     uint32_t oldest_time = 0xFFFFFFFF;
-    
+    int i;
+
     /* Look for existing entry */
-    for (int i = 0; i < MAX_CACHED_DEVICES; i++) {
+    for (i = 0; i < MAX_CACHED_DEVICES; i++) {
         if (config_cache[i].cache.valid && config_cache[i].bus_dev_func == bdf) {
             config_cache[i].cache.timestamp = ++cache_access_count;
             enhanced_state.cache_hits++;
             return &config_cache[i].cache;
         }
-        
+
         /* Track oldest for LRU replacement */
-        if (!config_cache[i].cache.valid || 
+        if (!config_cache[i].cache.valid ||
             config_cache[i].cache.timestamp < oldest_time) {
             oldest_time = config_cache[i].cache.timestamp;
             oldest_idx = i;
@@ -110,8 +111,9 @@ static config_cache_entry_t* get_cache_entry(uint8_t bus, uint8_t dev, uint8_t f
  */
 static void invalidate_cache(uint8_t bus, uint8_t dev, uint8_t func) {
     uint16_t bdf = (bus << 8) | (dev << 3) | func;
-    
-    for (int i = 0; i < MAX_CACHED_DEVICES; i++) {
+    int i;
+
+    for (i = 0; i < MAX_CACHED_DEVICES; i++) {
         if (config_cache[i].cache.valid && config_cache[i].bus_dev_func == bdf) {
             config_cache[i].cache.valid = false;
             LOG_DEBUG("Invalidated cache for %02X:%02X.%X", bus, dev, func);
@@ -125,23 +127,25 @@ static void invalidate_cache(uint8_t bus, uint8_t dev, uint8_t func) {
  */
 static void populate_cache(uint8_t bus, uint8_t dev, uint8_t func) {
     config_cache_entry_t* cache = get_cache_entry(bus, dev, func);
-    if (!cache || cache->valid) return;
-    
     uint32_t address;
-    
+    int i;
+
+    if (!cache || cache->valid) return;
+
     /* Read entire config space using Mechanism #1 */
-    for (int i = 0; i < 256; i += 4) {
+    for (i = 0; i < 256; i += 4) {
+        uint32_t dword;
         address = 0x80000000L |
                  ((uint32_t)bus << 16) |
                  ((uint32_t)dev << 11) |
                  ((uint32_t)func << 8) |
                  (i & 0xFC);
-        
+
         _disable();
         outportd(0xCF8, address);
-        uint32_t dword = inportd(0xCFC);
+        dword = inportd(0xCFC);
         _enable();
-        
+
         cache->data[i] = dword & 0xFF;
         cache->data[i+1] = (dword >> 8) & 0xFF;
         cache->data[i+2] = (dword >> 16) & 0xFF;

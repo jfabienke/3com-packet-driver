@@ -18,7 +18,19 @@
 
 #include <common.h>  /* Provides basic types (uint8_t, uint16_t, etc.) */
 
-// --- Common Definitions ---
+/* Undef any macros that might conflict with our enum definitions */
+/* This handles the case where common.h was included before nic_defs.h */
+#ifdef NIC_TYPE_NONE
+#undef NIC_TYPE_NONE
+#endif
+#ifdef NIC_TYPE_3C509B
+#undef NIC_TYPE_3C509B
+#endif
+#ifdef NIC_TYPE_3C515
+#undef NIC_TYPE_3C515
+#endif
+
+/* --- Common Definitions --- */
 
 /**
  * @brief NIC type enumeration
@@ -170,23 +182,24 @@ typedef struct {
 } nic_config_t;
 
 /**
- * @brief NIC information structure (extended for Phase 0A media support)
+ * @brief NIC media information structure (extended for Phase 0A media support)
+ * Note: Renamed from nic_info_t to avoid conflict with hardware.h's extended version
  */
 typedef struct {
-    nic_type_t type;                    // NIC model
-    uint16_t io_base;                   // Assigned I/O base
-    uint8_t  irq;                       // Assigned IRQ
-    uint8_t  mac[6];                    // MAC address (read from EEPROM)
-    
+    nic_type_t type;                    /* NIC model */
+    uint16_t io_base;                   /* Assigned I/O base */
+    uint8_t  irq;                       /* Assigned IRQ */
+    uint8_t  mac[6];                    /* MAC address (read from EEPROM) */
+
     /* === Phase 0A Extensions: Media Management === */
-    uint16_t media_capabilities;        // Bitmask of supported media types (MEDIA_CAP_*)
-    media_type_t current_media;         // Currently selected media type
-    media_type_t detected_media;        // Auto-detected media type
-    uint8_t  media_detection_state;     // Media detection state flags
-    uint8_t  auto_negotiation_flags;    // Auto-negotiation support and status
-    uint8_t  variant_id;                // 3c509 family variant identifier
-    uint8_t  media_config_source;       // Source of current media configuration
-} nic_info_t;
+    uint16_t media_capabilities;        /* Bitmask of supported media types (MEDIA_CAP_*) */
+    media_type_t current_media;         /* Currently selected media type */
+    media_type_t detected_media;        /* Auto-detected media type */
+    uint8_t  media_detection_state;     /* Media detection state flags */
+    uint8_t  auto_negotiation_flags;    /* Auto-negotiation support and status */
+    uint8_t  variant_id;                /* 3c509 family variant identifier */
+    uint8_t  media_config_source;       /* Source of current media configuration */
+} nic_media_info_t;
 
 /**
  * @brief Predefined media capability sets for 3c509 family variants
@@ -491,7 +504,7 @@ uint16_t get_default_media_caps(nic_type_t nic_type);
  * @param nic Pointer to NIC information structure
  * @return Detected media type or MEDIA_TYPE_UNKNOWN if detection fails
  */
-media_type_t auto_detect_media(nic_info_t* nic);
+media_type_t auto_detect_media(nic_media_info_t* nic);
 
 /**
  * @brief Validate media configuration for a specific NIC
@@ -530,21 +543,21 @@ const pnp_device_id_t* get_pnp_device_info(uint32_t vendor_id, uint32_t device_i
  * @param product_id Hardware product ID
  * @return NIC_SUCCESS on success, NIC_ERROR on failure
  */
-int init_nic_variant_info(nic_info_t* nic, uint16_t product_id);
+int init_nic_variant_info(nic_media_info_t* nic, uint16_t product_id);
 
 /**
  * @brief Update media capabilities based on variant
  * @param nic Pointer to NIC information structure
  * @return NIC_SUCCESS on success, NIC_ERROR on failure
  */
-int update_media_capabilities_from_variant(nic_info_t* nic);
+int update_media_capabilities_from_variant(nic_media_info_t* nic);
 
 /**
  * @brief Detect and configure optimal media type for variant
  * @param nic Pointer to NIC information structure
  * @return Detected media type, or MEDIA_TYPE_UNKNOWN on failure
  */
-media_type_t detect_optimal_media_for_variant(nic_info_t* nic);
+media_type_t detect_optimal_media_for_variant(nic_media_info_t* nic);
 
 /**
  * @brief Validate media type against variant capabilities

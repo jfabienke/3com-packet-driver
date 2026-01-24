@@ -115,7 +115,8 @@ int detect_and_init_pci_nics(const config_t *config, int max_nics) {
     LOG_INFO("Found %d 3Com PCI NIC(s)", detected_count);
     
     /* Initialize each detected PCI NIC */
-    for (int i = 0; i < detected_count && i < max_nics; i++) {
+    int i;
+    for (i = 0; i < detected_count && i < max_nics; i++) {
         nic_info_t *nic = hardware_get_nic(initialized_count);
         if (!nic) {
             LOG_ERROR("Failed to get NIC slot %d", initialized_count);

@@ -55,6 +55,9 @@ typedef struct {
     uint16_t    flags;          /* Returned flags indicating cache handling */
 } VDS_DDS;
 
+/* Typedef alias for consistency with other type naming conventions */
+typedef VDS_DDS vds_dds_t;
+
 /* Extended DDS for scatter/gather */
 typedef struct {
     uint32_t    size;           /* Region size */

@@ -255,7 +255,9 @@ int dma_init_bounce_pools(void) {
     }
     
     /* Allocate TX bounce buffers in conventional memory */
-    for (int i = 0; i < DMA_TX_POOL_SIZE; i++) {
+    {
+        int i;
+        for (i = 0; i < DMA_TX_POOL_SIZE; i++) {
         /* Allocate with extra space for alignment */
         void *raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
         if (!raw_buffer) {
@@ -297,10 +299,11 @@ int dma_init_bounce_pools(void) {
             return -1;
         }
         
-        LOG_DEBUG("DMA: TX bounce buffer %d: virt=%p phys=0x%08lX", 
+        LOG_DEBUG("DMA: TX bounce buffer %d: virt=%p phys=0x%08lX",
                  i, g_tx_bounce_pool.buffers[i], g_tx_bounce_pool.phys_addrs[i]);
+        }
     }
-    
+
     /* Initialize RX bounce pool (similar to TX) */
     g_rx_bounce_pool.buffer_count = DMA_RX_POOL_SIZE;
     g_rx_bounce_pool.buffer_size = DMA_BOUNCE_BUFFER_SIZE;
@@ -318,7 +321,9 @@ int dma_init_bounce_pools(void) {
     }
     
     /* Allocate RX bounce buffers */
-    for (int i = 0; i < DMA_RX_POOL_SIZE; i++) {
+    {
+        int i;
+        for (i = 0; i < DMA_RX_POOL_SIZE; i++) {
         void *raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
         if (!raw_buffer) {
             LOG_ERROR("DMA: Failed to allocate RX bounce buffer %d", i);
@@ -339,10 +344,11 @@ int dma_init_bounce_pools(void) {
             return -1;
         }
         
-        LOG_DEBUG("DMA: RX bounce buffer %d: virt=%p phys=0x%08lX", 
+        LOG_DEBUG("DMA: RX bounce buffer %d: virt=%p phys=0x%08lX",
                  i, g_rx_bounce_pool.buffers[i], g_rx_bounce_pool.phys_addrs[i]);
+        }
     }
-    
+
     g_bounce_pools_initialized = true;
     LOG_INFO("DMA: Bounce buffer pools initialized successfully");
     return 0;
@@ -357,23 +363,26 @@ void* dma_get_tx_bounce_buffer(size_t size) {
     }
     
     ENTER_CRITICAL();
-    
-    for (int i = 0; i < DMA_TX_POOL_SIZE; i++) {
-        if (!g_tx_bounce_pool.in_use[i]) {
-            g_tx_bounce_pool.in_use[i] = true;
-            g_tx_bounce_pool.free_count--;
-            g_boundary_stats.bounce_tx_used++;
-            
-            EXIT_CRITICAL();
-            
-            LOG_DEBUG("DMA: Allocated TX bounce buffer %d (free=%d)", 
-                     i, g_tx_bounce_pool.free_count);
-            return g_tx_bounce_pool.buffers[i];
+
+    {
+        int i;
+        for (i = 0; i < DMA_TX_POOL_SIZE; i++) {
+            if (!g_tx_bounce_pool.in_use[i]) {
+                g_tx_bounce_pool.in_use[i] = true;
+                g_tx_bounce_pool.free_count--;
+                g_boundary_stats.bounce_tx_used++;
+
+                EXIT_CRITICAL();
+
+                LOG_DEBUG("DMA: Allocated TX bounce buffer %d (free=%d)",
+                         i, g_tx_bounce_pool.free_count);
+                return g_tx_bounce_pool.buffers[i];
+            }
         }
     }
-    
+
     EXIT_CRITICAL();
-    
+
     LOG_WARNING("DMA: TX bounce pool exhausted");
     return NULL;
 }
@@ -387,22 +396,25 @@ void dma_release_tx_bounce_buffer(void *buffer) {
     }
     
     ENTER_CRITICAL();
-    
-    for (int i = 0; i < DMA_TX_POOL_SIZE; i++) {
-        if (g_tx_bounce_pool.buffers[i] == buffer) {
-            g_tx_bounce_pool.in_use[i] = false;
-            g_tx_bounce_pool.free_count++;
-            
-            EXIT_CRITICAL();
-            
-            LOG_DEBUG("DMA: Released TX bounce buffer %d (free=%d)", 
-                     i, g_tx_bounce_pool.free_count);
-            return;
+
+    {
+        int i;
+        for (i = 0; i < DMA_TX_POOL_SIZE; i++) {
+            if (g_tx_bounce_pool.buffers[i] == buffer) {
+                g_tx_bounce_pool.in_use[i] = false;
+                g_tx_bounce_pool.free_count++;
+
+                EXIT_CRITICAL();
+
+                LOG_DEBUG("DMA: Released TX bounce buffer %d (free=%d)",
+                         i, g_tx_bounce_pool.free_count);
+                return;
+            }
         }
     }
-    
+
     EXIT_CRITICAL();
-    
+
     LOG_ERROR("DMA: Attempted to release invalid TX bounce buffer %p", buffer);
 }
 
@@ -415,23 +427,26 @@ void* dma_get_rx_bounce_buffer(size_t size) {
     }
     
     ENTER_CRITICAL();
-    
-    for (int i = 0; i < DMA_RX_POOL_SIZE; i++) {
-        if (!g_rx_bounce_pool.in_use[i]) {
-            g_rx_bounce_pool.in_use[i] = true;
-            g_rx_bounce_pool.free_count--;
-            g_boundary_stats.bounce_rx_used++;
-            
-            EXIT_CRITICAL();
-            
-            LOG_DEBUG("DMA: Allocated RX bounce buffer %d (free=%d)", 
-                     i, g_rx_bounce_pool.free_count);
-            return g_rx_bounce_pool.buffers[i];
+
+    {
+        int i;
+        for (i = 0; i < DMA_RX_POOL_SIZE; i++) {
+            if (!g_rx_bounce_pool.in_use[i]) {
+                g_rx_bounce_pool.in_use[i] = true;
+                g_rx_bounce_pool.free_count--;
+                g_boundary_stats.bounce_rx_used++;
+
+                EXIT_CRITICAL();
+
+                LOG_DEBUG("DMA: Allocated RX bounce buffer %d (free=%d)",
+                         i, g_rx_bounce_pool.free_count);
+                return g_rx_bounce_pool.buffers[i];
+            }
         }
     }
-    
+
     EXIT_CRITICAL();
-    
+
     LOG_WARNING("DMA: RX bounce pool exhausted");
     return NULL;
 }
@@ -445,22 +460,25 @@ void dma_release_rx_bounce_buffer(void *buffer) {
     }
     
     ENTER_CRITICAL();
-    
-    for (int i = 0; i < DMA_RX_POOL_SIZE; i++) {
-        if (g_rx_bounce_pool.buffers[i] == buffer) {
-            g_rx_bounce_pool.in_use[i] = false;
-            g_rx_bounce_pool.free_count++;
-            
-            EXIT_CRITICAL();
-            
-            LOG_DEBUG("DMA: Released RX bounce buffer %d (free=%d)", 
-                     i, g_rx_bounce_pool.free_count);
-            return;
+
+    {
+        int i;
+        for (i = 0; i < DMA_RX_POOL_SIZE; i++) {
+            if (g_rx_bounce_pool.buffers[i] == buffer) {
+                g_rx_bounce_pool.in_use[i] = false;
+                g_rx_bounce_pool.free_count++;
+
+                EXIT_CRITICAL();
+
+                LOG_DEBUG("DMA: Released RX bounce buffer %d (free=%d)",
+                         i, g_rx_bounce_pool.free_count);
+                return;
+            }
         }
     }
-    
+
     EXIT_CRITICAL();
-    
+
     LOG_ERROR("DMA: Attempted to release invalid RX bounce buffer %p", buffer);
 }
 
@@ -574,9 +592,12 @@ void dma_free_sg_descriptor(dma_sg_descriptor_t *desc) {
     }
     
     /* Release any bounce buffers */
-    for (int i = 0; i < desc->segment_count; i++) {
-        if (desc->segments[i].is_bounce && desc->segments[i].bounce_ptr) {
-            dma_release_tx_bounce_buffer(desc->segments[i].bounce_ptr);
+    {
+        int i;
+        for (i = 0; i < desc->segment_count; i++) {
+            if (desc->segments[i].is_bounce && desc->segments[i].bounce_ptr) {
+                dma_release_tx_bounce_buffer(desc->segments[i].bounce_ptr);
+            }
         }
     }
     
@@ -624,10 +645,11 @@ void dma_shutdown_bounce_pools(void) {
     
     /* Free TX pool */
     if (g_tx_bounce_pool.buffers) {
-        for (int i = 0; i < DMA_TX_POOL_SIZE; i++) {
+        int i;
+        for (i = 0; i < DMA_TX_POOL_SIZE; i++) {
             if (g_tx_bounce_pool.buffers[i]) {
-                /* Note: We allocated with extra space for alignment, 
-                   but we don't track the original pointer. In a real 
+                /* Note: We allocated with extra space for alignment,
+                   but we don't track the original pointer. In a real
                    implementation, we'd need to track both. */
             }
         }
@@ -785,41 +807,46 @@ bool verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *re
     }
     
     /* Check each page for contiguity */
-    uint32_t prev_phys_page = 0;
-    bool first_iteration = true;
-    
-    for (uint32_t page_linear = first_page; page_linear <= last_page; page_linear += 4096) {
-        uint32_t phys_addr = translate_linear_to_physical(page_linear);
-        
-        if (phys_addr == 0xFFFFFFFF) {
-            LOG_WARNING("DMA: Cannot translate page 0x%08lX to physical", page_linear);
-            result->translation_reliable = false;
-            result->is_contiguous = false;
-            return false;
-        }
-        
-        uint32_t phys_page = phys_addr & ~0xFFF;
-        
-        if (first_iteration) {
-            result->first_page_phys = phys_page;
-            first_iteration = false;
-        } else {
-            /* Check if this page is contiguous with previous */
-            if (phys_page != (prev_phys_page + 4096)) {
-                LOG_DEBUG("DMA: Physical discontinuity detected at linear 0x%08lX", page_linear);
+    {
+        uint32_t prev_phys_page = 0;
+        bool first_iteration = true;
+        uint32_t page_linear;
+
+        for (page_linear = first_page; page_linear <= last_page; page_linear += 4096) {
+            uint32_t phys_addr = translate_linear_to_physical(page_linear);
+
+            if (phys_addr == 0xFFFFFFFF) {
+                LOG_WARNING("DMA: Cannot translate page 0x%08lX to physical", page_linear);
+                result->translation_reliable = false;
                 result->is_contiguous = false;
-                result->translation_reliable = true;
                 return false;
             }
+
+            {
+                uint32_t phys_page = phys_addr & ~0xFFF;
+
+                if (first_iteration) {
+                    result->first_page_phys = phys_page;
+                    first_iteration = false;
+                } else {
+                    /* Check if this page is contiguous with previous */
+                    if (phys_page != (prev_phys_page + 4096)) {
+                        LOG_DEBUG("DMA: Physical discontinuity detected at linear 0x%08lX", page_linear);
+                        result->is_contiguous = false;
+                        result->translation_reliable = true;
+                        return false;
+                    }
+                }
+
+                result->last_page_phys = phys_page;
+                prev_phys_page = phys_page;
+            }
         }
-        
-        result->last_page_phys = phys_page;
-        prev_phys_page = phys_page;
     }
-    
+
     result->translation_reliable = true;
     result->is_contiguous = true;
-    
+
     LOG_DEBUG("DMA: Buffer verified physically contiguous across %u pages", page_count);
     return true;
 }

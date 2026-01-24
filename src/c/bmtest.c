@@ -18,12 +18,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include "../include/bmtest.h"
-#include "../include/logging.h"
-#include "../include/cpudet.h"
-#include "../include/hardware.h"
-#include "../include/3c515.h"
-#include "../include/memory.h"
+#include "bmtest.h"
+#include "logging.h"
+#include "cpudet.h"
+#include "hardware.h"
+#include "3c515.h"
+#include "memory.h"
 
 /* Global test state */
 static bool g_test_framework_initialized = false;
@@ -410,7 +410,8 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
     
     /* CPU reads the modified memory */
     bool coherent = true;
-    for (uint32_t i = 0; i < test_size; i++) {
+    uint32_t i;
+    for (i = 0; i < test_size; i++) {
         if (test_buffer[i] != 0x55) {
             coherent = false;
             break;
@@ -427,7 +428,7 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
     
     /* Test 3: Cache coherency test (20 points) */
     /* Fill test buffer with known pattern */
-    for (uint32_t i = 0; i < test_size; i++) {
+    for (i = 0; i < test_size; i++) {
         test_buffer[i] = (uint8_t)(i & 0xFF);
     }
     
@@ -438,7 +439,7 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
     
     /* Verify pattern integrity */
     bool cache_coherent = true;
-    for (uint32_t i = 0; i < test_size; i++) {
+    for (i = 0; i < test_size; i++) {
         if (test_buffer[i] != (uint8_t)(i & 0xFF)) {
             cache_coherent = false;
             break;
@@ -482,9 +483,10 @@ uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *i
     
     /* Test 1: Setup time measurement (30 points) */
     uint32_t start_time = get_time_ms();
-    
+    int i;
+
     /* Perform a series of register accesses to measure timing */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         outw(io_base + 0x0E, 0x0000);  /* Write to command register */
         volatile uint16_t dummy = inw(io_base + 0x0E);  /* Read back */
         (void)dummy;  /* Suppress unused variable warning */
@@ -508,8 +510,8 @@ uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *i
     /* Test 2: Hold time measurement (30 points) */
     /* Perform back-to-back write operations */
     start_time = get_time_ms();
-    
-    for (int i = 0; i < 100; i++) {
+
+    for (i = 0; i < 100; i++) {
         outw(io_base + 0x0E, 0x0001);
         outw(io_base + 0x0E, 0x0002);
     }
@@ -529,10 +531,10 @@ uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *i
     
     /* Test 3: Burst duration test (40 points) */
     start_time = get_time_ms();
-    
+
     /* Simulate a burst transfer */
     uint32_t burst_data = 0x12345678;
-    for (int i = 0; i < 16; i++) {
+    for (i = 0; i < 16; i++) {
         outl(io_base + 0x24, burst_data + i);  /* Burst write to DMA address */
     }
     
@@ -651,8 +653,9 @@ uint16_t test_burst_transfer_capability(nic_context_t *ctx) {
     /* Test different burst sizes */
     uint32_t burst_sizes[] = {64, 128, 256, 512, 1024, 2048, 4096};
     uint32_t num_sizes = sizeof(burst_sizes) / sizeof(burst_sizes[0]);
-    
-    for (uint32_t i = 0; i < num_sizes; i++) {
+    uint32_t i;
+
+    for (i = 0; i < num_sizes; i++) {
         uint32_t burst_size = burst_sizes[i];
         
         /* Test burst write capability */
@@ -967,42 +970,44 @@ void emergency_stop_busmaster_test(nic_context_t *ctx) {
  * @brief Initialize test patterns for data integrity testing
  */
 static int initialize_test_patterns(data_integrity_patterns_t *patterns) {
+    int i;
+
     if (!patterns) {
         return -1;
     }
-    
+
     /* Walking ones pattern */
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->walking_ones[i] = (1 << (i % 8));
     }
-    
+
     /* Walking zeros pattern */
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->walking_zeros[i] = ~(1 << (i % 8));
     }
-    
+
     /* Alternating patterns */
     memset(patterns->alternating_55, 0x55, 256);
     memset(patterns->alternating_AA, 0xAA, 256);
-    
+
     /* Random pattern (pseudo-random) */
     srand((unsigned int)time(NULL));
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->random_pattern[i] = (uint8_t)(rand() & 0xFF);
     }
-    
+
     /* Address-based pattern */
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->address_pattern[i] = (uint8_t)(i & 0xFF);
     }
-    
+
     /* Checksum pattern */
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->checksum_pattern[i] = (uint8_t)((i ^ 0x5A) & 0xFF);
     }
-    
+
     /* Burst pattern */
-    for (int i = 0; i < 256; i++) {
+    for (i = 0; i < 256; i++) {
         patterns->burst_pattern[i] = (uint8_t)((i + 0x12) & 0xFF);
     }
     
@@ -1032,7 +1037,8 @@ static void delay_ms(uint32_t ms) {
  */
 static uint16_t calculate_checksum(const uint8_t *data, size_t size) {
     uint16_t checksum = 0;
-    for (size_t i = 0; i < size; i++) {
+    size_t i;
+    for (i = 0; i < size; i++) {
         checksum += data[i];
     }
     return checksum;
@@ -1106,11 +1112,12 @@ static uint32_t calculate_cache_checksum(const busmaster_test_cache_t *cache) {
     uint32_t checksum = 0;
     const uint8_t *data = (const uint8_t*)cache;
     size_t size = sizeof(busmaster_test_cache_t) - sizeof(cache->checksum);
-    
-    for (size_t i = 0; i < size; i++) {
+    size_t i;
+
+    for (i = 0; i < size; i++) {
         checksum = ((checksum << 5) + checksum) + data[i]; /* hash * 33 + c */
     }
-    
+
     return checksum;
 }
 

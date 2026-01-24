@@ -7,12 +7,12 @@
  * (ARS 2.4), and targets a small footprint (<6 KB TSR, ARS 4.1).
  */
 
-#include "../include/hardware.h"  // NIC types and structures  
-#include "../include/logging.h"   // For logging
-#include "../include/3c509b.h"    // 3C509B definitions
-#include "../include/3c515.h"     // 3C515-TX definitions
-#include "../include/nic_init.h"  // NIC detection structures
-#include "../include/common.h"    // Common definitions
+#include "hardware.h"  // NIC types and structures  
+#include "logging.h"   // For logging
+#include "3c509b.h"    // 3C509B definitions
+#include "3c515.h"     // 3C515-TX definitions
+#include "nic_init.h"  // NIC detection structures
+#include "common.h"    // Common definitions
 #include <dos.h>                  // DOS I/O functions
 #include <string.h>               // For memset
 
@@ -77,10 +77,11 @@ int nic_count = 0;              // Number of detected NICs
  * @brief Send ISAPnP key sequence to enter Wait for Key state
  */
 static void isapnp_send_key(void) {
-    for (int i = 0; i < 32; i++) {
+    int i;
+    for (i = 0; i < 32; i++) {
         outb(ISAPNP_ADDRESS, isapnp_key[i]);
     }
-    
+
     /* Small delay after key sequence */
     delay_microseconds(100);
 }
@@ -214,8 +215,11 @@ static int isapnp_read_serial_id(uint8_t csn, struct isapnp_identifier *id) {
     id->product_id[1] = isapnp_read_data();
     
     /* Read serial number (4 bytes) */
-    for (int i = 0; i < 4; i++) {
+    {
+    int i;
+    for (i = 0; i < 4; i++) {
         id->serial_number[i] = isapnp_read_data();
+    }
     }
     
     /* Read checksum */
@@ -270,7 +274,8 @@ static void delay_microseconds(uint32_t us) {
 }
 
 static void delay_milliseconds(uint32_t ms) {
-    for (uint32_t i = 0; i < ms; i++) {
+    uint32_t i;
+    for (i = 0; i < ms; i++) {
         delay_microseconds(1000);
     }
 }

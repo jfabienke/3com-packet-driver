@@ -48,10 +48,13 @@ int vds_manager_init(void)
     memset(&manager_stats, 0, sizeof(manager_stats));
     
     /* Mark all entries as free */
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        registry[i].state = VDS_ENTRY_FREE;
-        registry[i].handle = VDS_INVALID_HANDLE;
-        registry[i].manager_id = VDS_INVALID_HANDLE;
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            registry[i].state = VDS_ENTRY_FREE;
+            registry[i].handle = VDS_INVALID_HANDLE;
+            registry[i].manager_id = VDS_INVALID_HANDLE;
+        }
     }
     
     manager_initialized = true;
@@ -71,16 +74,19 @@ void vds_manager_cleanup(void)
     }
     
     /* Release all active locks */
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].state != VDS_ENTRY_FREE) {
-            vds_safe_lock_t lock;
-            lock.success = true;
-            lock.lock_handle = registry[i].handle;
-            
-            vds_unlock_safe(&lock);
-            
-            LOG_DEBUG("VDS Manager: Released lock %u on cleanup", 
-                     registry[i].manager_id);
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].state != VDS_ENTRY_FREE) {
+                vds_safe_lock_t lock;
+                lock.success = true;
+                lock.lock_handle = registry[i].handle;
+
+                vds_unlock_safe(&lock);
+
+                LOG_DEBUG("VDS Manager: Released lock %u on cleanup",
+                         registry[i].manager_id);
+            }
         }
     }
     
@@ -115,7 +121,8 @@ uint16_t vds_manager_lock(void far* addr, uint32_t size,
     existing_id = find_existing_lock(addr, size);
     if (existing_id != VDS_INVALID_HANDLE) {
         /* Found existing lock - update access info and reference count */
-        for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
             if (registry[i].manager_id == existing_id) {
                 /* Increment reference count */
                 registry[i].ref_count++;
@@ -224,9 +231,11 @@ int vds_manager_unlock(uint16_t manager_id)
     }
     
     /* Find registry entry */
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].manager_id == manager_id &&
-            registry[i].state != VDS_ENTRY_FREE) {
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].manager_id == manager_id &&
+                registry[i].state != VDS_ENTRY_FREE) {
             
             /* Decrement reference count */
             if (registry[i].ref_count > 0) {
@@ -273,9 +282,10 @@ int vds_manager_unlock(uint16_t manager_id)
             
             LOG_DEBUG("VDS Manager: Unlocked ID %u (refcount reached 0)", manager_id);
             return 0;
+            }
         }
     }
-    
+
     LOG_WARNING("VDS Manager: Lock ID %u not found", manager_id);
     return -1;
 }
@@ -302,7 +312,8 @@ uint16_t vds_manager_lock_ring(void far* ring_addr, uint32_t ring_size,
     
     if (id != VDS_INVALID_HANDLE) {
         /* Mark as ring buffer */
-        for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
             if (registry[i].manager_id == id) {
                 registry[i].is_ring_buffer = true;
                 break;
@@ -325,12 +336,15 @@ const vds_registry_entry_t* vds_manager_get_entry(uint16_t manager_id)
         return NULL;
     }
     
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].manager_id == manager_id) {
-            return &registry[i];
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].manager_id == manager_id) {
+                return &registry[i];
+            }
         }
     }
-    
+
     return NULL;
 }
 
@@ -343,14 +357,16 @@ int vds_manager_cleanup_stale(uint32_t max_age_ticks)
     uint32_t current_time = clock();
     vds_safe_lock_t lock;
     
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].state == VDS_ENTRY_LOCKED && !registry[i].busy) {
-            uint32_t age = current_time - registry[i].last_access;
-            
-            /* Check if stale and unreferenced */
-            if (age > max_age_ticks && 
-                registry[i].ref_count == 0 &&
-                registry[i].policy != VDS_POLICY_PERSISTENT) {
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].state == VDS_ENTRY_LOCKED && !registry[i].busy) {
+                uint32_t age = current_time - registry[i].last_access;
+
+                /* Check if stale and unreferenced */
+                if (age > max_age_ticks &&
+                    registry[i].ref_count == 0 &&
+                    registry[i].policy != VDS_POLICY_PERSISTENT) {
                 
                 /* Mark for aging */
                 registry[i].state = VDS_ENTRY_AGING;
@@ -367,10 +383,11 @@ int vds_manager_cleanup_stale(uint32_t max_age_ticks)
                 cleaned++;
                 
                 LOG_DEBUG("VDS Manager: Cleaned stale lock (age: %lu ticks)", age);
+                }
             }
         }
     }
-    
+
     if (cleaned > 0) {
         manager_stats.stale_cleanups += cleaned;
         manager_stats.auto_cleanups += cleaned;
@@ -402,21 +419,24 @@ void vds_manager_dump_registry(bool verbose)
             manager_stats.entries_used, VDS_REGISTRY_SIZE,
             manager_stats.entries_peak);
     
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].state != VDS_ENTRY_FREE) {
-            active++;
-            
-            if (verbose) {
-                LOG_INFO("[%02d] ID:%u Handle:0x%04X Addr:0x%p Size:%lu "
-                        "Phys:0x%08lX Policy:%d State:%d Desc:%s",
-                        i, registry[i].manager_id, registry[i].handle,
-                        registry[i].address, registry[i].size,
-                        registry[i].physical_addr, registry[i].policy,
-                        registry[i].state, registry[i].description);
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].state != VDS_ENTRY_FREE) {
+                active++;
+
+                if (verbose) {
+                    LOG_INFO("[%02d] ID:%u Handle:0x%04X Addr:0x%p Size:%lu "
+                            "Phys:0x%08lX Policy:%d State:%d Desc:%s",
+                            i, registry[i].manager_id, registry[i].handle,
+                            registry[i].address, registry[i].size,
+                            registry[i].physical_addr, registry[i].policy,
+                            registry[i].state, registry[i].description);
+                }
             }
         }
     }
-    
+
     LOG_INFO("Active entries: %d", active);
     LOG_INFO("Total locks: %lu, Unlocks: %lu",
             manager_stats.total_locks, manager_stats.total_unlocks);
@@ -429,22 +449,28 @@ void vds_manager_dump_registry(bool verbose)
 static uint16_t allocate_registry_entry(void)
 {
     /* First pass: find free entry */
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].state == VDS_ENTRY_FREE && !registry[i].busy) {
-            registry[i].state = VDS_ENTRY_LOCKED;
-            registry[i].busy = true;  /* Mark as busy during allocation */
-            return i;
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].state == VDS_ENTRY_FREE && !registry[i].busy) {
+                registry[i].state = VDS_ENTRY_LOCKED;
+                registry[i].busy = true;  /* Mark as busy during allocation */
+                return i;
+            }
         }
     }
-    
+
     /* Second pass: reclaim aged entries with zero refcount */
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
-        if (registry[i].state == VDS_ENTRY_AGING && 
-            registry[i].ref_count == 0 && !registry[i].busy) {
-            free_registry_entry(i);
-            registry[i].state = VDS_ENTRY_LOCKED;
-            registry[i].busy = true;
-            return i;
+    {
+        int i;
+        for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
+            if (registry[i].state == VDS_ENTRY_AGING &&
+                registry[i].ref_count == 0 && !registry[i].busy) {
+                free_registry_entry(i);
+                registry[i].state = VDS_ENTRY_LOCKED;
+                registry[i].busy = true;
+                return i;
+            }
         }
     }
     
@@ -473,13 +499,14 @@ static void free_registry_entry(uint16_t index)
 
 static uint16_t find_existing_lock(void far* addr, uint32_t size)
 {
-    for (int i = 0; i < VDS_REGISTRY_SIZE; i++) {
+    int i;
+    for (i = 0; i < VDS_REGISTRY_SIZE; i++) {
         if (registry[i].state == VDS_ENTRY_LOCKED &&
             registry[i].address == addr &&
             registry[i].size == size) {
             return registry[i].manager_id;
         }
     }
-    
+
     return VDS_INVALID_HANDLE;
 }

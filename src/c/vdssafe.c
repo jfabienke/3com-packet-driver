@@ -680,8 +680,11 @@ void far* vds_allocate_bounce_buffer(uint32_t size,
     }
     
     /* Mark blocks as allocated */
-    for (int i = 0; i < blocks_needed; i++) {
-        bounce_pool.allocation_map[block_index + i] = 1;
+    {
+        int i;
+        for (i = 0; i < blocks_needed; i++) {
+            bounce_pool.allocation_map[block_index + i] = 1;
+        }
     }
     
     safety_stats.bounce_pool_used += blocks_needed * bounce_pool.block_size;
@@ -699,19 +702,22 @@ static int find_free_bounce_block(uint32_t blocks_needed)
     uint16_t consecutive = 0;
     int start_block = -1;
     
-    for (int i = 0; i < bounce_pool.num_blocks; i++) {
-        if (bounce_pool.allocation_map[i] == 0) {
-            if (consecutive == 0) {
-                start_block = i;
+    {
+        int i;
+        for (i = 0; i < bounce_pool.num_blocks; i++) {
+            if (bounce_pool.allocation_map[i] == 0) {
+                if (consecutive == 0) {
+                    start_block = i;
+                }
+                consecutive++;
+
+                if (consecutive >= blocks_needed) {
+                    return start_block;
+                }
+            } else {
+                consecutive = 0;
+                start_block = -1;
             }
-            consecutive++;
-            
-            if (consecutive >= blocks_needed) {
-                return start_block;
-            }
-        } else {
-            consecutive = 0;
-            start_block = -1;
         }
     }
     

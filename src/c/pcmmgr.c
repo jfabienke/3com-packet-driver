@@ -12,11 +12,11 @@
  */
 
 #include <string.h>
-#include "../include/common.h"
-#include "../include/logging.h"
-#include "../include/pcmcia.h"
-#include "../include/pci_bios.h"
-#include "../include/pcmcis.h"
+#include "common.h"
+#include "logging.h"
+#include "pcmcia.h"
+#include "pci_bios.h"
+#include "pcmcis.h"
 
 /* ------------------------ PCIC (ISA) probe ------------------------ */
 
@@ -37,7 +37,8 @@ static inline uint8_t pcic_read(uint16_t index_port, uint8_t socket, uint8_t reg
 }
 
 static bool probe_pcic_controller(uint16_t *io_base_out, uint8_t *socket_count_out) {
-    for (int i = 0; k_pcic_index_ports[i] != 0; i++) {
+    int i;
+    for (i = 0; k_pcic_index_ports[i] != 0; i++) {
         uint16_t io = k_pcic_index_ports[i];
         /* Use scratch register 0x0E on socket 0 for a simple echo test */
         pcic_write(io, 0, 0x0E, 0xAA);
@@ -47,7 +48,8 @@ static bool probe_pcic_controller(uint16_t *io_base_out, uint8_t *socket_count_o
         if (r1 == 0xAA && r2 == 0x55) {
             /* Determine socket count by probing socket 0..3 status register (0x10 is common) */
             uint8_t sockets = 0;
-            for (uint8_t s = 0; s < 4; s++) {
+            uint8_t s;
+            for (s = 0; s < 4; s++) {
                 /* If reads look sane (low bits not all set), assume socket exists */
                 uint8_t status = pcic_read(io, s, 0x10);
                 if ((status & 0x0F) == 0x00) {
@@ -110,10 +112,11 @@ int pcmcia_init(void) {
     if (ss_available()) {
         int adapters = 0, sockets = 0;
         if (ss_get_socket_count(&adapters, &sockets) == 0 && sockets > 0) {
+            uint8_t s;
             g_ss_present = true;
             if (sockets > 4) sockets = 4;
             g_pcic_sockets = (uint8_t)sockets; /* reuse socket count */
-            for (uint8_t s = 0; s < g_pcic_sockets; s++) {
+            for (s = 0; s < g_pcic_sockets; s++) {
                 g_sock_state[s].present = 1;
                 g_sock_state[s].type = 1; /* PCMCIA */
                 g_sock_state[s].attached = 0;
@@ -125,9 +128,10 @@ int pcmcia_init(void) {
         /* Probe 16-bit PCMCIA controller (PCIC) */
         g_pcic_present = probe_pcic_controller(&g_pcic_io_base, &g_pcic_sockets);
         if (g_pcic_present) {
+            uint8_t s;
             LOG_INFO("PCMCIA controller detected: IO=0x%04X, sockets=%u", g_pcic_io_base, g_pcic_sockets);
             if (g_pcic_sockets > 4) g_pcic_sockets = 4;
-            for (uint8_t s = 0; s < g_pcic_sockets; s++) {
+            for (s = 0; s < g_pcic_sockets; s++) {
                 g_sock_state[s].present = 1;
                 g_sock_state[s].type = 1;
                 g_sock_state[s].attached = 0;
@@ -189,7 +193,8 @@ void pcmcia_poll(void) {
         /* Query per-socket status via SS_GET_SOCKET and set basic fields */
         extern int ss_get_socket_status(uint16_t socket, uint8_t *status);
         extern int ss_read_cis(uint16_t socket, uint16_t offset, void far *dst, uint16_t len);
-        for (uint8_t s = 0; s < g_pcic_sockets && s < 4; s++) {
+        uint8_t s;
+        for (s = 0; s < g_pcic_sockets && s < 4; s++) {
             uint8_t st = 0;
             if (ss_get_socket_status(s, &st) == 0) {
                 /* CARD_DETECT bit approximated as bit0 */
@@ -227,7 +232,8 @@ void pcmcia_poll(void) {
     } else if (g_pcic_present) {
         /* PE mode: read minimal presence and set conservative defaults */
         extern int pe_read_cis(uint16_t io_base, uint8_t socket, uint16_t offset, void far *dst, uint16_t len);
-        for (uint8_t s = 0; s < g_pcic_sockets && s < 4; s++) {
+        uint8_t s;
+        for (s = 0; s < g_pcic_sockets && s < 4; s++) {
             int present = pe_get_card_present(g_pcic_io_base, s);
             g_sock_state[s].card_present = present ? 1 : 0;
             if (present) {
@@ -277,7 +283,8 @@ int pcmcia_manager_fill_snapshot(pcmcia_socket_info_t *entries,
     uint8_t cnt = 0;
     if (g_pcic_present) {
         uint8_t limit = (g_pcic_sockets < max_entries) ? g_pcic_sockets : (uint8_t)max_entries;
-        for (uint8_t s = 0; s < limit; s++) {
+        uint8_t s;
+        for (s = 0; s < limit; s++) {
             entries[cnt].socket_id = s;
             entries[cnt].present = g_sock_state[s].present;
             entries[cnt].card_present = g_sock_state[s].card_present;

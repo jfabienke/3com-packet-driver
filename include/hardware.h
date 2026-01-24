@@ -17,18 +17,18 @@ extern "C" {
 
 /* Includes */
 #include "common.h"
+#include "nic_defs.h"    /* Provides nic_type_t enum */
 #include "errhndl.h"
+
+/* Forward declaration for buffer_pool_stats_t (full definition in nicbufp.h) */
+struct buffer_pool_stats;
+typedef struct buffer_pool_stats buffer_pool_stats_t;
 
 /* Forward declarations */
 struct nic_info;
 struct nic_ops;
 
-/* NIC Type Enumeration */
-typedef enum {
-    NIC_TYPE_UNKNOWN = 0,
-    NIC_TYPE_3C509B,
-    NIC_TYPE_3C515_TX
-} nic_type_t;
+/* Note: nic_type_t is now defined in nic_defs.h with extended support */
 
 /* NIC Status flags */
 #define NIC_STATUS_PRESENT      BIT(0)   /* NIC is present */
@@ -119,6 +119,10 @@ typedef struct nic_ops {
 } nic_ops_t;
 
 /* Enhanced NIC Information Structure */
+/* Note: nic_defs.h may define a simpler nic_info_t for media/variant info */
+/* This extended version adds driver state, statistics, and operations */
+#ifndef NIC_INFO_T_EXTENDED_DEFINED
+#define NIC_INFO_T_EXTENDED_DEFINED
 typedef struct nic_info {
     /* Basic information */
     nic_type_t type;                        /* Type of the NIC */
@@ -186,6 +190,7 @@ typedef struct nic_info {
     uint8_t multicast_count;                /* Number of multicast addresses */
     uint8_t multicast_list[16][ETH_ALEN];   /* Multicast address list */
 } nic_info_t;
+#endif /* NIC_INFO_T_EXTENDED_DEFINED */
 
 /* Hardware detection and enumeration */
 struct pci_device_info;
@@ -348,13 +353,16 @@ int nic_detect_eisa_3c597(void);       /* Returns 1 if 3C597 found but unsupport
 int nic_detect_eisa_3c509b(void);      /* Returns 1 if EISA card found (existing stub) */
 int nic_detect_vlb(void);              /* Returns 1 if VLB NIC found but unsupported */
 
+/* Error time tracking */
+uint32_t hardware_get_last_error_time(uint8_t nic_index);
+
+/* Dynamic attach/detach for hot-plug (PCMCIA/CardBus) */
+int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
+int hardware_detach_nic_by_index(int index);
+int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* _HARDWARE_H_ */
-uint32_t hardware_get_last_error_time(uint8_t nic_index);
-/* Dynamic attach/detach for hot-plug (PCMCIA/CardBus) */
-int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
-int hardware_detach_nic_by_index(int index);
-int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq);

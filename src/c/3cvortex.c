@@ -127,8 +127,9 @@ int vortex_start_xmit(pci_3com_context_t *ctx, packet_t *pkt)
     /* Use word transfers for speed */
     uint16_t *data16 = (uint16_t *)pkt->data;
     uint16_t words = (len + 1) >> 1;  /* Round up to word boundary */
-    
-    for (uint16_t i = 0; i < words; i++) {
+    uint16_t i;
+
+    for (i = 0; i < words; i++) {
         outpw(ioaddr + VORTEX_TX_PIO_DATA, data16[i]);
     }
     
@@ -225,8 +226,9 @@ int vortex_rx(pci_3com_context_t *ctx)
         /* Read packet data from FIFO */
         uint16_t *data16 = (uint16_t *)pkt->data;
         uint16_t words = (packet_len + 1) >> 1;
-        
-        for (uint16_t i = 0; i < words; i++) {
+        uint16_t i;
+
+        for (i = 0; i < words; i++) {
             data16[i] = inpw(ioaddr + VORTEX_RX_PIO_DATA);
         }
         

@@ -11,13 +11,13 @@
 #include <dos.h>
 #include <stdio.h>
 #include <string.h>
-#include "../include/api.h"
-#include "../include/hardware.h"
-#include "../include/pktops.h"
-#include "../include/logging.h"
-#include "../include/stats.h"
-#include "../include/routing.h"
-#include "../include/prod.h"
+#include "api.h"
+#include "hardware.h"
+#include "pktops.h"
+#include "logging.h"
+#include "stats.h"
+#include "routing.h"
+#include "prod.h"
 
 /* Packet Driver API constants */
 #define PD_MAX_HANDLES    16      /* Maximum number of handles */
@@ -121,13 +121,7 @@ int api_install_hooks(const config_t *config) {
     }
     
     log_info("Installing Packet Driver API hooks (interrupts disabled)");
-    
-    /* Validate configuration parameters */
-    if (config->magic != CONFIG_MAGIC) {
-        log_error("Invalid configuration magic: 0x%04X", config->magic);
-        return API_ERR_INVALID_PARAM;
-    }
-    
+
     /* Clear handle table */
     memset(handles, 0, sizeof(handles));
     for (i = 0; i < PD_MAX_HANDLES; i++) {
@@ -156,23 +150,25 @@ int api_install_hooks(const config_t *config) {
  * @return 0 on success, negative on error
  */
 int api_activate(const config_t *config) {
+    int result;
+
     if (!config) {
         log_error("api_activate: NULL config parameter");
         return API_ERR_INVALID_PARAM;
     }
-    
+
     if (api_initialized) {
         log_warning("API already activated");
         return API_SUCCESS;
     }
-    
+
     log_info("Activating Packet Driver API");
-    
+
     /* Mark API as fully initialized */
     api_initialized = 1;
-    
+
     /* Initialize Phase 3 Extended API */
-    int result = api_init_extended_handles();
+    result = api_init_extended_handles();
     if (result != API_SUCCESS) {
         log_warning("Extended API initialization failed: %d", result);
         /* Continue with basic API - extended features will be disabled */
@@ -188,31 +184,32 @@ int api_activate(const config_t *config) {
 
 int api_init(const config_t *config) {
     int i;
-    
+    int result;
+
     if (!config) {
         log_error("api_init: NULL config parameter");
         return API_ERR_INVALID_PARAM;
     }
-    
+
     log_info("Initializing Packet Driver API");
-    
+
     /* Validate configuration parameters */
     if (config->magic != CONFIG_MAGIC) {
         log_error("Invalid configuration magic: 0x%04X", config->magic);
         return API_ERR_INVALID_PARAM;
     }
-    
+
     /* Clear handle table */
     memset(handles, 0, sizeof(handles));
     for (i = 0; i < PD_MAX_HANDLES; i++) {
         handles[i].handle = PD_INVALID_HANDLE;
     }
-    
+
     next_handle = 1;
     api_initialized = 1;
-    
+
     /* Initialize Phase 3 Extended API */
-    int result = api_init_extended_handles();
+    result = api_init_extended_handles();
     if (result != API_SUCCESS) {
         log_warning("Extended API initialization failed: %d", result);
         /* Continue with basic API - extended features will be disabled */
@@ -446,10 +443,12 @@ int pd_handle_access_type(void *params) {
 int pd_release_handle(uint16_t handle) {
     int i;
     
+    int j;
+
     log_debug("Releasing handle %04X", handle);
-    
+
     /* Release any extended handle resources */
-    for (int j = 0; j < PD_MAX_EXTENDED_HANDLES; j++) {
+    for (j = 0; j < PD_MAX_EXTENDED_HANDLES; j++) {
         if (extended_handles[j].handle_id == handle) {
             extended_handles[j].handle_id = PD_INVALID_HANDLE;
             memset(&extended_handles[j], 0, sizeof(extended_handles[j]));
@@ -490,13 +489,16 @@ int pd_send_packet(uint16_t handle, void *params) {
     int result;
     int i, handle_idx = -1;
     uint8_t interface_num = 0;
-    
+    uint8_t selected_nic;
+    extended_packet_handle_t *ext_handle;
+    nic_info_t *nic;
+
     if (!params || !send->buffer) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     log_debug("Send packet: handle=%04X, len=%d", handle, send->length);
-    
+
     /* Validate handle and find interface */
     for (i = 0; i < PD_MAX_HANDLES; i++) {
         if (handles[i].handle == handle) {
@@ -505,25 +507,25 @@ int pd_send_packet(uint16_t handle, void *params) {
             break;
         }
     }
-    
+
     if (handle_idx < 0) {
         log_error("Invalid handle %04X", handle);
         return API_ERR_BAD_HANDLE;
     }
-    
+
     /* Validate packet length */
     if (send->length < 60 || send->length > 1514) {
         log_error("Invalid packet length: %d", send->length);
         return API_ERR_INVALID_PARAM;
     }
-    
+
     /* Allocate transmit buffer */
     tx_buffer = buffer_alloc_ethernet_frame(send->length, BUFFER_TYPE_TX);
     if (!tx_buffer) {
         log_error("Failed to allocate TX buffer");
         return API_ERR_INVALID_PARAM;
     }
-    
+
     /* Copy packet data to TX buffer */
     result = buffer_set_data(tx_buffer, send->buffer, send->length);
     if (result < 0) {
@@ -531,9 +533,9 @@ int pd_send_packet(uint16_t handle, void *params) {
         buffer_free_any(tx_buffer);
         return API_ERR_INVALID_PARAM;
     }
-    
+
     /* Phase 3 Enhanced Packet Sending with Intelligent NIC Selection */
-    
+
     /* Check bandwidth limit for extended handles */
     result = api_check_bandwidth_limit(handle, send->length);
     if (result != API_SUCCESS) {
@@ -541,26 +543,25 @@ int pd_send_packet(uint16_t handle, void *params) {
         buffer_free_any(tx_buffer);
         return result;
     }
-    
+
     /* Select optimal NIC using Phase 3 intelligence */
-    uint8_t selected_nic = interface_num; /* Default to handle's interface */
+    selected_nic = interface_num; /* Default to handle's interface */
     result = api_select_optimal_nic(handle, send->buffer, &selected_nic);
     if (result == API_SUCCESS && selected_nic != interface_num) {
         /* Update interface number based on intelligent selection */
         interface_num = selected_nic;
-        
+
         /* Update extended handle statistics */
-        extended_packet_handle_t *ext_handle;
         if (api_get_extended_handle(handle, &ext_handle) == API_SUCCESS) {
             ext_handle->nic_switches++;
             ext_handle->interface_num = selected_nic;
         }
-        
+
         log_debug("Intelligent routing selected NIC %d for handle %04X", selected_nic, handle);
     }
-    
+
     /* Send packet through hardware layer using direct vtable dispatch */
-    nic_info_t *nic = hardware_get_nic(interface_num);
+    nic = hardware_get_nic(interface_num);
     if (!nic || !nic->ops || !nic->ops->send_packet) {
         buffer_free_any(tx_buffer);
         return API_ERR_FUNCTION_NOT_SUPPORTED;
@@ -615,20 +616,21 @@ int pd_terminate(uint16_t handle) {
 int pd_get_address(uint16_t handle, void *params) {
     pd_address_params_t *addr = (pd_address_params_t *)params;
     nic_info_t *nic;
-    
+    int i;
+    int interface_num = 0;
+
     if (!params) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     log_debug("Get address: handle=%04X", handle);
-    
+
     /* Validate handle */
     if (!pd_validate_handle(handle)) {
         return API_ERR_BAD_HANDLE;
     }
-    
+
     /* Find the interface number for this handle */
-    int i, interface_num = 0;
     for (i = 0; i < PD_MAX_HANDLES; i++) {
         if (handles[i].handle == handle) {
             interface_num = handles[i].number;
@@ -656,11 +658,12 @@ int pd_get_address(uint16_t handle, void *params) {
  */
 int pd_reset_interface(uint16_t handle) {
     nic_info_t *nic;
-    
+    int i;
+    int interface_num = 0;
+
     log_debug("Reset interface: handle=%04X", handle);
-    
+
     /* Find interface number for this handle */
-    int i, interface_num = 0;
     for (i = 0; i < PD_MAX_HANDLES; i++) {
         if (handles[i].handle == handle) {
             interface_num = handles[i].number;
@@ -766,21 +769,25 @@ int pd_set_rcv_mode(uint16_t handle, void *params) {
  * @return 0 on success, negative on error
  */
 int pd_get_rcv_mode(uint16_t handle, void *params) {
+    int i;
+    int interface_num = 0;
+    nic_info_t *nic;
+    uint8_t mode;
+    int result;
+
     log_debug("Get receive mode: handle=%04X", handle);
-    
+
     /* Get current receive mode from hardware */
-    int i, interface_num = 0;
     for (i = 0; i < PD_MAX_HANDLES; i++) {
         if (handles[i].handle == handle) {
             interface_num = handles[i].number;
             break;
         }
     }
-    
-    nic_info_t *nic = hardware_get_nic(interface_num);
+
+    nic = hardware_get_nic(interface_num);
     if (nic && nic->ops && nic->ops->get_receive_mode) {
-        uint8_t mode;
-        int result = nic->ops->get_receive_mode(nic, &mode);
+        result = nic->ops->get_receive_mode(nic, &mode);
         if (result == 0) {
             *(uint16_t *)params = mode;
         }
@@ -1152,9 +1159,10 @@ int api_get_extended_handle(uint16_t handle, extended_packet_handle_t **ext_hand
  */
 int api_upgrade_handle(uint16_t handle) {
     int i, basic_idx = -1, ext_idx = -1;
-    
+    int result;
+
     if (!extended_api_initialized) {
-        int result = api_init_extended_handles();
+        result = api_init_extended_handles();
         if (result != API_SUCCESS) {
             return result;
         }
@@ -1465,8 +1473,9 @@ int pd_get_flow_stats(uint16_t handle, void *params) {
     /* Get extended handle */
     result = api_get_extended_handle(handle, &ext_handle);
     if (result != API_SUCCESS) {
+        int i;
         /* Return basic stats for non-extended handles */
-        for (int i = 0; i < PD_MAX_HANDLES; i++) {
+        for (i = 0; i < PD_MAX_HANDLES; i++) {
             if (handles[i].handle == handle) {
                 flow_stats->handle = handle;
                 flow_stats->flow_id = handle; /* Use handle as flow ID */
@@ -1679,13 +1688,15 @@ int api_select_optimal_nic(uint16_t handle, const uint8_t *packet, uint8_t *sele
     /* Use Group 3A routing system for intelligent selection */
     if (routing_is_enabled() && packet) {
         packet_buffer_t routing_packet;
+        route_decision_t decision;
+
         routing_packet.data = (uint8_t *)packet;
         routing_packet.length = 60; /* Minimum Ethernet frame size for analysis */
-        
-        route_decision_t decision = routing_decide(&routing_packet, 0, &dest_nic);
+
+        decision = routing_decide(&routing_packet, 0, &dest_nic);
         if (decision == ROUTE_DECISION_FORWARD && routing_validate_nic(dest_nic)) {
             *selected_nic = dest_nic;
-            
+
             /* Update routing statistics for extended handle */
             if (ext_handle) {
                 ext_handle->packets_routed++;
@@ -1750,33 +1761,36 @@ int api_check_bandwidth_limit(uint16_t handle, uint32_t packet_size) {
  */
 int api_handle_nic_failure(uint8_t failed_nic) {
     int handles_affected = 0;
-    
+    int i;
+
     if (!routing_validate_nic(failed_nic)) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     log_error("NIC %d failed, initiating recovery", failed_nic);
-    
+
     /* Update NIC error count */
     if (failed_nic < MAX_NICS) {
         nic_error_counts[failed_nic]++;
     }
-    
+
     /* Find handles that need to be switched to other NICs */
-    for (int i = 0; i < PD_MAX_EXTENDED_HANDLES; i++) {
+    for (i = 0; i < PD_MAX_EXTENDED_HANDLES; i++) {
         if (extended_handles[i].handle_id != PD_INVALID_HANDLE) {
             /* Check if this handle was using the failed NIC */
             if (extended_handles[i].preferred_nic == failed_nic ||
                 extended_handles[i].interface_num == failed_nic) {
-                
+
                 /* Switch to alternate NIC */
                 uint8_t alternate_nic;
-                int result = api_select_optimal_nic(extended_handles[i].handle_id, NULL, &alternate_nic);
+                int result;
+
+                result = api_select_optimal_nic(extended_handles[i].handle_id, NULL, &alternate_nic);
                 if (result == API_SUCCESS && alternate_nic != failed_nic) {
                     extended_handles[i].interface_num = alternate_nic;
                     extended_handles[i].nic_switches++;
                     handles_affected++;
-                    
+
                     log_info("Switched handle %04X from NIC %d to NIC %d",
                              extended_handles[i].handle_id, failed_nic, alternate_nic);
                 }
@@ -1799,14 +1813,15 @@ int api_handle_nic_failure(uint8_t failed_nic) {
 int api_coordinate_recovery_with_routing(uint8_t failed_nic) {
     /* Update routing system about the failure */
     if (routing_is_enabled()) {
+        int i;
         /* Remove routes that depend on the failed NIC */
         /* This would integrate with Group 3A routing functions */
         log_info("Coordinating with routing system for NIC %d failure", failed_nic);
-        
+
         /* Update default route if it was using the failed NIC */
         if (g_routing_table.default_nic == failed_nic) {
             /* Find alternate NIC */
-            for (int i = 0; i < hardware_get_nic_count(); i++) {
+            for (i = 0; i < hardware_get_nic_count(); i++) {
                 if (i != failed_nic && routing_validate_nic(i)) {
                     routing_set_default_route(i, g_routing_table.default_decision);
                     log_info("Updated default route to use NIC %d", i);
@@ -1844,22 +1859,23 @@ static int api_load_balance_select_nic(uint16_t handle, const uint8_t *packet, u
 
 static int api_round_robin_select_nic(uint8_t *selected_nic) {
     int nic_count = hardware_get_nic_count();
-    
+    int i;
+
     if (nic_count <= 0) {
         return API_ERR_NIC_UNAVAILABLE;
     }
-    
+
     /* Simple round-robin */
     last_nic_used = (last_nic_used + 1) % nic_count;
-    
+
     /* Ensure selected NIC is available */
     if (routing_validate_nic(last_nic_used)) {
         *selected_nic = last_nic_used;
         return API_SUCCESS;
     }
-    
+
     /* Find next available NIC */
-    for (int i = 0; i < nic_count; i++) {
+    for (i = 0; i < nic_count; i++) {
         if (routing_validate_nic(i)) {
             *selected_nic = i;
             last_nic_used = i;
@@ -1893,15 +1909,17 @@ static int api_weighted_select_nic(uint8_t *selected_nic) {
 static int api_performance_select_nic(uint8_t *selected_nic) {
     uint8_t best_nic = 0;
     uint32_t best_score = 0xFFFFFFFF; /* Lower is better */
-    
-    for (int i = 0; i < hardware_get_nic_count(); i++) {
+    int i;
+    uint32_t score;
+
+    for (i = 0; i < hardware_get_nic_count(); i++) {
         if (!routing_validate_nic(i)) {
             continue;
         }
-        
+
         /* Calculate performance score: utilization + error_count */
-        uint32_t score = nic_utilization[i] + (nic_error_counts[i] * 10);
-        
+        score = nic_utilization[i] + (nic_error_counts[i] * 10);
+
         if (score < best_score) {
             best_score = score;
             best_nic = i;
@@ -1945,28 +1963,32 @@ static int api_application_select_nic(uint16_t handle, uint8_t *selected_nic) {
 }
 
 static int api_flow_aware_select_nic(uint16_t handle, const uint8_t *packet, uint8_t *selected_nic) {
+    const uint8_t *dest_mac;
+    bridge_entry_t *bridge_entry;
+    int result;
+
     if (!packet || !selected_nic) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     /* Extract destination MAC for flow tracking */
-    const uint8_t *dest_mac = packet;
-    
+    dest_mac = packet;
+
     /* Check if this flow already exists in Group 3A bridge table */
-    bridge_entry_t *bridge_entry = bridge_lookup_mac(dest_mac);
+    bridge_entry = bridge_lookup_mac(dest_mac);
     if (bridge_entry && routing_validate_nic(bridge_entry->nic_index)) {
         *selected_nic = bridge_entry->nic_index;
         return API_SUCCESS;
     }
-    
+
     /* For new flows, use performance-based selection */
-    int result = api_performance_select_nic(selected_nic);
-    
+    result = api_performance_select_nic(selected_nic);
+
     /* Learn this flow for future consistency */
     if (result == API_SUCCESS && routing_is_enabled()) {
         bridge_learn_mac(dest_mac, *selected_nic);
     }
-    
+
     return result;
 }
 

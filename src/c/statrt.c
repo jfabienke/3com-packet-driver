@@ -8,10 +8,10 @@
  *
  */
 
-#include "../include/statrt.h"
-#include "../include/arp.h"
-#include "../include/logging.h"
-#include "../include/common.h"
+#include "statrt.h"
+#include "arp.h"
+#include "logging.h"
+#include "common.h"
 
 /* Global static routing state */
 static_routing_table_t g_static_routing_table;
@@ -595,9 +595,10 @@ void ip_addr_from_uint32(ip_addr_t *addr, uint32_t value) {
 
 /* Subnet utilities */
 void subnet_apply_mask(ip_addr_t *result, const ip_addr_t *ip, const ip_addr_t *mask) {
+    int i;
     if (!result || !ip || !mask) return;
-    
-    for (int i = 0; i < 4; i++) {
+
+    for (i = 0; i < 4; i++) {
         result->addr[i] = ip->addr[i] & mask->addr[i];
     }
 }
@@ -1059,9 +1060,10 @@ uint16_t static_routing_calculate_ip_checksum(const ip_header_t *header) {
     const uint16_t *data = (const uint16_t*)header;
     uint32_t sum = 0;
     uint8_t header_len = (header->version_ihl & 0x0F) * 4;
-    
+    int i;
+
     /* Sum all 16-bit words in header (excluding checksum field) */
-    for (int i = 0; i < header_len / 2; i++) {
+    for (i = 0; i < header_len / 2; i++) {
         if (i == 5) { /* Skip checksum field */
             continue;
         }

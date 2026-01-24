@@ -8,14 +8,14 @@
  *
  */
 
-#include "../include/promisc.h"
-#include "../include/3c509b.h"
-#include "../include/3c515.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
-#include "../include/diag.h"
-#include "../include/routing.h"
-#include "../include/api.h"
+#include "promisc.h"
+#include "3c509b.h"
+#include "3c515.h"
+#include "logging.h"
+#include "memory.h"
+#include "diag.h"
+#include "routing.h"
+#include "api.h"
 #include <string.h>
 
 /* Global promiscuous mode state */
@@ -82,24 +82,26 @@ int promisc_init(void) {
 }
 
 void promisc_cleanup(void) {
+    int i;
+
     if (!g_promisc_initialized) {
         return;
     }
-    
+
     LOG_INFO("Cleaning up promiscuous mode system");
-    
+
     /* Disable promiscuous mode on all NICs */
-    for (int i = 0; i < hardware_get_nic_count(); i++) {
+    for (i = 0; i < hardware_get_nic_count(); i++) {
         nic_info_t *nic = hardware_get_nic(i);
         if (nic && promisc_is_enabled(nic)) {
             promisc_disable(nic);
         }
     }
-    
+
     /* Clear all filters and applications */
     promisc_clear_filters();
-    
-    for (int i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
+
+    for (i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
         if (g_promisc_apps[i].active) {
             promisc_unregister_application(g_promisc_apps[i].handle_id);
         }
@@ -236,11 +238,12 @@ int promisc_capture_packet(nic_info_t *nic, const uint8_t *packet, uint16_t leng
     bool matches_filters = false;
     
     if (g_promisc_config.filter_count > 0) {
+        int i;
         matches_filters = promisc_packet_matches_filters(packet, length);
         if (matches_filters) {
             /* Find which filter matched */
-            for (int i = 0; i < PROMISC_MAX_FILTERS; i++) {
-                if (g_promisc_filters[i].enabled && 
+            for (i = 0; i < PROMISC_MAX_FILTERS; i++) {
+                if (g_promisc_filters[i].enabled &&
                     promisc_check_filter_match(&g_promisc_filters[i], packet, length)) {
                     filter_matched = i + 1;
                     break;
@@ -324,22 +327,24 @@ void promisc_process_captured_packets(void) {
 
 /* Filter management */
 int promisc_add_filter(const promisc_filter_t *filter) {
+    int i;
+
     if (!g_promisc_initialized || !filter) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Find an empty filter slot */
-    for (int i = 0; i < PROMISC_MAX_FILTERS; i++) {
+    for (i = 0; i < PROMISC_MAX_FILTERS; i++) {
         if (!g_promisc_filters[i].enabled) {
             memcpy(&g_promisc_filters[i], filter, sizeof(promisc_filter_t));
             g_promisc_filters[i].enabled = true;
             g_promisc_config.filter_count++;
-            
+
             LOG_DEBUG("Added filter %d of type %d", i, filter->type);
             return i;
         }
     }
-    
+
     return ERROR_NO_RESOURCES;
 }
 
@@ -373,24 +378,26 @@ int promisc_clear_filters(void) {
 }
 
 bool promisc_packet_matches_filters(const uint8_t *packet, uint16_t length) {
+    int i;
+
     if (!packet || length == 0) {
         return false;
     }
-    
+
     /* If no filters, match all packets */
     if (g_promisc_config.filter_count == 0) {
         return true;
     }
-    
+
     /* Check each active filter */
-    for (int i = 0; i < PROMISC_MAX_FILTERS; i++) {
-        if (g_promisc_filters[i].enabled && 
+    for (i = 0; i < PROMISC_MAX_FILTERS; i++) {
+        if (g_promisc_filters[i].enabled &&
             promisc_check_filter_match(&g_promisc_filters[i], packet, length)) {
             g_promisc_stats.filter_matches++;
             return true;
         }
     }
-    
+
     return false;
 }
 
@@ -400,12 +407,14 @@ int promisc_get_filter_count(void) {
 
 /* Application management */
 int promisc_register_application(uint32_t pid, promisc_level_t level, void far *callback) {
+    int i;
+
     if (!g_promisc_initialized) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Find an empty application slot */
-    for (int i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
+    for (i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
         if (!g_promisc_apps[i].active) {
             g_promisc_apps[i].handle_id = g_next_handle_id++;
             g_promisc_apps[i].pid = pid;
@@ -429,12 +438,14 @@ int promisc_register_application(uint32_t pid, promisc_level_t level, void far *
 }
 
 int promisc_unregister_application(uint16_t handle) {
+    int i;
+
     if (!g_promisc_initialized) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Find the application by handle */
-    for (int i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
+    for (i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
         if (g_promisc_apps[i].active && g_promisc_apps[i].handle_id == handle) {
             LOG_INFO("Unregistering promiscuous mode application: handle=%d", handle);
             
@@ -449,14 +460,15 @@ int promisc_unregister_application(uint16_t handle) {
 }
 
 int promisc_deliver_to_applications(const promisc_packet_buffer_t *packet) {
+    int i;
+    int delivered = 0;
+
     if (!g_promisc_initialized || !packet) {
         return ERROR_INVALID_PARAM;
     }
-    
-    int delivered = 0;
-    
+
     /* Deliver to all registered applications */
-    for (int i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
+    for (i = 0; i < PROMISC_MAX_APPLICATIONS; i++) {
         if (g_promisc_apps[i].active) {
             /* Check if application's level allows this packet */
             bool should_deliver = false;
@@ -624,10 +636,12 @@ int promisc_enable_3c509b(nic_info_t *nic, promisc_level_t level) {
     /* Enhanced 3C509B promiscuous mode implementation with proper register sequence */
     
     /* Step 1: Disable RX to safely change configuration */
+    {
+    int i;
     outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_RX_DISABLE);
-    
+
     /* Wait for RX disable to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
         if (!(status & _3C509B_STATUS_CMD_BUSY)) {
             break;
@@ -659,9 +673,9 @@ int promisc_enable_3c509b(nic_info_t *nic, promisc_level_t level) {
     
     /* Step 4: Apply the RX filter */
     outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | filter);
-    
+
     /* Wait for command to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
         if (!(status & _3C509B_STATUS_CMD_BUSY)) {
             break;
@@ -682,9 +696,9 @@ int promisc_enable_3c509b(nic_info_t *nic, promisc_level_t level) {
     
     /* Step 6: Re-enable RX with new settings */
     outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_RX_ENABLE);
-    
+
     /* Wait for RX enable to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
         if (!(status & _3C509B_STATUS_CMD_BUSY)) {
             break;
@@ -701,7 +715,8 @@ int promisc_enable_3c509b(nic_info_t *nic, promisc_level_t level) {
     }
     
     LOG_DEBUG("3C509B promiscuous mode enabled: filter=0x%X, level=%d", filter, level);
-    
+    }
+
     return SUCCESS;
 }
 
@@ -732,24 +747,26 @@ int promisc_enable_3c515(nic_info_t *nic, promisc_level_t level) {
     LOG_DEBUG("Enabling 3C515-TX promiscuous mode at level %d", level);
     
     /* Enhanced 3C515-TX promiscuous mode with DMA stall/unstall sequence */
-    
+    {
+    int i;
+
     /* Step 1: Stall DMA operations to safely change configuration */
     outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_UP_STALL);
-    
+
     /* Wait for DMA stall to complete */
-    for (int i = 0; i < 1000; i++) {
+    for (i = 0; i < 1000; i++) {
         uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (!(status & _3C515_TX_STATUS_DMA_IN_PROGRESS)) {
             break;
         }
         udelay(10);
     }
-    
+
     /* Step 2: Disable RX temporarily */
     outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_RX_DISABLE);
-    
+
     /* Wait for RX disable */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
             break;
@@ -782,9 +799,9 @@ int promisc_enable_3c515(nic_info_t *nic, promisc_level_t level) {
     
     /* Step 5: Apply RX filter */
     outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_SET_RX_FILTER | filter);
-    
+
     /* Wait for filter command to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
             break;
@@ -821,19 +838,20 @@ int promisc_enable_3c515(nic_info_t *nic, promisc_level_t level) {
     
     /* Step 9: Unstall DMA operations */
     outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_UP_UNSTALL);
-    
+
     /* Wait for unstall to complete */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
         if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
             break;
         }
         udelay(10);
     }
-    
-    LOG_DEBUG("3C515-TX promiscuous mode enabled: filter=0x%X, level=%d, DMA optimized", 
+
+    LOG_DEBUG("3C515-TX promiscuous mode enabled: filter=0x%X, level=%d, DMA optimized",
               filter, level);
-    
+    }
+
     return SUCCESS;
 }
 
@@ -880,17 +898,19 @@ const char* promisc_filter_type_to_string(promisc_filter_type_t type) {
 }
 
 bool promisc_is_broadcast_packet(const uint8_t *packet) {
+    int i;
+
     if (!packet) {
         return false;
     }
-    
+
     /* Check if destination MAC is broadcast (FF:FF:FF:FF:FF:FF) */
-    for (int i = 0; i < ETH_ALEN; i++) {
+    for (i = 0; i < ETH_ALEN; i++) {
         if (packet[i] != 0xFF) {
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -981,14 +1001,16 @@ static bool promisc_check_filter_match(const promisc_filter_t *filter,
         case PROMISC_FILTER_LENGTH:
             return (length >= filter->min_length && length <= filter->max_length);
             
-        case PROMISC_FILTER_CONTENT:
+        case PROMISC_FILTER_CONTENT: {
+            int i;
             if (length < filter->pattern_length) return false;
-            for (int i = 0; i <= length - filter->pattern_length; i++) {
+            for (i = 0; i <= length - filter->pattern_length; i++) {
                 if (memcmp(packet + i, filter->content_pattern, filter->pattern_length) == 0) {
                     return true;
                 }
             }
             return false;
+        }
             
         default:
             return false;

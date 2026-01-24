@@ -13,12 +13,12 @@
  *
  */
 
-#include "../include/cachemgt.h"
-#include "../include/cachecoh.h"
-#include "../include/cpudet.h"
-#include "../include/hardware.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
+#include "cachemgt.h"
+#include "cachecoh.h"
+#include "cpudet.h"
+#include "hardware.h"
+#include "logging.h"
+#include "memory.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -856,10 +856,13 @@ void print_complete_policy_matrix(void) {
     printf("CPU Family | Configuration  | DMA | Tier | Reason\n");
     printf("-----------|----------------|-----|------|-------\n");
     
-    for (uint8_t family = 2; family <= 15; family++) {
-        const char* cpu_name = (family < 8) ? cpu_names[family] : cpu_names[7];
-        
-        for (int config = 0; config < 6; config++) {
+    {
+        uint8_t family;
+        for (family = 2; family <= 15; family++) {
+            const char* cpu_name = (family < 8) ? cpu_names[family] : cpu_names[7];
+            int config;
+
+            for (config = 0; config < 6; config++) {
             dma_policy_t policy = get_cpu_family_policy_matrix(
                 family, 
                 test_configs[config][0], /* in_v86_mode */
@@ -867,18 +870,19 @@ void print_complete_policy_matrix(void) {
                 test_configs[config][2]  /* is_isa_bus */
             );
             
-            printf("%-10s | %-14s | %-3s | %-4d | %s\n",
-                cpu_name,
-                config_names[config],
-                policy.dma_enabled ? "Yes" : "No",
-                policy.cache_tier,
-                policy.explanation
-            );
+                printf("%-10s | %-14s | %-3s | %-4d | %s\n",
+                    cpu_name,
+                    config_names[config],
+                    policy.dma_enabled ? "Yes" : "No",
+                    policy.cache_tier,
+                    policy.explanation
+                );
+            }
+
+            if (family == 6) family = 14; /* Skip to modern CPUs */
         }
-        
-        if (family == 6) family = 14; /* Skip to modern CPUs */
     }
-    
+
     printf("=====================================\n");
     printf("Tier Legend: 1=CLFLUSH, 2=WBINVD, 3=Software, 4=None, 0=Disabled\n");
 }

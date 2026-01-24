@@ -27,17 +27,17 @@
 #include "errhndl.h"
 #include "logging.h"
 #include "irqmit.h"
-#include "../include/hwchksm.h"  // Phase 2.1: Hardware checksumming
-#include "../include/dma.h"          // Phase 2.2: Scatter-gather DMA
-#include "../include/cachecoh.h"  // Phase 4: Runtime cache coherency testing
-#include "../include/cachemgt.h"  // Phase 4: Cache management system
-#include "../include/chipdet.h"  // Phase 4: Safe chipset detection
-#include "../include/chipset_database.h"  // Phase 4: Community chipset database
-#include "../include/dmamap.h"     // GPT-5: Centralized DMA mapping layer
-#include "../include/vds.h"             // VDS support for descriptor rings
-#include "../include/bufaloc.h"    // VDS common buffer access
-#include "../include/pltprob.h"  // Platform detection
-#include "../include/common.h"       // Physical address helper (GPT-5 fix)
+#include "hwchksm.h"  // Phase 2.1: Hardware checksumming
+#include "dma.h"          // Phase 2.2: Scatter-gather DMA
+#include "cachecoh.h"  // Phase 4: Runtime cache coherency testing
+#include "cachemgt.h"  // Phase 4: Cache management system
+#include "chipdet.h"  // Phase 4: Safe chipset detection
+#include "chipset_database.h"  // Phase 4: Community chipset database
+#include "dmamap.h"     // GPT-5: Centralized DMA mapping layer
+#include "vds.h"             // VDS support for descriptor rings
+#include "bufaloc.h"    // VDS common buffer access
+#include "pltprob.h"  // Platform detection
+#include "common.h"       // Physical address helper (GPT-5 fix)
 #include <stdlib.h>  // For malloc/free
 #include <string.h>  // For memcpy
 
@@ -463,6 +463,7 @@ static int configure_media_type(nic_context_t *ctx, media_config_t *media) {
     delay_milliseconds(10);
     
     /* Configure media-specific settings */
+    {
     uint16_t media_ctrl = 0;
     switch (media->transceiver_type) {
         case XCVR_10baseT:
@@ -477,11 +478,12 @@ static int configure_media_type(nic_context_t *ctx, media_config_t *media) {
     }
     
     outw(ctx->io_base + _3C515_TX_W4_MEDIA, media_ctrl);
+    }
     delay_milliseconds(CONFIG_STABILIZATION_MS);
-    
+
     LOG_DEBUG("Media type configured: Type=%d, Speed=%d, Duplex=%d",
               media->media_type, media->link_speed, media->duplex_mode);
-    
+
     return 0;
 }
 
@@ -499,8 +501,10 @@ static int configure_full_duplex(nic_context_t *ctx) {
     delay_milliseconds(10);
     
     /* Read current MAC control register */
+    {
     uint16_t mac_ctrl = inw(ctx->io_base + _3C515_TX_W3_MAC_CTRL);
-    
+    uint16_t verify_ctrl;
+
     /* Set full-duplex bit */
     mac_ctrl |= _3C515_TX_FULL_DUPLEX_BIT;
     
@@ -509,15 +513,16 @@ static int configure_full_duplex(nic_context_t *ctx) {
     delay_milliseconds(CONFIG_STABILIZATION_MS);
     
     /* Verify full-duplex was set */
-    uint16_t verify_ctrl = inw(ctx->io_base + _3C515_TX_W3_MAC_CTRL);
+    verify_ctrl = inw(ctx->io_base + _3C515_TX_W3_MAC_CTRL);
     if (!(verify_ctrl & _3C515_TX_FULL_DUPLEX_BIT)) {
         LOG_ERROR("Failed to enable full-duplex mode");
         return -1;
     }
-    
+    }
+
     ctx->full_duplex_enabled = 1;
     LOG_DEBUG("Full-duplex mode enabled successfully");
-    
+
     return 0;
 }
 
@@ -646,18 +651,21 @@ static int configure_bus_master_dma(nic_context_t *ctx) {
     }
     
     /* Initialize TX descriptor rings with physical addresses */
-    for (int i = 0; i < TX_RING_SIZE; i++) {
+    {
+    int i;
+    uint32_t buffer_phys;
+    for (i = 0; i < TX_RING_SIZE; i++) {
         /* Next pointer - use physical address for hardware */
         if (i + 1 < TX_RING_SIZE) {
-            ctx->tx_desc_ring[i].next = ctx->tx_desc_ring_physical ? 
+            ctx->tx_desc_ring[i].next = ctx->tx_desc_ring_physical ?
                                       (ctx->tx_desc_ring_physical + (i + 1) * sizeof(_3c515_tx_tx_desc_t)) :
                                       phys_from_ptr(&ctx->tx_desc_ring[i + 1]);  /* GPT-5 fix */
         } else {
             ctx->tx_desc_ring[i].next = 0;  /* End of ring */
         }
-        
+
         /* Buffer address - use physical address for DMA */
-        uint32_t buffer_phys = ctx->buffers_physical ?
+        buffer_phys = ctx->buffers_physical ?
                               (ctx->buffers_physical + i * BUFFER_SIZE) :
                               phys_from_ptr(ctx->buffers + i * BUFFER_SIZE);  /* GPT-5 fix */
         ctx->tx_desc_ring[i].addr = buffer_phys;
@@ -668,9 +676,13 @@ static int configure_bus_master_dma(nic_context_t *ctx) {
                  (unsigned long)ctx->tx_desc_ring[i].next,
                  (unsigned long)ctx->tx_desc_ring[i].addr);
     }
-    
+    }
+
     /* Initialize RX descriptor rings with physical addresses */
-    for (int i = 0; i < RX_RING_SIZE; i++) {
+    {
+    int i;
+    uint32_t buffer_phys;
+    for (i = 0; i < RX_RING_SIZE; i++) {
         /* Next pointer - use physical address for hardware */
         if (i + 1 < RX_RING_SIZE) {
             ctx->rx_desc_ring[i].next = ctx->rx_desc_ring_physical ?
@@ -679,12 +691,12 @@ static int configure_bus_master_dma(nic_context_t *ctx) {
         } else {
             ctx->rx_desc_ring[i].next = 0;  /* End of ring */
         }
-        
+
         /* Buffer address - use physical address for DMA */
-        uint32_t buffer_phys = ctx->buffers_physical ?
+        buffer_phys = ctx->buffers_physical ?
                               (ctx->buffers_physical + (TX_RING_SIZE + i) * BUFFER_SIZE) :
                               phys_from_ptr(ctx->buffers + (TX_RING_SIZE + i) * BUFFER_SIZE);  /* GPT-5 fix */
-        
+
         /* Validate physical address is within ISA limits */
         if (buffer_phys >= 0x1000000UL) {
             LOG_ERROR("RX buffer %d exceeds ISA 24-bit limit: %08lXh", i, (unsigned long)buffer_phys);
@@ -699,13 +711,17 @@ static int configure_bus_master_dma(nic_context_t *ctx) {
                  (unsigned long)ctx->rx_desc_ring[i].next,
                  (unsigned long)ctx->rx_desc_ring[i].addr);
     }
-    
+    }
+
     /* Set descriptor list pointers - CRITICAL: Use physical addresses for DMA! */
-    uint32_t tx_ring_phys = ctx->tx_desc_ring_physical ? 
-                           ctx->tx_desc_ring_physical : 
+    {
+    uint32_t tx_ring_phys;
+    uint32_t rx_ring_phys;
+    tx_ring_phys = ctx->tx_desc_ring_physical ?
+                           ctx->tx_desc_ring_physical :
                            phys_from_ptr(ctx->tx_desc_ring);  /* GPT-5 fix: proper physical address */
-    uint32_t rx_ring_phys = ctx->rx_desc_ring_physical ? 
-                           ctx->rx_desc_ring_physical : 
+    rx_ring_phys = ctx->rx_desc_ring_physical ?
+                           ctx->rx_desc_ring_physical :
                            phys_from_ptr(ctx->rx_desc_ring);  /* GPT-5 fix: proper physical address */
     
     /* Validate physical addresses are within ISA 24-bit limit */
@@ -721,7 +737,8 @@ static int configure_bus_master_dma(nic_context_t *ctx) {
     
     LOG_DEBUG("Descriptor rings programmed: TX phys=%08lXh RX phys=%08lXh",
              (unsigned long)tx_ring_phys, (unsigned long)rx_ring_phys);
-    
+    }
+
     ctx->dma_enabled = 1;
     ctx->tx_index = 0;
     ctx->rx_index = 0;
@@ -742,8 +759,11 @@ static int enable_hardware_statistics(nic_context_t *ctx) {
     delay_milliseconds(10);
     
     /* Clear all statistics counters */
-    for (int i = 0; i <= _3C515_TX_W6_BADSSD; i++) {
+    {
+    int i;
+    for (i = 0; i <= _3C515_TX_W6_BADSSD; i++) {
         (void)inb(ctx->io_base + i);  /* Reading clears the counter */
+    }
     }
     
     /* Enable statistics collection */
@@ -766,9 +786,11 @@ static int setup_link_monitoring(nic_context_t *ctx) {
     delay_milliseconds(10);
     
     /* Read current link status */
+    {
     uint16_t media_status = inw(ctx->io_base + _3C515_TX_W4_MEDIA);
     ctx->media_config.link_active = (media_status & _3C515_TX_MEDIA_LNKBEAT) ? 1 : 0;
-    
+    }
+
     ctx->link_monitoring_enabled = 1;
     ctx->last_link_check = get_system_time_ms();
     
@@ -783,16 +805,20 @@ static int setup_link_monitoring(nic_context_t *ctx) {
  */
 static int validate_hardware_configuration(nic_context_t *ctx) {
     uint16_t saved_window;
-    
+    uint16_t eeprom_test;
+    uint16_t mac_ctrl;
+    uint32_t tx_ptr;
+    uint32_t rx_ptr;
+
     /* Save current window */
     saved_window = inw(ctx->io_base + _3C515_TX_STATUS_REG) >> 13;
-    
+
     /* Test Window 0 access */
     _3C515_TX_SELECT_WINDOW(ctx->io_base, _3C515_TX_WINDOW_0);
     delay_milliseconds(5);
-    
+
     /* Verify we can read EEPROM data register */
-    uint16_t eeprom_test = inw(ctx->io_base + _3C515_TX_W0_EEPROM_DATA);
+    eeprom_test = inw(ctx->io_base + _3C515_TX_W0_EEPROM_DATA);
     if (eeprom_test == 0xFFFF || eeprom_test == 0x0000) {
         LOG_WARNING("EEPROM data register validation suspicious: 0x%04X", eeprom_test);
     }
@@ -800,8 +826,8 @@ static int validate_hardware_configuration(nic_context_t *ctx) {
     /* Test Window 3 access for MAC control */
     _3C515_TX_SELECT_WINDOW(ctx->io_base, _3C515_TX_WINDOW_3);
     delay_milliseconds(5);
-    
-    uint16_t mac_ctrl = inw(ctx->io_base + _3C515_TX_W3_MAC_CTRL);
+
+    mac_ctrl = inw(ctx->io_base + _3C515_TX_W3_MAC_CTRL);
     if (ctx->full_duplex_enabled && !(mac_ctrl & _3C515_TX_FULL_DUPLEX_BIT)) {
         LOG_ERROR("Full-duplex validation failed");
         return -1;
@@ -810,9 +836,9 @@ static int validate_hardware_configuration(nic_context_t *ctx) {
     /* Test Window 7 access for DMA descriptors */
     _3C515_TX_SELECT_WINDOW(ctx->io_base, _3C515_TX_WINDOW_7);
     delay_milliseconds(5);
-    
-    uint32_t tx_ptr = inl(ctx->io_base + _3C515_TX_DOWN_LIST_PTR);
-    uint32_t rx_ptr = inl(ctx->io_base + _3C515_TX_UP_LIST_PTR);
+
+    tx_ptr = inl(ctx->io_base + _3C515_TX_DOWN_LIST_PTR);
+    rx_ptr = inl(ctx->io_base + _3C515_TX_UP_LIST_PTR);
     
     if (tx_ptr != (uint32_t)ctx->tx_desc_ring || rx_ptr != (uint32_t)ctx->rx_desc_ring) {
         LOG_ERROR("DMA descriptor validation failed: TX=0x%08X (exp 0x%08X), RX=0x%08X (exp 0x%08X)",
@@ -858,8 +884,10 @@ static int reset_nic_hardware(nic_context_t *ctx) {
  */
 static void delay_milliseconds(uint32_t ms) {
     /* Simple delay implementation for DOS environment */
-    for (uint32_t i = 0; i < ms; i++) {
-        for (volatile uint32_t j = 0; j < 1000; j++) {
+    uint32_t i;
+    volatile uint32_t j;
+    for (i = 0; i < ms; i++) {
+        for (j = 0; j < 1000; j++) {
             /* Busy wait */
         }
     }
@@ -901,9 +929,11 @@ int periodic_configuration_validation(nic_context_t *ctx) {
     
     /* Update link status */
     if (ctx->link_monitoring_enabled) {
+        uint16_t media_status;
+        uint8_t new_link_status;
         _3C515_TX_SELECT_WINDOW(ctx->io_base, _3C515_TX_WINDOW_4);
-        uint16_t media_status = inw(ctx->io_base + _3C515_TX_W4_MEDIA);
-        uint8_t new_link_status = (media_status & _3C515_TX_MEDIA_LNKBEAT) ? 1 : 0;
+        media_status = inw(ctx->io_base + _3C515_TX_W4_MEDIA);
+        new_link_status = (media_status & _3C515_TX_MEDIA_LNKBEAT) ? 1 : 0;
         
         if (new_link_status != ctx->media_config.link_active) {
             LOG_INFO("Link status changed: %s -> %s",
@@ -1038,11 +1068,13 @@ void _3c515_enhanced_cleanup(void) {
  * @brief Get hardware configuration information
  */
 int get_hardware_config_info(nic_context_t *ctx, char *buffer, size_t buffer_size) {
+    int written;
+
     if (!ctx || !buffer || buffer_size < 512) {
         return -1;
     }
-    
-    int written = 0;
+
+    written = 0;
     
     written += snprintf(buffer + written, buffer_size - written,
                        "=== 3C515-TX Hardware Configuration ===\n");
@@ -1201,21 +1233,28 @@ int _3c515_init(nic_info_t *nic) {
  * @return 0 on success, -1 on failure
  */
 int _3c515_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len) {
-    _3c515_tx_tx_desc_t *desc = &nic->tx_desc_ring[nic->tx_index];
+    _3c515_tx_tx_desc_t *desc;
     dma_mapping_t *mapping;
+    dma_fragment_t fragments[4];
+    int frag_count;
+    uint32_t phys_addr;
+    void *mapped_buffer;
+    int checksum_result;
+    int sg_result;
+
+    desc = &nic->tx_desc_ring[nic->tx_index];
 
     // Check if descriptor is free
     if (desc->status & _3C515_TX_TX_DESC_COMPLETE) return -1;
 
     // Try scatter-gather DMA for enhanced performance (Phase 2.2)
-    dma_fragment_t fragments[4];
-    int frag_count = dma_analyze_packet_fragmentation(packet, len, fragments, 4);
+    frag_count = dma_analyze_packet_fragmentation(packet, len, fragments, 4);
     
     if (frag_count > 1) {
         // Use scatter-gather DMA for fragmented packets
         LOG_DEBUG("Using scatter-gather DMA for %d fragments", frag_count);
-        
-        int sg_result = dma_send_scatter_gather(nic->index, packet, len, fragments, frag_count);
+
+        sg_result = dma_send_scatter_gather(nic->index, packet, len, fragments, frag_count);
         if (sg_result == 0) {
             // Scatter-gather succeeded
             nic->tx_index = (nic->tx_index + 1) % TX_RING_SIZE;
@@ -1239,7 +1278,7 @@ int _3c515_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len) {
     
     // GPT-5 FIX: 3C515 is a bus-master card - desc->addr MUST be physical address!
     // The hardware will DMA from this address, NOT a CPU pointer
-    uint32_t phys_addr = dma_mapping_get_phys_addr(mapping);
+    phys_addr = dma_mapping_get_phys_addr(mapping);
     desc->addr = phys_addr;  // Hardware reads from this physical address
     
     // GPT-5 FIX: Sync mapped buffer for device access (handles cache coherency)
@@ -1249,8 +1288,8 @@ int _3c515_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len) {
     // GPT-5 FIX: Checksum calculation must use the mapped buffer, not physical address
     // If hardware checksum offload is not available, calculate in software
     if (len >= 34) { // Minimum for Ethernet + IP header
-        void *mapped_buffer = dma_mapping_get_address(mapping);
-        int checksum_result = hw_checksum_process_outbound_packet(mapped_buffer, len);
+        mapped_buffer = dma_mapping_get_address(mapping);
+        checksum_result = hw_checksum_process_outbound_packet(mapped_buffer, len);
         if (checksum_result != 0) {
             LOG_DEBUG("Checksum calculation completed for outbound packet");
         }
@@ -1279,7 +1318,14 @@ int _3c515_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len) {
  * @return 0 on success, -1 on failure
  */
 int _3c515_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len) {
-    _3c515_tx_rx_desc_t *desc = &nic->rx_desc_ring[nic->rx_index];
+    _3c515_tx_rx_desc_t *desc;
+    void *rx_data_ptr;
+    bool used_bounce;
+    dma_mapping_t *dma_mapping;
+    void *dma_safe_buffer;
+    int checksum_result;
+
+    desc = &nic->rx_desc_ring[nic->rx_index];
 
     // Check if packet is ready
     if (!(desc->status & _3C515_TX_RX_DESC_COMPLETE)) return -1;
@@ -1292,18 +1338,18 @@ int _3c515_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len) {
 
     // Phase 4: Prepare received DMA buffer (cache coherency management)
     *len = desc->length & _3C515_TX_RX_DESC_LEN_MASK;
-    void *rx_data_ptr = (void *)desc->addr;
-    bool used_bounce = false;
+    rx_data_ptr = (void *)desc->addr;
+    used_bounce = false;
     
     /* GPT-5 Enhancement: Centralized DMA mapping for RX */
-    dma_mapping_t *dma_mapping = dma_map_rx(rx_data_ptr, *len);
+    dma_mapping = dma_map_rx(rx_data_ptr, *len);
     if (!dma_mapping) {
         LOG_ERROR("DMA mapping failed for RX buffer %p len=%zu", rx_data_ptr, *len);
         desc->status = 0;  // Reset descriptor
         return -1;
     }
     
-    void *dma_safe_buffer = dma_mapping_get_address(dma_mapping);
+    dma_safe_buffer = dma_mapping_get_address(dma_mapping);
     if (dma_mapping_uses_bounce(dma_mapping)) {
         LOG_DEBUG("Using RX bounce buffer for packet len=%zu", *len);
     }
@@ -1316,7 +1362,7 @@ int _3c515_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len) {
     
     // Verify checksums with CPU optimization (Phase 2.1)
     if (*len >= 34) { // Minimum for Ethernet + IP header
-        int checksum_result = hw_checksum_verify_inbound_packet(buffer, *len);
+        checksum_result = hw_checksum_verify_inbound_packet(buffer, *len);
         if (checksum_result < 0) {
             LOG_DEBUG("Checksum verification failed for inbound packet");
             // Continue anyway - many stacks don't require perfect checksums
@@ -1339,7 +1385,10 @@ int _3c515_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len) {
  * @param nic Pointer to NIC info structure
  */
 void _3c515_handle_interrupt(nic_info_t *nic) {
-    uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+    uint16_t status;
+    int i;
+
+    status = inw(nic->io_base + _3C515_TX_STATUS_REG);
 
     if (status & _3C515_TX_STATUS_UP_COMPLETE) {
         // Receive DMA completed; packets are ready in rx_desc_ring
@@ -1347,7 +1396,7 @@ void _3c515_handle_interrupt(nic_info_t *nic) {
 
     if (status & _3C515_TX_STATUS_DOWN_COMPLETE) {
         // Transmit DMA completed; check tx_desc_ring for completion
-        for (int i = 0; i < TX_RING_SIZE; i++) {
+        for (i = 0; i < TX_RING_SIZE; i++) {
             if (nic->tx_desc_ring[i].status & _3C515_TX_TX_DESC_COMPLETE) {
                 /* GPT-5 DEFERRED: Queue TX completion for bottom-half processing */
                 if (nic->tx_desc_ring[i].mapping) {
@@ -1376,11 +1425,13 @@ void _3c515_handle_interrupt(nic_info_t *nic) {
  * @return 1 if interrupt work available, 0 if none, negative on error
  */
 int _3c515_check_interrupt(nic_info_t *nic) {
+    uint16_t status;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
-    uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+
+    status = inw(nic->io_base + _3C515_TX_STATUS_REG);
     
     /* Check for any interrupt conditions that need processing */
     if (status & (_3C515_TX_STATUS_UP_COMPLETE | 
@@ -1402,11 +1453,18 @@ int _3c515_check_interrupt(nic_info_t *nic) {
  * @return 1 if event processed, 0 if no work, negative on error
  */
 int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_type) {
+    uint16_t status;
+    nic_3c515_context_t *ctx;
+    int i;
+    pd_statistics_t hw_stats;
+    uint8_t rx_buffer[1514];
+    size_t rx_length;
+
     if (!nic || !event_type) {
         return ERROR_INVALID_PARAM;
     }
-    
-    uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+
+    status = inw(nic->io_base + _3C515_TX_STATUS_REG);
     
     /* Process highest priority events first */
     
@@ -1425,9 +1483,9 @@ int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_t
     /* Handle RX DMA completion */
     if (status & _3C515_TX_STATUS_UP_COMPLETE) {
         *event_type = EVENT_TYPE_DMA_COMPLETE;
-        
+
         /* Process received packets using ring buffer system */
-        nic_3c515_context_t *ctx = (nic_3c515_context_t *)nic->context;
+        ctx = (nic_3c515_context_t *)nic->context;
         if (ctx && ctx->ring_manager.initialized) {
             /* Check for completed RX descriptors */
             while (nic_3c515_handle_rx_completion(ctx) > 0) {
@@ -1445,10 +1503,10 @@ int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_t
     /* Handle TX DMA completion */
     if (status & _3C515_TX_STATUS_DOWN_COMPLETE) {
         *event_type = EVENT_TYPE_TX_COMPLETE;
-        
+
         /* Process transmit completions */
-        for (int i = 0; i < TX_RING_SIZE; i++) {
-            if (nic->tx_desc_ring && 
+        for (i = 0; i < TX_RING_SIZE; i++) {
+            if (nic->tx_desc_ring &&
                 (nic->tx_desc_ring[i].status & _3C515_TX_TX_DESC_COMPLETE)) {
                 nic->tx_desc_ring[i].status = 0;  /* Clear completion */
             }
@@ -1464,11 +1522,10 @@ int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_t
     /* Handle general RX completion */
     if (status & _3C515_TX_STATUS_RX_COMPLETE) {
         *event_type = EVENT_TYPE_RX_COMPLETE;
-        
+
         /* Process received packet through standard receive path */
         if (nic->ops && nic->ops->receive_packet) {
-            uint8_t rx_buffer[1514]; /* Maximum Ethernet frame size */
-            size_t rx_length = sizeof(rx_buffer);
+            rx_length = sizeof(rx_buffer);
             if (nic->ops->receive_packet(nic, rx_buffer, &rx_length) == 0) {
                 /* Packet received successfully, pass to API layer */
                 api_process_received_packet(rx_buffer, rx_length, nic->index);
@@ -1512,7 +1569,6 @@ int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_t
         
         /* Update statistics by reading hardware counters */
         if (nic->ops && nic->ops->get_statistics) {
-            pd_statistics_t hw_stats;
             if (nic->ops->get_statistics(nic, &hw_stats) == 0) {
                 /* Update global statistics with hardware values */
                 /* Note: Only increment functions exist, not bulk add */
@@ -1549,8 +1605,12 @@ int _3c515_process_single_event(nic_info_t *nic, interrupt_event_type_t *event_t
  */
 int _3c515_handle_interrupt_batched(nic_info_t *nic) {
     interrupt_mitigation_context_t *im_ctx;
-    
-    if (!nic || !nic->private_data) {
+
+    if (!nic) {
+        return ERROR_INVALID_PARAM;
+    }
+
+    if (!nic->private_data) {
         return ERROR_INVALID_PARAM;
     }
     
@@ -1582,7 +1642,9 @@ int _3c515_handle_interrupt_batched(nic_info_t *nic) {
 static int _3c515_initialize_cache_coherency(nic_context_t *ctx) {
     coherency_analysis_t analysis;
     chipset_detection_result_t chipset_result;
-    
+    bool cache_init_result;
+    bool record_result;
+
     if (!ctx) {
         LOG_ERROR("Invalid NIC context for cache coherency initialization");
         return -1;
@@ -1603,14 +1665,14 @@ static int _3c515_initialize_cache_coherency(nic_context_t *ctx) {
     chipset_result = detect_system_chipset();
     
     /* Initialize cache management system with selected tier */
-    bool cache_init_result = initialize_cache_management(analysis.selected_tier);
+    cache_init_result = initialize_cache_management(analysis.selected_tier);
     if (!cache_init_result) {
         LOG_ERROR("Failed to initialize cache management system");
         return -1;
     }
     
     /* Record test results in community database */
-    bool record_result = record_chipset_test_result(&analysis, &chipset_result);
+    record_result = record_chipset_test_result(&analysis, &chipset_result);
     if (!record_result) {
         LOG_WARNING("Failed to record test results in chipset database");
     }
@@ -1682,7 +1744,7 @@ static void _3c515_dma_complete_buffers(void *buffer, size_t length, bool is_rec
  * Sub-Agent 1: DMA Specialist - Advanced DMA System
  * ============================================================================ */
 
-#include "../include/dmadesc.h"
+#include "dmadesc.h"
 
 /* Global advanced DMA context */
 static advanced_dma_context_t g_advanced_dma_context;
@@ -1696,22 +1758,24 @@ static bool g_advanced_dma_initialized = false;
  * @return 0 on success, negative error code on failure
  */
 int advanced_dma_init(advanced_dma_context_t *ctx, uint16_t io_base, uint8_t irq) {
+    int result;
+
     if (!ctx) {
         LOG_ERROR("Invalid DMA context for initialization");
         return -1;
     }
-    
+
     LOG_INFO("Initializing advanced DMA system for 3C515-TX");
-    
+
     /* Clear context structure */
     memset(ctx, 0, sizeof(advanced_dma_context_t));
-    
+
     /* Set hardware parameters */
     ctx->io_base = io_base;
     ctx->irq = irq;
-    
+
     /* Initialize ring manager */
-    int result = dma_init_descriptor_rings(ctx);
+    result = dma_init_descriptor_rings(ctx);
     if (result != 0) {
         LOG_ERROR("Failed to initialize descriptor rings: %d", result);
         return result;
@@ -1758,57 +1822,65 @@ int advanced_dma_init(advanced_dma_context_t *ctx, uint16_t io_base, uint8_t irq
  * @return 0 on success, negative error code on failure
  */
 int dma_init_descriptor_rings(advanced_dma_context_t *ctx) {
+    int i;
+
     if (!ctx) {
         return -1;
     }
-    
+
     LOG_DEBUG("Initializing DMA descriptor rings");
-    
+
     /* Initialize TX ring */
     ctx->ring_manager.tx_head = 0;
     ctx->ring_manager.tx_tail = 0;
     ctx->ring_manager.tx_count = 0;
-    
-    for (int i = 0; i < DMA_TX_RING_SIZE; i++) {
-        enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[i];
-        
+
+    {
+    enhanced_tx_desc_t *desc;
+    for (i = 0; i < DMA_TX_RING_SIZE; i++) {
+        desc = &ctx->ring_manager.tx_ring[i];
+
         /* Clear descriptor */
         memset(desc, 0, sizeof(enhanced_tx_desc_t));
-        
+
         /* Setup ring linkage */
         if (i == DMA_TX_RING_SIZE - 1) {
             desc->next = (uint32_t)&ctx->ring_manager.tx_ring[0];
         } else {
             desc->next = (uint32_t)&ctx->ring_manager.tx_ring[i + 1];
         }
-        
+
         /* Initialize advanced features */
         desc->fragments = NULL;
         desc->fragment_count = 0;
         desc->coherent_memory = ctx->cache_coherency_enabled;
+    }
     }
     
     /* Initialize RX ring */
     ctx->ring_manager.rx_head = 0;
     ctx->ring_manager.rx_tail = 0;
     ctx->ring_manager.rx_count = 0;
-    
-    for (int i = 0; i < DMA_RX_RING_SIZE; i++) {
-        enhanced_rx_desc_t *desc = &ctx->ring_manager.rx_ring[i];
-        
+
+    {
+    enhanced_rx_desc_t *desc;
+    for (i = 0; i < DMA_RX_RING_SIZE; i++) {
+        desc = &ctx->ring_manager.rx_ring[i];
+
         /* Clear descriptor */
         memset(desc, 0, sizeof(enhanced_rx_desc_t));
-        
+
         /* Setup ring linkage */
         if (i == DMA_RX_RING_SIZE - 1) {
             desc->next = (uint32_t)&ctx->ring_manager.rx_ring[0];
         } else {
             desc->next = (uint32_t)&ctx->ring_manager.rx_ring[i + 1];
         }
-        
+
         /* Initialize advanced features */
         desc->coherent_memory = ctx->cache_coherency_enabled;
         desc->zero_copy_eligible = ctx->zero_copy_enabled;
+    }
     }
     
     /* Allocate buffer pools */
@@ -1832,20 +1904,26 @@ int dma_init_descriptor_rings(advanced_dma_context_t *ctx) {
     memset(ctx->ring_manager.rx_buffers, 0, DMA_RX_RING_SIZE * ctx->ring_manager.buffer_size);
     
     /* Assign buffers to descriptors */
-    for (int i = 0; i < DMA_TX_RING_SIZE; i++) {
-        enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[i];
-        desc->addr = (uint32_t)((uint8_t *)ctx->ring_manager.tx_buffers + 
+    {
+    enhanced_tx_desc_t *tx_desc;
+    for (i = 0; i < DMA_TX_RING_SIZE; i++) {
+        tx_desc = &ctx->ring_manager.tx_ring[i];
+        tx_desc->addr = (uint32_t)((uint8_t *)ctx->ring_manager.tx_buffers +
                                (i * ctx->ring_manager.buffer_size));
-        desc->length = ctx->ring_manager.buffer_size;
+        tx_desc->length = ctx->ring_manager.buffer_size;
     }
-    
-    for (int i = 0; i < DMA_RX_RING_SIZE; i++) {
-        enhanced_rx_desc_t *desc = &ctx->ring_manager.rx_ring[i];
-        desc->addr = (uint32_t)((uint8_t *)ctx->ring_manager.rx_buffers + 
+    }
+
+    {
+    enhanced_rx_desc_t *rx_desc;
+    for (i = 0; i < DMA_RX_RING_SIZE; i++) {
+        rx_desc = &ctx->ring_manager.rx_ring[i];
+        rx_desc->addr = (uint32_t)((uint8_t *)ctx->ring_manager.rx_buffers +
                                (i * ctx->ring_manager.buffer_size));
-        desc->length = ctx->ring_manager.buffer_size;
-        desc->buffer_virtual = (uint8_t *)ctx->ring_manager.rx_buffers + 
+        rx_desc->length = ctx->ring_manager.buffer_size;
+        rx_desc->buffer_virtual = (uint8_t *)ctx->ring_manager.rx_buffers +
                               (i * ctx->ring_manager.buffer_size);
+    }
     }
     
     /* Set physical addresses */
@@ -1870,19 +1948,22 @@ int dma_init_descriptor_rings(advanced_dma_context_t *ctx) {
  * @return Pointer to TX descriptor, NULL if none available
  */
 enhanced_tx_desc_t *dma_alloc_tx_descriptor(advanced_dma_context_t *ctx, uint16_t *desc_index) {
+    uint16_t index;
+    enhanced_tx_desc_t *desc;
+
     if (!ctx || !ctx->ring_manager.initialized || !desc_index) {
         return NULL;
     }
-    
+
     /* Check if ring is full */
     if (ctx->ring_manager.tx_count >= DMA_TX_RING_SIZE) {
         ctx->performance_stats.tx_retries++;
         return NULL;
     }
-    
+
     /* Get descriptor at head */
-    uint16_t index = ctx->ring_manager.tx_head;
-    enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[index];
+    index = ctx->ring_manager.tx_head;
+    desc = &ctx->ring_manager.tx_ring[index];
     
     /* Check if descriptor is available (not owned by NIC) */
     if (desc->status & DMA_DESC_OWNED_BY_NIC) {
@@ -1921,20 +2002,22 @@ enhanced_tx_desc_t *dma_alloc_tx_descriptor(advanced_dma_context_t *ctx, uint16_
  */
 int dma_setup_sg_tx(advanced_dma_context_t *ctx, enhanced_tx_desc_t *desc,
                     dma_fragment_desc_t *fragments, uint16_t fragment_count) {
+    uint32_t total_length = 0;
+    uint16_t i;
+
     if (!ctx || !desc || !fragments || fragment_count == 0) {
         return -1;
     }
-    
+
     if (fragment_count > DMA_MAX_FRAGMENTS) {
         LOG_ERROR("Too many fragments: %d (max %d)", fragment_count, DMA_MAX_FRAGMENTS);
         return -1;
     }
-    
+
     LOG_DEBUG("Setting up scatter-gather TX with %d fragments", fragment_count);
-    
+
     /* Calculate total length */
-    uint32_t total_length = 0;
-    for (uint16_t i = 0; i < fragment_count; i++) {
+    for (i = 0; i < fragment_count; i++) {
         total_length += fragments[i].length;
     }
     
@@ -1963,8 +2046,8 @@ int dma_setup_sg_tx(advanced_dma_context_t *ctx, enhanced_tx_desc_t *desc,
             LOG_ERROR("Failed to allocate fragment storage");
             return -1;
         }
-        
-        for (uint16_t i = 1; i < fragment_count; i++) {
+
+        for (i = 1; i < fragment_count; i++) {
             desc->fragments[i-1] = fragments[i];
             if (i == fragment_count - 1) {
                 desc->fragments[i-1].flags |= DMA_DESC_LAST_FRAG;
@@ -1980,7 +2063,8 @@ int dma_setup_sg_tx(advanced_dma_context_t *ctx, enhanced_tx_desc_t *desc,
     
     /* Setup cache coherency if enabled */
     if (ctx->cache_coherency_enabled) {
-        int coherency_result = dma_prepare_coherent_buffer(ctx, (void *)desc->addr, 
+        int coherency_result;
+        coherency_result = dma_prepare_coherent_buffer(ctx, (void *)desc->addr,
                                                           desc->length, 0);
         if (coherency_result != 0) {
             LOG_WARNING("Cache coherency preparation failed: %d", coherency_result);
@@ -2005,17 +2089,22 @@ int dma_setup_sg_tx(advanced_dma_context_t *ctx, enhanced_tx_desc_t *desc,
  * @return Number of completed TX operations
  */
 int dma_check_tx_completion(advanced_dma_context_t *ctx, uint16_t *completed_mask) {
+    int completed_count = 0;
+    uint16_t check_index;
+    int i;
+
     if (!ctx || !ctx->ring_manager.initialized || !completed_mask) {
         return -1;
     }
-    
-    int completed_count = 0;
+
     *completed_mask = 0;
-    
+
     /* Check all active descriptors */
-    uint16_t check_index = ctx->ring_manager.tx_tail;
-    for (int i = 0; i < ctx->ring_manager.tx_count; i++) {
-        enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[check_index];
+    check_index = ctx->ring_manager.tx_tail;
+    {
+    enhanced_tx_desc_t *desc;
+    for (i = 0; i < ctx->ring_manager.tx_count; i++) {
+        desc = &ctx->ring_manager.tx_ring[check_index];
         
         /* Check if descriptor completed */
         if ((desc->status & DMA_DESC_OWNED_BY_NIC) == 0) {
@@ -2030,14 +2119,15 @@ int dma_check_tx_completion(advanced_dma_context_t *ctx, uint16_t *completed_mas
             if (desc->status & DMA_DESC_ERROR_MASK) {
                 desc->error_flags = desc->status;
                 ctx->performance_stats.dma_errors++;
-                LOG_WARNING("TX descriptor %d completed with errors: 0x%08X", 
+                LOG_WARNING("TX descriptor %d completed with errors: 0x%08X",
                            check_index, desc->status);
             }
         }
-        
+
         check_index = (check_index + 1) % DMA_TX_RING_SIZE;
     }
-    
+    }
+
     if (completed_count > 0) {
         ctx->completion_tracker.last_tx_activity = get_system_time_ms();
         LOG_TRACE("Found %d completed TX descriptors", completed_count);
@@ -2053,17 +2143,20 @@ int dma_check_tx_completion(advanced_dma_context_t *ctx, uint16_t *completed_mas
  * @return 0 on success, negative error code on failure
  */
 int dma_handle_tx_completion(advanced_dma_context_t *ctx, uint16_t desc_index) {
+    enhanced_tx_desc_t *desc;
+    int coherency_result;
+
     if (!ctx || !ctx->ring_manager.initialized || desc_index >= DMA_TX_RING_SIZE) {
         return -1;
     }
-    
-    enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[desc_index];
+
+    desc = &ctx->ring_manager.tx_ring[desc_index];
     
     LOG_TRACE("Handling TX completion for descriptor %d", desc_index);
     
     /* Complete cache coherency if enabled */
     if (ctx->cache_coherency_enabled) {
-        int coherency_result = dma_complete_coherent_buffer(ctx, (void *)desc->addr,
+        coherency_result = dma_complete_coherent_buffer(ctx, (void *)desc->addr,
                                                            desc->length, 0);
         if (coherency_result != 0) {
             LOG_WARNING("Cache coherency completion failed: %d", coherency_result);
@@ -2105,50 +2198,60 @@ int dma_handle_tx_completion(advanced_dma_context_t *ctx, uint16_t desc_index) {
  * @return Bitmask of timed out operations
  */
 uint32_t dma_check_timeouts(advanced_dma_context_t *ctx) {
+    uint32_t timeout_mask = 0;
+    uint32_t current_time;
+    uint16_t check_index;
+    int i;
+
     if (!ctx || !ctx->ring_manager.initialized) {
         return 0;
     }
-    
-    uint32_t timeout_mask = 0;
-    uint32_t current_time = get_system_time_ms();
-    
+
+    current_time = get_system_time_ms();
+
     /* Check TX timeouts */
-    uint16_t check_index = ctx->ring_manager.tx_tail;
-    for (int i = 0; i < ctx->ring_manager.tx_count; i++) {
-        enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[check_index];
+    check_index = ctx->ring_manager.tx_tail;
+    {
+    enhanced_tx_desc_t *tx_desc;
+    for (i = 0; i < ctx->ring_manager.tx_count; i++) {
+        tx_desc = &ctx->ring_manager.tx_ring[check_index];
         
         /* Check if descriptor is owned by NIC and has timed out */
-        if ((desc->status & DMA_DESC_OWNED_BY_NIC) && 
-            ((current_time - desc->timestamp_start) > DMA_TIMEOUT_TX)) {
+        if ((tx_desc->status & DMA_DESC_OWNED_BY_NIC) &&
+            ((current_time - tx_desc->timestamp_start) > DMA_TIMEOUT_TX)) {
             timeout_mask |= (1 << check_index);
-            desc->error_flags |= DMA_COMPLETION_TIMEOUT;
+            tx_desc->error_flags |= DMA_COMPLETION_TIMEOUT;
             ctx->performance_stats.tx_timeouts++;
-            
+
             LOG_WARNING("TX descriptor %d timed out (started at %d, now %d)",
-                       check_index, desc->timestamp_start, current_time);
+                       check_index, tx_desc->timestamp_start, current_time);
         }
-        
+
         check_index = (check_index + 1) % DMA_TX_RING_SIZE;
     }
-    
+    }
+
     /* Check RX timeouts */
     check_index = ctx->ring_manager.rx_tail;
-    for (int i = 0; i < ctx->ring_manager.rx_count; i++) {
-        enhanced_rx_desc_t *desc = &ctx->ring_manager.rx_ring[check_index];
+    {
+    enhanced_rx_desc_t *rx_desc;
+    for (i = 0; i < ctx->ring_manager.rx_count; i++) {
+        rx_desc = &ctx->ring_manager.rx_ring[check_index];
         
         /* Check if descriptor is owned by NIC and has timed out */
-        if ((desc->status & DMA_DESC_OWNED_BY_NIC) && 
-            ((current_time - desc->receive_timestamp) > DMA_TIMEOUT_RX)) {
+        if ((rx_desc->status & DMA_DESC_OWNED_BY_NIC) &&
+            ((current_time - rx_desc->receive_timestamp) > DMA_TIMEOUT_RX)) {
             timeout_mask |= (1 << (16 + check_index)); /* RX timeouts in upper 16 bits */
-            desc->error_flags |= DMA_COMPLETION_TIMEOUT;
+            rx_desc->error_flags |= DMA_COMPLETION_TIMEOUT;
             ctx->performance_stats.rx_timeouts++;
-            
+
             LOG_WARNING("RX descriptor %d timed out", check_index);
         }
-        
+
         check_index = (check_index + 1) % DMA_RX_RING_SIZE;
     }
-    
+    }
+
     /* Update timeout counters */
     if (timeout_mask & 0xFFFF) {
         ctx->completion_tracker.tx_timeout_count++;
@@ -2167,16 +2270,20 @@ uint32_t dma_check_timeouts(advanced_dma_context_t *ctx) {
  * @return 0 on success, negative error code on failure
  */
 int dma_recover_tx_timeout(advanced_dma_context_t *ctx, uint16_t desc_index) {
+    enhanced_tx_desc_t *desc;
+    int stall_result;
+    int unstall_result;
+
     if (!ctx || !ctx->ring_manager.initialized || desc_index >= DMA_TX_RING_SIZE) {
         return -1;
     }
-    
-    enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[desc_index];
+
+    desc = &ctx->ring_manager.tx_ring[desc_index];
     
     LOG_WARNING("Recovering from TX timeout on descriptor %d", desc_index);
     
     /* Stall TX engine */
-    int stall_result = dma_stall_engines(ctx, true, false);
+    stall_result = dma_stall_engines(ctx, true, false);
     if (stall_result != 0) {
         LOG_ERROR("Failed to stall TX engine for timeout recovery: %d", stall_result);
         return stall_result;
@@ -2202,7 +2309,7 @@ int dma_recover_tx_timeout(advanced_dma_context_t *ctx, uint16_t desc_index) {
     ctx->performance_stats.tx_retries++;
     
     /* Unstall TX engine */
-    int unstall_result = dma_unstall_engines(ctx, true, false);
+    unstall_result = dma_unstall_engines(ctx, true, false);
     if (unstall_result != 0) {
         LOG_ERROR("Failed to unstall TX engine after timeout recovery: %d", unstall_result);
     }
@@ -2235,18 +2342,21 @@ bool dma_is_zero_copy_tx_eligible(const void *packet_data, uint32_t packet_lengt
     if (((uint32_t)packet_data % alignment_requirement) != 0) {
         return false;
     }
-    
+
     /* Check size constraints */
     if (packet_length < _3C515_TX_MIN_PACKET_SIZE || packet_length > _3C515_TX_MAX_MTU) {
         return false;
     }
-    
+
+    {
     /* Check if memory is in suitable range for DMA */
-    uint32_t addr = (uint32_t)packet_data;
+    uint32_t addr;
+    addr = (uint32_t)packet_data;
     if (addr > 0xFFFFFF) { /* 24-bit address limit for ISA DMA */
         return false;
     }
-    
+    }
+
     return true;
 }
 
@@ -2260,30 +2370,32 @@ bool dma_is_zero_copy_tx_eligible(const void *packet_data, uint32_t packet_lengt
  */
 int dma_setup_zero_copy_tx(advanced_dma_context_t *ctx, enhanced_tx_desc_t *desc,
                           const void *packet_data, uint32_t packet_length) {
+    int coherency_result;
+
     if (!ctx || !desc || !packet_data || packet_length == 0) {
         return -1;
     }
-    
+
     if (!dma_is_zero_copy_tx_eligible(packet_data, packet_length, DMA_BUFFER_ALIGN)) {
         LOG_DEBUG("Packet not eligible for zero-copy TX");
         return -1;
     }
-    
+
     LOG_DEBUG("Setting up zero-copy TX operation");
-    
+
     /* Setup descriptor for zero-copy */
     desc->addr = (uint32_t)packet_data;
     desc->length = packet_length;
     desc->total_length = packet_length;
     desc->fragment_count = 1;
     desc->fragments = NULL;
-    
+
     /* Setup cache coherency for zero-copy */
     if (ctx->cache_coherency_enabled) {
-        int coherency_result = dma_prepare_coherent_buffer(ctx, (void *)packet_data,
+        coherency_result = dma_prepare_coherent_buffer(ctx, (void *)packet_data,
                                                           packet_length, 0);
         if (coherency_result != 0) {
-            LOG_WARNING("Cache coherency preparation failed for zero-copy TX: %d", 
+            LOG_WARNING("Cache coherency preparation failed for zero-copy TX: %d",
                        coherency_result);
         }
     }
@@ -2348,11 +2460,13 @@ void dma_reset_performance_stats(advanced_dma_context_t *ctx) {
  * @return Number of characters written, negative on error
  */
 int dma_get_performance_report(advanced_dma_context_t *ctx, char *buffer, size_t buffer_size) {
+    int written;
+
     if (!ctx || !buffer || buffer_size < 512) {
         return -1;
     }
-    
-    int written = 0;
+
+    written = 0;
     
     written += snprintf(buffer + written, buffer_size - written,
                        "=== Advanced DMA Performance Report ===\n");
@@ -2437,12 +2551,16 @@ void advanced_dma_cleanup(advanced_dma_context_t *ctx) {
     }
     
     /* Free any remaining fragment storage */
-    for (int i = 0; i < DMA_TX_RING_SIZE; i++) {
-        enhanced_tx_desc_t *desc = &ctx->ring_manager.tx_ring[i];
+    {
+    int i;
+    enhanced_tx_desc_t *desc;
+    for (i = 0; i < DMA_TX_RING_SIZE; i++) {
+        desc = &ctx->ring_manager.tx_ring[i];
         if (desc->fragments) {
             free(desc->fragments);
             desc->fragments = NULL;
         }
+    }
     }
     
     /* Clear context */
@@ -2462,19 +2580,22 @@ void advanced_dma_cleanup(advanced_dma_context_t *ctx) {
  * @return Pointer to RX descriptor, NULL if none available
  */
 enhanced_rx_desc_t *dma_alloc_rx_descriptor(advanced_dma_context_t *ctx, uint16_t *desc_index) {
+    uint16_t index;
+    enhanced_rx_desc_t *desc;
+
     if (!ctx || !ctx->ring_manager.initialized || !desc_index) {
         return NULL;
     }
-    
+
     /* Check if ring is full */
     if (ctx->ring_manager.rx_count >= DMA_RX_RING_SIZE) {
         ctx->performance_stats.rx_retries++;
         return NULL;
     }
-    
+
     /* Get descriptor at head */
-    uint16_t index = ctx->ring_manager.rx_head;
-    enhanced_rx_desc_t *desc = &ctx->ring_manager.rx_ring[index];
+    index = ctx->ring_manager.rx_head;
+    desc = &ctx->ring_manager.rx_ring[index];
     
     /* Check if descriptor is available (not owned by NIC) */
     if (desc->status & DMA_DESC_OWNED_BY_NIC) {
@@ -2509,16 +2630,19 @@ enhanced_rx_desc_t *dma_alloc_rx_descriptor(advanced_dma_context_t *ctx, uint16_
  * @return Number of completed RX operations
  */
 int dma_check_rx_completion(advanced_dma_context_t *ctx, uint16_t *completed_mask) {
+    int completed_count = 0;
+    uint16_t check_index;
+    int i;
+
     if (!ctx || !ctx->ring_manager.initialized || !completed_mask) {
         return -1;
     }
-    
-    int completed_count = 0;
+
     *completed_mask = 0;
-    
+
     /* Check all active descriptors */
-    uint16_t check_index = ctx->ring_manager.rx_tail;
-    for (int i = 0; i < ctx->ring_manager.rx_count; i++) {
+    check_index = ctx->ring_manager.rx_tail;
+    for (i = 0; i < ctx->ring_manager.rx_count; i++) {
         enhanced_rx_desc_t *desc = &ctx->ring_manager.rx_ring[check_index];
         
         /* Check if descriptor completed */
@@ -2744,14 +2868,17 @@ int dma_complete_coherent_buffer(advanced_dma_context_t *ctx, void *buffer,
  */
 int dma_consolidate_fragments(dma_fragment_desc_t *fragments, uint16_t fragment_count,
                              void *dest_buffer, uint32_t dest_size) {
+    uint32_t total_bytes = 0;
+    uint8_t *dest;
+    uint16_t i;
+
     if (!fragments || fragment_count == 0 || !dest_buffer || dest_size == 0) {
         return -1;
     }
-    
-    uint32_t total_bytes = 0;
-    uint8_t *dest = (uint8_t *)dest_buffer;
-    
-    for (uint16_t i = 0; i < fragment_count; i++) {
+
+    dest = (uint8_t *)dest_buffer;
+
+    for (i = 0; i < fragment_count; i++) {
         if (total_bytes + fragments[i].length > dest_size) {
             LOG_WARNING("Fragment consolidation would exceed buffer size");
             return -1;

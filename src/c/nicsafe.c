@@ -237,8 +237,11 @@ static bool validate_dma_3c515(uint16_t io_base) {
               crosses_64k ? "YES" : "NO");
     
     /* Initialize test pattern */
-    for (int i = 0; i < 1024; i++) {
-        test_buffer[i] = test_pattern[i % sizeof(test_pattern)];
+    {
+        int i;
+        for (i = 0; i < 1024; i++) {
+            test_buffer[i] = test_pattern[i % sizeof(test_pattern)];
+        }
     }
     
     /* Allocate verify buffer */
@@ -315,7 +318,8 @@ static bool validate_dma_3c515(uint16_t io_base) {
         
         if (timeout > 0) {
             /* Compare first 256 bytes */
-            for (int i = 0; i < 256; i++) {
+            int i;
+            for (i = 0; i < 256; i++) {
                 if (verify_buffer[i] != test_buffer[i]) {
                     LOG_ERROR("DMA data corruption at offset %d: wrote 0x%02X, read 0x%02X",
                              i, test_buffer[i], verify_buffer[i]);

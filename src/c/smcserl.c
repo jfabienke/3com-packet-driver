@@ -11,9 +11,9 @@
  * This file is part of the 3Com Packet Driver project.
  */
 
-#include "../include/smcserl.h"
-#include "../include/cpudet.h"
-#include "../include/logging.h"
+#include "smcserl.h"
+#include "cpudet.h"
+#include "logging.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -252,8 +252,9 @@ bool smc_apply_patch_set(const smc_patch_set_t *patch_set) {
         log_info("All patches in set applied successfully");
     } else {
         /* Rollback on failure */
+        uint8_t j;
         log_error("Patch set application failed - rolling back");
-        for (uint8_t j = 0; j < i; j++) {
+        for (j = 0; j < i; j++) {
             const smc_patch_t *patch = &patch_set->patches[j];
             smc_patch_site_t *site = &patch_sites[patch->site_index];
             memcpy(site->address, site->original_bytes, site->size);

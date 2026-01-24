@@ -8,11 +8,11 @@
  *
  */
 
-#include "../include/bufaloc.h"
-#include "../include/nicbufp.h"
-#include "../include/vds.h"
-#include "../include/pltprob.h"
-#include "../include/logging.h"
+#include "bufaloc.h"
+#include "nicbufp.h"
+#include "vds.h"
+#include "pltprob.h"
+#include "logging.h"
 
 /* Global buffer pools */
 buffer_pool_t g_tx_buffer_pool;
@@ -360,9 +360,11 @@ int buffer_pool_init(buffer_pool_t *pool, buffer_type_t type,
     pool->memory_size = total_size;
     
     /* Create buffer descriptors and add to free list */
-    uint8_t *current_ptr = (uint8_t*)pool->memory_base;
-    
-    for (uint32_t i = 0; i < buffer_count; i++) {
+    {
+        uint8_t *current_ptr = (uint8_t*)pool->memory_base;
+        uint32_t i;
+
+        for (i = 0; i < buffer_count; i++) {
         buffer_desc_t *desc = (buffer_desc_t*)current_ptr;
         current_ptr += sizeof(buffer_desc_t);
         
@@ -395,14 +397,15 @@ int buffer_pool_init(buffer_pool_t *pool, buffer_type_t type,
         
         current_ptr += buffer_size;
         
-        /* Apply alignment padding for next buffer */
-        if (flags & BUFFER_FLAG_ALIGNED) {
-            extern cpu_info_t g_cpu_info;
-            uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80386) ? 4 : 2;
-            current_ptr = (uint8_t*)ALIGN_UP((uint32_t)current_ptr, alignment);
+            /* Apply alignment padding for next buffer */
+            if (flags & BUFFER_FLAG_ALIGNED) {
+                extern cpu_info_t g_cpu_info;
+                uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80386) ? 4 : 2;
+                current_ptr = (uint8_t*)ALIGN_UP((uint32_t)current_ptr, alignment);
+            }
         }
     }
-    
+
     pool->initialized = true;
     return SUCCESS;
 }
@@ -1114,7 +1117,7 @@ static inline void irq_restore(uint16_t flags) {
  * XMS Buffer Pool Implementation
  * ======================================================================== */
 
-#include "../include/xmsdet.h"
+#include "xmsdet.h"
 
 /* Global XMS pool and staging buffers */
 static xms_buffer_pool_t g_xms_pool = {0};
@@ -1226,10 +1229,13 @@ int xms_buffer_alloc(xms_buffer_pool_t *pool, uint32_t *buffer_offset) {
             /* Update statistics */
             pool->xms_allocations++;
             /* Count used buffers (bits that are 0 in free_map) */
-            used_count = 0;
-            for (uint32_t j = 0; j < pool->buffer_count; j++) {
-                if (!(pool->free_map & (1UL << j))) {
-                    used_count++;
+            {
+                uint32_t j;
+                used_count = 0;
+                for (j = 0; j < pool->buffer_count; j++) {
+                    if (!(pool->free_map & (1UL << j))) {
+                        used_count++;
+                    }
                 }
             }
             if (used_count > pool->peak_usage) {
@@ -1879,9 +1885,10 @@ void buffer_prefetch_data(const buffer_desc_t *buffer) {
         volatile uint8_t *data = (volatile uint8_t*)buffer->data;
         uint32_t size = buffer->used;
         uint32_t cache_line = 32; /* Typical cache line size */
-        
+        uint32_t offset;
+
         /* Touch every cache line */
-        for (uint32_t offset = 0; offset < size; offset += cache_line) {
+        for (offset = 0; offset < size; offset += cache_line) {
             (void)data[offset]; /* Read to trigger cache load */
         }
     }

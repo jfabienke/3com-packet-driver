@@ -720,9 +720,12 @@ static int vds_populate_sg_list(vds_raw_lock_result_t* result)
         
         /* Log S/G details */
         LOG_DEBUG("VDS: S/G list with %u entries:", actual_count);
-        for (int i = 0; i < actual_count && i < 3; i++) {
-            LOG_DEBUG("  [%d] Phys: 0x%08lX, Size: %lu", 
-                     i, temp_list[i].physical_addr, temp_list[i].size);
+        {
+            int i;
+            for (i = 0; i < actual_count && i < 3; i++) {
+                LOG_DEBUG("  [%d] Phys: 0x%08lX, Size: %lu",
+                         i, temp_list[i].physical_addr, temp_list[i].size);
+            }
         }
         
         /* Use first segment as primary physical address */

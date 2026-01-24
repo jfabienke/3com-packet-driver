@@ -1910,11 +1910,12 @@ static int memory_stress_test_allocation_patterns(void) {
     int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
     int allocated = 0;
     int pattern;
-    
+    int i;
+
     /* Test Pattern 1: Sequential increasing sizes */
     log_debug("Testing sequential increasing allocation pattern");
     for (pattern = 0; pattern < 3; pattern++) {
-        for (int i = 0; i < 50 && allocated < 200; i++) {
+        for (i = 0; i < 50 && allocated < 200; i++) {
             uint32_t size = sizes[i % num_sizes];
             
             switch (pattern) {
@@ -1938,9 +1939,9 @@ static int memory_stress_test_allocation_patterns(void) {
     }
     
     log_debug("Allocated %d blocks in pattern test", allocated);
-    
+
     /* Verify all allocations are intact */
-    for (int i = 0; i < allocated; i++) {
+    for (i = 0; i < allocated; i++) {
         if (ptrs[i]) {
             mem_block_t *block = memory_get_block_header(ptrs[i]);
             if (!memory_validate_block(block)) {
@@ -1951,7 +1952,7 @@ static int memory_stress_test_allocation_patterns(void) {
     }
     
     /* Free every other allocation to create fragmentation */
-    for (int i = 0; i < allocated; i += 2) {
+    for (i = 0; i < allocated; i += 2) {
         if (ptrs[i]) {
             memory_free(ptrs[i]);
             ptrs[i] = NULL;
@@ -1959,23 +1960,23 @@ static int memory_stress_test_allocation_patterns(void) {
     }
     
     /* Try to reallocate in the gaps */
-    int reallocated = 0;
-    for (int i = 0; i < allocated; i += 2) {
+    {
+        int reallocated = 0;
+        for (i = 0; i < allocated; i += 2) {
         ptrs[i] = memory_alloc(sizes[(i/2) % num_sizes], MEM_TYPE_GENERAL, 0);
         if (ptrs[i]) {
             reallocated++;
         }
+        log_debug("Reallocated %d blocks after fragmentation", reallocated);
     }
-    
-    log_debug("Reallocated %d blocks after fragmentation", reallocated);
-    
+
     /* Free all remaining allocations */
-    for (int i = 0; i < allocated; i++) {
+    for (i = 0; i < allocated; i++) {
         if (ptrs[i]) {
             memory_free(ptrs[i]);
         }
     }
-    
+
     return 0;
 }
 
@@ -1988,11 +1989,12 @@ static int memory_stress_test_fragmentation(void) {
     void *small_blocks[100];
     int large_count = 0;
     int small_count = 0;
-    
+    int i;
+
     log_debug("Testing memory fragmentation scenarios");
-    
+
     /* Allocate several large blocks */
-    for (int i = 0; i < 10; i++) {
+    for (i = 0; i < 10; i++) {
         large_blocks[i] = memory_alloc(4096, MEM_TYPE_PACKET_BUFFER, 0);
         if (large_blocks[i]) {
             large_count++;
@@ -2000,7 +2002,7 @@ static int memory_stress_test_fragmentation(void) {
     }
     
     /* Fill gaps with small blocks */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         small_blocks[i] = memory_alloc(64, MEM_TYPE_GENERAL, 0);
         if (small_blocks[i]) {
             small_count++;
@@ -2010,7 +2012,7 @@ static int memory_stress_test_fragmentation(void) {
     log_debug("Allocated %d large blocks and %d small blocks", large_count, small_count);
     
     /* Free every other large block to create large gaps */
-    for (int i = 1; i < 10; i += 2) {
+    for (i = 1; i < 10; i += 2) {
         if (large_blocks[i]) {
             memory_free(large_blocks[i]);
             large_blocks[i] = NULL;
@@ -2018,25 +2020,26 @@ static int memory_stress_test_fragmentation(void) {
     }
     
     /* Try to allocate medium-sized blocks in the gaps */
-    int medium_allocated = 0;
-    for (int i = 0; i < 5; i++) {
-        void *medium_ptr = memory_alloc(2048, MEM_TYPE_PACKET_BUFFER, 0);
-        if (medium_ptr) {
-            medium_allocated++;
-            memory_free(medium_ptr);  /* Free immediately to test coalescing */
+    {
+        int medium_allocated = 0;
+        for (i = 0; i < 5; i++) {
+            void *medium_ptr = memory_alloc(2048, MEM_TYPE_PACKET_BUFFER, 0);
+            if (medium_ptr) {
+                medium_allocated++;
+                memory_free(medium_ptr);  /* Free immediately to test coalescing */
+            }
         }
+        log_debug("Successfully allocated %d medium blocks in gaps", medium_allocated);
     }
     
-    log_debug("Successfully allocated %d medium blocks in gaps", medium_allocated);
-    
     /* Free all remaining allocations */
-    for (int i = 0; i < 10; i++) {
+    for (i = 0; i < 10; i++) {
         if (large_blocks[i]) {
             memory_free(large_blocks[i]);
         }
     }
-    
-    for (int i = 0; i < 100; i++) {
+
+    for (i = 0; i < 100; i++) {
         if (small_blocks[i]) {
             memory_free(small_blocks[i]);
         }
@@ -2053,41 +2056,44 @@ static int memory_stress_test_leak_detection(void) {
     uint32_t initial_allocations = g_mem_stats.total_allocations;
     uint32_t initial_frees = g_mem_stats.total_frees;
     uint32_t initial_used = g_mem_stats.used_memory;
-    
+    int cycle;
+    int i;
+
     log_debug("Testing leak detection - initial state: %lu allocs, %lu frees, %lu used",
              initial_allocations, initial_frees, initial_used);
-    
+
     /* Perform many allocations and frees */
-    for (int cycle = 0; cycle < 5; cycle++) {
+    for (cycle = 0; cycle < 5; cycle++) {
         void *ptrs[50];
         int allocated = 0;
-        
+        uint32_t current_used;
+
         /* Allocate many blocks */
-        for (int i = 0; i < 50; i++) {
+        for (i = 0; i < 50; i++) {
             ptrs[i] = memory_alloc(128 + (i * 16), MEM_TYPE_GENERAL, 0);
             if (ptrs[i]) {
                 allocated++;
             }
         }
-        
-        /* Free all but a few blocks (intentional \"leak\" simulation) */
-        for (int i = 0; i < allocated - 2; i++) {
+
+        /* Free all but a few blocks (intentional "leak" simulation) */
+        for (i = 0; i < allocated - 2; i++) {
             if (ptrs[i]) {
                 memory_free(ptrs[i]);
                 ptrs[i] = NULL;
             }
         }
-        
+
         /* Check if leaked blocks are tracked */
-        uint32_t current_used = g_mem_stats.used_memory;
+        current_used = g_mem_stats.used_memory;
         if (current_used <= initial_used + (2 * (128 + 25 * 16))) {
             /* Acceptable leak tracking */
         } else {
             log_warning("Potential memory leak detected in cycle %d", cycle);
         }
         
-        /* Clean up remaining \"leaked\" blocks */
-        for (int i = allocated - 2; i < allocated; i++) {
+        /* Clean up remaining "leaked" blocks */
+        for (i = allocated - 2; i < allocated; i++) {
             if (ptrs[i]) {
                 memory_free(ptrs[i]);
             }
@@ -2095,13 +2101,15 @@ static int memory_stress_test_leak_detection(void) {
     }
     
     /* Verify we're back to initial state (within tolerance) */
-    uint32_t final_used = g_mem_stats.used_memory;
-    if (final_used <= initial_used + 1024) {  /* 1KB tolerance */
-        log_debug("Leak detection test passed - memory usage returned to baseline");
-        return 0;
-    } else {
-        log_error("Potential memory leak: initial=%lu, final=%lu", initial_used, final_used);
-        return -1;
+    {
+        uint32_t final_used = g_mem_stats.used_memory;
+        if (final_used <= initial_used + 1024) {  /* 1KB tolerance */
+            log_debug("Leak detection test passed - memory usage returned to baseline");
+            return 0;
+        } else {
+            log_error("Potential memory leak: initial=%lu, final=%lu", initial_used, final_used);
+            return -1;
+        }
     }
 }
 
@@ -2110,25 +2118,32 @@ static int memory_stress_test_leak_detection(void) {
  * @return 0 on success, negative on error
  */
 static int memory_stress_test_boundary_conditions(void) {
+    void *zero_ptr;
+    void *large_ptr;
+    void *test_ptr;
+    int align;
+    int i;
+
     log_debug("Testing boundary conditions and edge cases");
-    
+
     /* Test 1: Zero-size allocation (should fail gracefully) */
-    void *zero_ptr = memory_alloc(0, MEM_TYPE_GENERAL, 0);
+    zero_ptr = memory_alloc(0, MEM_TYPE_GENERAL, 0);
     if (zero_ptr != NULL) {
         log_error("Zero-size allocation should have failed");
         memory_free(zero_ptr);
         return -1;
     }
-    
+
     /* Test 2: Maximum reasonable size allocation */
-    void *large_ptr = memory_alloc(32768, MEM_TYPE_GENERAL, 0);
+    large_ptr = memory_alloc(32768, MEM_TYPE_GENERAL, 0);
     if (large_ptr) {
+        uint8_t *data;
         /* Fill with pattern to ensure it's really allocated */
         memset(large_ptr, 0x55, 32768);
-        
+
         /* Verify the pattern */
-        uint8_t *data = (uint8_t*)large_ptr;
-        for (int i = 0; i < 1000; i += 100) {  /* Sample check */
+        data = (uint8_t*)large_ptr;
+        for (i = 0; i < 1000; i += 100) {  /* Sample check */
             if (data[i] != 0x55) {
                 log_error("Large allocation memory corruption detected");
                 memory_free(large_ptr);
@@ -2141,9 +2156,9 @@ static int memory_stress_test_boundary_conditions(void) {
     
     /* Test 3: NULL pointer free (should be safe) */
     memory_free(NULL);  /* Should not crash */
-    
+
     /* Test 4: Double free detection */
-    void *test_ptr = memory_alloc(256, MEM_TYPE_GENERAL, 0);
+    test_ptr = memory_alloc(256, MEM_TYPE_GENERAL, 0);
     if (test_ptr) {
         memory_free(test_ptr);
         /* Second free should be detected and handled gracefully */
@@ -2151,8 +2166,9 @@ static int memory_stress_test_boundary_conditions(void) {
     }
     
     /* Test 5: Alignment boundary testing */
-    for (int align = 1; align <= 16; align *= 2) {
-        void *aligned_ptr = memory_alloc_aligned(100, align, MEM_TYPE_GENERAL);
+    for (align = 1; align <= 16; align *= 2) {
+        void *aligned_ptr;
+        aligned_ptr = memory_alloc_aligned(100, align, MEM_TYPE_GENERAL);
         if (aligned_ptr) {
             if (((uint32_t)aligned_ptr % align) != 0) {
                 log_error("Alignment failed for boundary %d", align);
@@ -2176,13 +2192,15 @@ static int memory_stress_test_concurrent_operations(void) {
     void *ptrs_b[25];
     int allocated_a = 0;
     int allocated_b = 0;
-    
+    int round;
+    int i;
+
     log_debug("Simulating concurrent memory operations");
-    
-    /* Simulate two \"threads\" doing interleaved operations */
-    for (int round = 0; round < 5; round++) {
-        /* \"Thread A\" - allocate small blocks */
-        for (int i = 0; i < 5; i++) {
+
+    /* Simulate two "threads" doing interleaved operations */
+    for (round = 0; round < 5; round++) {
+        /* "Thread A" - allocate small blocks */
+        for (i = 0; i < 5; i++) {
             if (allocated_a < 25) {
                 ptrs_a[allocated_a] = memory_alloc(64 + (i * 8), MEM_TYPE_GENERAL, 0);
                 if (ptrs_a[allocated_a]) {
@@ -2191,8 +2209,8 @@ static int memory_stress_test_concurrent_operations(void) {
             }
         }
         
-        /* \"Thread B\" - allocate larger blocks */
-        for (int i = 0; i < 3; i++) {
+        /* "Thread B" - allocate larger blocks */
+        for (i = 0; i < 3; i++) {
             if (allocated_b < 25) {
                 ptrs_b[allocated_b] = memory_alloc(512 + (i * 64), MEM_TYPE_PACKET_BUFFER, 0);
                 if (ptrs_b[allocated_b]) {
@@ -2201,9 +2219,9 @@ static int memory_stress_test_concurrent_operations(void) {
             }
         }
         
-        /* \"Thread A\" - free some blocks */
+        /* "Thread A" - free some blocks */
         if (allocated_a >= 3) {
-            for (int i = 0; i < 2; i++) {
+            for (i = 0; i < 2; i++) {
                 if (ptrs_a[i]) {
                     memory_free(ptrs_a[i]);
                     ptrs_a[i] = NULL;
@@ -2211,7 +2229,7 @@ static int memory_stress_test_concurrent_operations(void) {
             }
         }
         
-        /* \"Thread B\" - free some blocks */
+        /* "Thread B" - free some blocks */
         if (allocated_b >= 2) {
             if (ptrs_b[0]) {
                 memory_free(ptrs_b[0]);
@@ -2221,7 +2239,7 @@ static int memory_stress_test_concurrent_operations(void) {
     }
     
     /* Clean up all remaining allocations */
-    for (int i = 0; i < 25; i++) {
+    for (i = 0; i < 25; i++) {
         if (ptrs_a[i]) {
             memory_free(ptrs_a[i]);
         }
@@ -2241,14 +2259,16 @@ static int memory_stress_test_concurrent_operations(void) {
 static int memory_stress_test_tier_switching(void) {
     void *tier_ptrs[50];
     int allocated = 0;
-    
+    int i;
+    uint32_t size;
+    mem_type_t type;
+    uint32_t flags;
+
     log_debug("Testing memory tier switching under pressure");
-    
+
     /* Force allocations to test different tiers */
-    for (int i = 0; i < 50; i++) {
-        uint32_t size;
-        mem_type_t type;
-        uint32_t flags = 0;
+    for (i = 0; i < 50; i++) {
+        flags = 0;
         
         /* Vary allocation parameters to trigger different tiers */
         if (i % 3 == 0) {
@@ -2277,11 +2297,13 @@ static int memory_stress_test_tier_switching(void) {
     log_debug("Allocated %d blocks across memory tiers", allocated);
     
     /* Verify all allocations by checking test patterns */
-    for (int i = 0; i < allocated; i++) {
+    for (i = 0; i < allocated; i++) {
         if (tier_ptrs[i]) {
-            uint8_t *data = (uint8_t*)tier_ptrs[i];
-            uint8_t expected = 0xCC + (i % 4);
-            
+            uint8_t *data;
+            uint8_t expected;
+            data = (uint8_t*)tier_ptrs[i];
+            expected = 0xCC + (i % 4);
+
             if (data[0] != expected || data[10] != expected) {
                 log_error("Tier allocation %d corrupted (expected 0x%02X, got 0x%02X)", 
                          i, expected, data[0]);
@@ -2291,12 +2313,12 @@ static int memory_stress_test_tier_switching(void) {
     }
     
     /* Free all allocations */
-    for (int i = 0; i < 50; i++) {
+    for (i = 0; i < 50; i++) {
         if (tier_ptrs[i]) {
             memory_free(tier_ptrs[i]);
         }
     }
-    
+
     log_debug("Tier switching test completed successfully");
     return 0;
 }
@@ -2345,16 +2367,17 @@ static int memory_validate_all_allocations(void) {
 static int memory_perform_corruption_test(void) {
     void *test_ptr;
     mem_block_t *block;
-    
+    uint32_t original_magic;
+
     log_debug("Testing memory corruption detection");
-    
+
     /* Allocate a test block */
     test_ptr = memory_alloc(256, MEM_TYPE_GENERAL, 0);
     if (!test_ptr) {
         log_error("Failed to allocate test block for corruption test");
         return -1;
     }
-    
+
     /* Get block header and verify it's valid */
     block = memory_get_block_header(test_ptr);
     if (!memory_validate_block(block)) {
@@ -2362,9 +2385,9 @@ static int memory_perform_corruption_test(void) {
         memory_free(test_ptr);
         return -1;
     }
-    
+
     /* Simulate corruption by modifying magic number */
-    uint32_t original_magic = block->magic;
+    original_magic = block->magic;
     block->magic = 0xDEADBEEF;  /* Corrupt the magic number */
     
     /* Validation should now fail */
@@ -2390,20 +2413,23 @@ static int memory_perform_corruption_test(void) {
  * @return 0 on success, negative on error
  */
 static int memory_test_extreme_allocations(void) {
+    void *huge_ptr;
+    void *tiny_ptrs[1000];
+    int tiny_allocated = 0;
+    void *invalid_ptr;
+    int i;
+
     log_debug("Testing extreme allocation scenarios");
-    
+
     /* Test very large allocation that should fail */
-    void *huge_ptr = memory_alloc(0x100000, MEM_TYPE_GENERAL, 0);  /* 1MB */
+    huge_ptr = memory_alloc(0x100000, MEM_TYPE_GENERAL, 0);  /* 1MB */
     if (huge_ptr) {
         log_warning("Unexpectedly succeeded in allocating 1MB");
         memory_free(huge_ptr);
     }
-    
+
     /* Test many tiny allocations */
-    void *tiny_ptrs[1000];
-    int tiny_allocated = 0;
-    
-    for (int i = 0; i < 1000; i++) {
+    for (i = 0; i < 1000; i++) {
         tiny_ptrs[i] = memory_alloc(8, MEM_TYPE_GENERAL, 0);
         if (tiny_ptrs[i]) {
             tiny_allocated++;
@@ -2413,16 +2439,16 @@ static int memory_test_extreme_allocations(void) {
     }
     
     log_debug("Successfully allocated %d tiny (8-byte) blocks", tiny_allocated);
-    
+
     /* Free all tiny allocations */
-    for (int i = 0; i < tiny_allocated; i++) {
+    for (i = 0; i < tiny_allocated; i++) {
         if (tiny_ptrs[i]) {
             memory_free(tiny_ptrs[i]);
         }
     }
     
     /* Test allocation with invalid parameters */
-    void *invalid_ptr = memory_alloc(100, 99, 0xFFFFFFFF);  /* Invalid type and flags */
+    invalid_ptr = memory_alloc(100, 99, 0xFFFFFFFF);  /* Invalid type and flags */
     if (invalid_ptr) {
         log_warning("Allocation with invalid parameters unexpectedly succeeded");
         memory_free(invalid_ptr);
@@ -2438,11 +2464,14 @@ static int memory_test_extreme_allocations(void) {
 static void memory_simulate_low_memory_conditions(void) {
     void *exhaustion_ptrs[100];
     int allocated = 0;
-    
+    int small_allocated;
+    mem_error_t last_error;
+    int i;
+
     log_debug("Simulating low memory conditions");
-    
+
     /* Try to exhaust available memory */
-    for (int i = 0; i < 100; i++) {
+    for (i = 0; i < 100; i++) {
         exhaustion_ptrs[i] = memory_alloc(4096, MEM_TYPE_GENERAL, 0);
         if (exhaustion_ptrs[i]) {
             allocated++;
@@ -2454,9 +2483,10 @@ static void memory_simulate_low_memory_conditions(void) {
     log_debug("Allocated %d large blocks before memory exhaustion", allocated);
     
     /* Under low memory, try small allocations */
-    int small_allocated = 0;
-    for (int i = 0; i < 20; i++) {
-        void *small_ptr = memory_alloc(64, MEM_TYPE_GENERAL, 0);
+    small_allocated = 0;
+    for (i = 0; i < 20; i++) {
+        void *small_ptr;
+        small_ptr = memory_alloc(64, MEM_TYPE_GENERAL, 0);
         if (small_ptr) {
             small_allocated++;
             memory_free(small_ptr);  /* Free immediately */
@@ -2468,7 +2498,7 @@ static void memory_simulate_low_memory_conditions(void) {
     log_debug("Successfully allocated %d small blocks under memory pressure", small_allocated);
     
     /* Check that error handling works correctly */
-    mem_error_t last_error = memory_get_last_error();
+    last_error = memory_get_last_error();
     if (last_error == MEM_ERROR_NO_MEMORY || last_error == MEM_ERROR_NONE) {
         log_debug("Memory error handling working correctly");
     } else {
@@ -2476,7 +2506,7 @@ static void memory_simulate_low_memory_conditions(void) {
     }
     
     /* Clean up exhaustion allocations */
-    for (int i = 0; i < allocated; i++) {
+    for (i = 0; i < allocated; i++) {
         if (exhaustion_ptrs[i]) {
             memory_free(exhaustion_ptrs[i]);
         }

@@ -8,23 +8,23 @@
  *
  */
 
-#include "../include/nic_init.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
-#include "../include/diag.h"
-#include "../include/3c509b.h"
-#include "../include/3c515.h"
-#include "../include/mii.h"
-#include "../include/mdiolock.h"
-#include "../include/common.h"
-#include "../include/membar.h"
-#include "../include/nic_defs.h"
-#include "../include/config.h"  /* For bus master testing integration */
-#include "../include/cachecoh.h"  // Phase 4: Runtime cache coherency testing
-#include "../include/cachemgt.h"  // Phase 4: Cache management system
-#include "../include/chipdet.h"  // Phase 4: Safe chipset detection
-#include "../include/chipset_database.h"  // Phase 4: Community chipset database
-#include "../include/prfenbl.h"  // Phase 4: Performance optimization guidance
+#include "nic_init.h"
+#include "logging.h"
+#include "memory.h"
+#include "diag.h"
+#include "3c509b.h"
+#include "3c515.h"
+#include "mii.h"
+#include "mdiolock.h"
+#include "common.h"
+#include "membar.h"
+#include "nic_defs.h"
+#include "config.h"  /* For bus master testing integration */
+#include "cachecoh.h"  // Phase 4: Runtime cache coherency testing
+#include "cachemgt.h"  // Phase 4: Cache management system
+#include "chipdet.h"  // Phase 4: Safe chipset detection
+#include "chipset_database.h"  // Phase 4: Community chipset database
+#include "prfenbl.h"  // Phase 4: Performance optimization guidance
 #include <string.h>
 
 /* External DMA policy functions */
@@ -380,11 +380,14 @@ int nic_init_system(void) {
             LOG_INFO("PnP detection found %d supported 3Com devices", pnp_detected_count);
             
             /* Store PnP results for integration with hardware initialization */
-            for (int i = 0; i < pnp_detected_count && i < MAX_NICS; i++) {
-                LOG_DEBUG("PnP Device %d: Type=%d, I/O=0x%X, IRQ=%d", i, 
-                         pnp_detection_results[i].type, 
-                         pnp_detection_results[i].io_base,
-                         pnp_detection_results[i].irq);
+            {
+                int i;
+                for (i = 0; i < pnp_detected_count && i < MAX_NICS; i++) {
+                    LOG_DEBUG("PnP Device %d: Type=%d, I/O=0x%X, IRQ=%d", i,
+                             pnp_detection_results[i].type,
+                             pnp_detection_results[i].io_base,
+                             pnp_detection_results[i].irq);
+                }
             }
         } else {
             LOG_DEBUG("No PnP devices detected, will use legacy ISA detection");
@@ -420,24 +423,27 @@ void nic_init_cleanup(void) {
 }
 
 int nic_init_all_detected(void) {
+    nic_detect_info_t detect_list[MAX_NICS];
+    int detected_count;
+    int initialized_count = 0;
+    int i;
+
     if (!g_nic_init_system_ready) {
         return ERROR_NOT_FOUND;
     }
-    
+
     /* Detect all NICs */
-    nic_detect_info_t detect_list[MAX_NICS];
-    int detected_count = nic_detect_all(detect_list, MAX_NICS);
-    
+    detected_count = nic_detect_all(detect_list, MAX_NICS);
+
     if (detected_count <= 0) {
         LOG_WARNING("No NICs detected");
         return ERROR_NOT_FOUND;
     }
-    
+
     LOG_INFO("Detected %d NICs, initializing...", detected_count);
-    
+
     /* Initialize each detected NIC */
-    int initialized_count = 0;
-    for (int i = 0; i < detected_count && i < MAX_NICS; i++) {
+    for (i = 0; i < detected_count && i < MAX_NICS; i++) {
         nic_info_t *nic = hardware_get_nic(i);
         if (nic) {
             int result = nic_init_from_detection(nic, &detect_list[i]);
@@ -449,7 +455,7 @@ int nic_init_all_detected(void) {
             }
         }
     }
-    
+
     LOG_INFO("Initialized %d of %d detected NICs", initialized_count, detected_count);
     
     return initialized_count > 0 ? SUCCESS : ERROR_HARDWARE;
@@ -601,14 +607,15 @@ int nic_detect_all(nic_detect_info_t *detect_list, int max_nics) {
 }
 
 int nic_detect_3c509b(nic_detect_info_t *info_list, int max_count) {
+    int detected_count = 0;
+    int i;
+
     if (!info_list || max_count <= 0) {
         return ERROR_INVALID_PARAM;
     }
-    
-    int detected_count = 0;
-    
+
     /* Try each possible I/O address */
-    for (int i = 0; i < NIC_3C509B_IO_COUNT && detected_count < max_count; i++) {
+    for (i = 0; i < NIC_3C509B_IO_COUNT && detected_count < max_count; i++) {
         uint16_t io_base = NIC_3C509B_IO_BASES[i];
         
         if (nic_probe_3c509b_at_address(io_base, &info_list[detected_count])) {
@@ -626,14 +633,15 @@ int nic_detect_3c509b(nic_detect_info_t *info_list, int max_count) {
 }
 
 int nic_detect_3c515(nic_detect_info_t *info_list, int max_count) {
+    int detected_count = 0;
+    int i;
+
     if (!info_list || max_count <= 0) {
         return ERROR_INVALID_PARAM;
     }
-    
-    int detected_count = 0;
-    
+
     /* Try each possible I/O address */
-    for (int i = 0; i < NIC_3C515_IO_COUNT && detected_count < max_count; i++) {
+    for (i = 0; i < NIC_3C515_IO_COUNT && detected_count < max_count; i++) {
         uint16_t io_base = NIC_3C515_IO_BASES[i];
         
         if (nic_probe_3c515_at_address(io_base, &info_list[detected_count])) {
@@ -1042,27 +1050,33 @@ static int nic_reset_hardware(nic_info_t *nic) {
             nic_delay_milliseconds(10);
             
             /* Wait for reset to complete by checking command in progress bit */
-            for (int i = 0; i < 100; i++) {
-                uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
-                if (!(status & _3C509B_STATUS_CMD_BUSY)) {
-                    break;
+            {
+                int i;
+                for (i = 0; i < 100; i++) {
+                    uint16_t status = inw(nic->io_base + _3C509B_STATUS_REG);
+                    if (!(status & _3C509B_STATUS_CMD_BUSY)) {
+                        break;
+                    }
+                    nic_delay_milliseconds(1);
                 }
-                nic_delay_milliseconds(1);
             }
             break;
-            
+
         case NIC_TYPE_3C515_TX:
             /* Send global reset command */
             outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_TOTAL_RESET);
             nic_delay_milliseconds(10);
-            
+
             /* Wait for reset to complete */
-            for (int i = 0; i < 100; i++) {
-                uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
-                if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
-                    break;
+            {
+                int i;
+                for (i = 0; i < 100; i++) {
+                    uint16_t status = inw(nic->io_base + _3C515_TX_STATUS_REG);
+                    if (!(status & _3C515_TX_STATUS_CMD_IN_PROGRESS)) {
+                        break;
+                    }
+                    nic_delay_milliseconds(1);
                 }
-                nic_delay_milliseconds(1);
             }
             break;
             
@@ -1120,8 +1134,9 @@ static void nic_init_update_stats(bool success, bool detection) {
 
 /* Helper function implementations */
 static bool is_zero_mac(const uint8_t *mac) {
+    int i;
     if (!mac) return true;
-    for (int i = 0; i < ETH_ALEN; i++) {
+    for (i = 0; i < ETH_ALEN; i++) {
         if (mac[i] != 0) return false;
     }
     return true;
@@ -1137,7 +1152,8 @@ void udelay(uint32_t microseconds) {
 }
 
 void mdelay(uint32_t milliseconds) {
-    for (uint32_t i = 0; i < milliseconds; i++) {
+    uint32_t i;
+    for (i = 0; i < milliseconds; i++) {
         udelay(1000);
     }
 }
@@ -1210,17 +1226,21 @@ bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
      *   Word 8:   Available media/connector types (bits 8-10)
      *   Word 9-14: Reserved/OEM specific
      */
-    uint16_t checksum = 0;
-    for (int i = 0; i <= 14; i++) {
-        outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
-        nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-        uint16_t word = inw(io_base + _3C509B_EEPROM_DATA);
-        checksum ^= word;
-    }
-    
-    if (checksum != 0) {
-        LOG_WARNING("3C509B EEPROM checksum failed at I/O 0x%X (XOR=0x%04X)", io_base, checksum);
-        /* Continue with defaults but note the corruption */
+    {
+        int i;
+        uint16_t checksum = 0;
+        for (i = 0; i <= 14; i++) {
+            uint16_t word;
+            outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
+            nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
+            word = inw(io_base + _3C509B_EEPROM_DATA);
+            checksum ^= word;
+        }
+
+        if (checksum != 0) {
+            LOG_WARNING("3C509B EEPROM checksum failed at I/O 0x%X (XOR=0x%04X)", io_base, checksum);
+            /* Continue with defaults but note the corruption */
+        }
     }
     
     /* Try to read product ID from EEPROM */
@@ -1246,12 +1266,16 @@ bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
     }
     
     /* Read MAC address from EEPROM (addresses 0, 1, 2) */
-    for (int i = 0; i < 3; i++) {
-        outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
-        nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-        uint16_t mac_word = inw(io_base + _3C509B_EEPROM_DATA);
-        info->mac[i * 2] = (mac_word >> 8) & 0xFF;
-        info->mac[i * 2 + 1] = mac_word & 0xFF;
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            uint16_t mac_word;
+            outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
+            nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
+            mac_word = inw(io_base + _3C509B_EEPROM_DATA);
+            info->mac[i * 2] = (mac_word >> 8) & 0xFF;
+            info->mac[i * 2 + 1] = mac_word & 0xFF;
+        }
     }
     
     /* Detect IRQ from EEPROM (address 6) */
@@ -1355,17 +1379,21 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
      *   Word 9-0x1E: Reserved/subsystem IDs
      *   Word 0x1F:   Checksum (makes sum of 0-0x1F equal 0)
      */
-    uint16_t checksum = 0;
-    for (int i = 0; i < 0x20; i++) {
-        outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
-        nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-        uint16_t word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-        checksum += word;
-    }
-    
-    if (checksum != 0) {
-        LOG_WARNING("3C515-TX EEPROM checksum failed at I/O 0x%X (SUM=0x%04X)", io_base, checksum);
-        /* Continue but note potential corruption */
+    {
+        int i;
+        uint16_t checksum = 0;
+        for (i = 0; i < 0x20; i++) {
+            uint16_t word;
+            outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
+            nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
+            word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+            checksum += word;
+        }
+
+        if (checksum != 0) {
+            LOG_WARNING("3C515-TX EEPROM checksum failed at I/O 0x%X (SUM=0x%04X)", io_base, checksum);
+            /* Continue but note potential corruption */
+        }
     }
     
     /* Try to read product ID from EEPROM */
@@ -1380,12 +1408,16 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
     }
     
     /* Read MAC address from EEPROM */
-    for (int i = 0; i < 3; i++) {
-        outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
-        nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-        uint16_t mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-        info->mac[i * 2] = (mac_word >> 8) & 0xFF;
-        info->mac[i * 2 + 1] = mac_word & 0xFF;
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            uint16_t mac_word;
+            outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
+            nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
+            mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+            info->mac[i * 2] = (mac_word >> 8) & 0xFF;
+            info->mac[i * 2 + 1] = mac_word & 0xFF;
+        }
     }
     
     /* Try to detect IRQ from configuration */
@@ -1429,18 +1461,19 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
     
     /* For 3C515-TX with MII PHY, check actual negotiated duplex */
     if (info->media_options & (MEDIA_CAP_10BASE_T | MEDIA_CAP_100BASE_TX)) {
+        uint8_t phy_addr = PHY_ADDR_INVALID;
+        uint16_t phy_id1 = 0, phy_id2 = 0;
+        uint8_t addr;
+
         /* Switch to window 4 for PHY access */
         _3C515_TX_SELECT_WINDOW(io_base, 4);
         nic_delay_microseconds(100);
-        
+
         /* Scan for PHY address (0-31) */
-        uint8_t phy_addr = PHY_ADDR_INVALID;
-        uint16_t phy_id1 = 0, phy_id2 = 0;
-        
-        for (uint8_t addr = PHY_ADDR_MIN; addr <= PHY_ADDR_MAX; addr++) {
-            /* Read PHY ID register 1 (register 2) with proper MII management */
-            /* Wait for MII to be ready */
-            int timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+        for (addr = PHY_ADDR_MIN; addr <= PHY_ADDR_MAX; addr++) {
+                /* Read PHY ID register 1 (register 2) with proper MII management */
+                /* Wait for MII to be ready */
+                int timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
             while (--timeout > 0) {
                 if (!(inw(io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) {
                     break;
@@ -1704,14 +1737,18 @@ int nic_read_mac_address_3c509b(uint16_t io_base, uint8_t *mac) {
     nic_delay_microseconds(100);
     
     /* Read MAC address from EEPROM (addresses 0, 1, 2) */
-    for (int i = 0; i < 3; i++) {
-        outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
-        nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-        uint16_t mac_word = inw(io_base + _3C509B_EEPROM_DATA);
-        mac[i * 2] = (mac_word >> 8) & 0xFF;
-        mac[i * 2 + 1] = mac_word & 0xFF;
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            uint16_t mac_word;
+            outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | i);
+            nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
+            mac_word = inw(io_base + _3C509B_EEPROM_DATA);
+            mac[i * 2] = (mac_word >> 8) & 0xFF;
+            mac[i * 2 + 1] = mac_word & 0xFF;
+        }
     }
-    
+
     return SUCCESS;
 }
 
@@ -1725,14 +1762,18 @@ int nic_read_mac_address_3c515(uint16_t io_base, uint8_t *mac) {
     nic_delay_microseconds(100);
     
     /* Read MAC address from EEPROM */
-    for (int i = 0; i < 3; i++) {
-        outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
-        nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-        uint16_t mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-        mac[i * 2] = (mac_word >> 8) & 0xFF;
-        mac[i * 2 + 1] = mac_word & 0xFF;
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            uint16_t mac_word;
+            outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
+            nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
+            mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+            mac[i * 2] = (mac_word >> 8) & 0xFF;
+            mac[i * 2 + 1] = mac_word & 0xFF;
+        }
     }
-    
+
     return SUCCESS;
 }
 
@@ -2128,11 +2169,12 @@ static int phy_scan_full_range(uint16_t io_base, uint8_t *phy_addr, uint32_t *ph
     uint8_t valid_phys = 0;
     uint8_t best_addr = PHY_ADDR_INVALID;
     uint32_t best_id = 0;
-    
+    uint8_t addr;
+
     LOG_INFO("Starting comprehensive PHY scan (addresses 0-31)");
-    
+
     /* Scan all 32 possible PHY addresses */
-    for (uint8_t addr = 0; addr <= 31; addr++) {
+    for (addr = 0; addr <= 31; addr++) {
         /* Wait for MII ready */
         timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
         while (--timeout > 0) {
@@ -2263,29 +2305,32 @@ int nic_init_3c515_mii(nic_info_t *nic) {
     nic->mii_capable = true;
     
     /* Read BMSR to check capabilities (read twice to clear latched bits) */
-    for (int i = 0; i < 2; i++) {
-        timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
-        while (--timeout > 0) {
-            if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
-            nic_delay_microseconds(MII_POLL_DELAY_US);
-        }
-        
-        if (timeout > 0) {
-            outw(nic->io_base + _3C515_MII_CMD,
-                 MII_CMD_READ | (phy_addr << MII_CMD_PHY_SHIFT) | (MII_BMSR << MII_CMD_REG_SHIFT));
-            
+    {
+        int i;
+        for (i = 0; i < 2; i++) {
             timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
             while (--timeout > 0) {
                 if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
                 nic_delay_microseconds(MII_POLL_DELAY_US);
             }
-            
+
             if (timeout > 0) {
-                bmsr = inw(nic->io_base + _3C515_MII_DATA);
+                outw(nic->io_base + _3C515_MII_CMD,
+                     MII_CMD_READ | (phy_addr << MII_CMD_PHY_SHIFT) | (MII_BMSR << MII_CMD_REG_SHIFT));
+
+                timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+                while (--timeout > 0) {
+                    if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
+                    nic_delay_microseconds(MII_POLL_DELAY_US);
+                }
+
+                if (timeout > 0) {
+                    bmsr = inw(nic->io_base + _3C515_MII_DATA);
+                }
             }
         }
     }
-    
+
     /* Check auto-negotiation capability and status */
     if (bmsr & BMSR_ANEGCAPABLE) {
         nic->autoneg_capable = true;

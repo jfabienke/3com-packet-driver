@@ -11,23 +11,23 @@
 #include <dos.h>
 #include <stdio.h>
 #include <string.h>
-#include "../include/init.h"
-#include "../include/hardware.h"
-#include "../include/xmsdet.h"
-#include "../include/bufaloc.h"
-#include "../include/routing.h"
-#include "../include/stats.h"
-#include "../include/logging.h"
-#include "../include/nic_init.h"
-#include "../include/cpudet.h"
-#include "../include/config.h"
-#include "../include/prod.h"
-#include "../include/dmamap.h"  // GPT-5: Centralized DMA mapping layer
-#include "../include/pltprob.h" // Platform detection and VDS support
-#include "../include/vds.h"          // GPT-5 A+: Virtual DMA Services
-#include "../include/telemetr.h"    // GPT-5 A+: Production telemetry
-#include "../include/smc_safety_patches.h" // SMC safety detection and patching
-#include "../include/pciintg.h"     // PCI subsystem integration
+#include "init.h"
+#include "hardware.h"
+#include "xmsdet.h"
+#include "bufaloc.h"
+#include "routing.h"
+#include "stats.h"
+#include "logging.h"
+#include "nic_init.h"
+#include "cpudet.h"
+#include "config.h"
+#include "prod.h"
+#include "dmamap.h"  // GPT-5: Centralized DMA mapping layer
+#include "pltprob.h" // Platform detection and VDS support
+#include "vds.h"          // GPT-5 A+: Virtual DMA Services
+#include "telemetr.h"    // GPT-5 A+: Production telemetry
+#include "smc_safety_patches.h" // SMC safety detection and patching
+#include "pciintg.h"     // PCI subsystem integration
 
 /* Global initialization state */
 static init_state_t init_state = {0};
@@ -61,7 +61,9 @@ int detect_cpu_type(void) {
 int hardware_init_all(const config_t *config) {
     int result = 0;
     int num_nics = 0;
-    
+    int i;
+    int active_nics;
+
     if (!config) {
         log_error("hardware_init_all: NULL config parameter");
         return INIT_ERR_INVALID_PARAM;
@@ -116,7 +118,7 @@ int hardware_init_all(const config_t *config) {
     if (detected_3c509b > 0) {
         log_info("Found %d 3C509B NIC(s)", detected_3c509b);
         /* Initialize detected 3C509B NICs */
-        for (int i = 0; i < detected_3c509b && num_nics < MAX_NICS; i++) {
+        for (i = 0; i < detected_3c509b && num_nics < MAX_NICS; i++) {
             nic_info_t *nic = hardware_get_nic(num_nics);
             result = nic_init_from_detection(nic, &detect_info[i]);
             if (result == 0) {
@@ -147,7 +149,7 @@ int hardware_init_all(const config_t *config) {
             if (detected_3c515 > 0) {
                 log_info("Found %d 3C515-TX NIC(s)", detected_3c515);
                 /* Initialize detected 3C515-TX NICs */
-                for (int i = 0; i < detected_3c515 && num_nics < MAX_NICS; i++) {
+                for (i = 0; i < detected_3c515 && num_nics < MAX_NICS; i++) {
                     nic_info_t *nic = hardware_get_nic(num_nics);
                     result = nic_init_from_detection(nic, &detect_info[i]);
                     if (result == 0) {
@@ -194,7 +196,7 @@ int hardware_init_all(const config_t *config) {
         log_info("Validating NIC configuration against parameters");
         
         /* Validate detected NICs against configuration parameters */
-        for (int i = 0; i < num_nics; i++) {
+        for (i = 0; i < num_nics; i++) {
             nic_info_t *nic = hardware_get_nic(i);
             if (!nic) continue;
             
@@ -242,7 +244,7 @@ int hardware_init_all(const config_t *config) {
         log_info("CPU: %s (features: 0x%08X)", 
                 cpu_type_to_string(g_cpu_info.type), g_cpu_info.features);
         log_info("Total NICs detected: %d", num_nics);
-        for (int i = 0; i < num_nics; i++) {
+        for (i = 0; i < num_nics; i++) {
             nic_info_t *nic = hardware_get_nic(i);
             if (nic) {
                 log_info("NIC %d: %s at I/O 0x%X, IRQ %d, Status: %s", 
@@ -265,8 +267,8 @@ int hardware_init_all(const config_t *config) {
     }
     
     /* Count active NICs */
-    int active_nics = 0;
-    for (int i = 0; i < num_nics; i++) {
+    active_nics = 0;
+    for (i = 0; i < num_nics; i++) {
         nic_info_t *nic = hardware_get_nic(i);
         if (nic && (nic->status & NIC_STATUS_ACTIVE)) {
             active_nics++;

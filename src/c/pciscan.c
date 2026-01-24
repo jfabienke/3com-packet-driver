@@ -104,7 +104,8 @@ static const vendor_info_t known_vendors[] = {
 
 /* Get vendor name */
 static const char* get_vendor_name(uint16_t vendor_id) {
-    for (int i = 0; known_vendors[i].name != NULL; i++) {
+    int i;
+    for (i = 0; known_vendors[i].name != NULL; i++) {
         if (known_vendors[i].vendor_id == vendor_id) {
             return known_vendors[i].name;
         }
@@ -161,7 +162,8 @@ static const device_info_t known_3com_devices[] = {
 
 /* Get 3Com device name */
 static const char* get_3com_device_name(uint16_t device_id) {
-    for (int i = 0; known_3com_devices[i].name != NULL; i++) {
+    int i;
+    for (i = 0; known_3com_devices[i].name != NULL; i++) {
         if (known_3com_devices[i].device_id == device_id) {
             return known_3com_devices[i].name;
         }
@@ -284,18 +286,19 @@ static void display_capabilities(uint8_t bus, uint8_t dev, uint8_t func) {
 
 /* Dump raw config space */
 static void dump_config_space(uint8_t bus, uint8_t dev, uint8_t func) {
+    int i, j;
     printf("    Config Space:\n");
-    
-    for (int i = 0; i < 256; i += 16) {
+
+    for (i = 0; i < 256; i += 16) {
         printf("      %02X:", i);
-        
-        for (int j = 0; j < 16; j++) {
+
+        for (j = 0; j < 16; j++) {
             uint8_t byte = pci_read_config_byte(bus, dev, func, i + j);
             printf(" %02X", byte);
         }
-        
+
         printf("  ");
-        for (int j = 0; j < 16; j++) {
+        for (j = 0; j < 16; j++) {
             uint8_t byte = pci_read_config_byte(bus, dev, func, i + j);
             if (byte >= 32 && byte < 127) {
                 printf("%c", byte);
@@ -303,7 +306,7 @@ static void dump_config_space(uint8_t bus, uint8_t dev, uint8_t func) {
                 printf(".");
             }
         }
-        
+
         printf("\n");
     }
 }
@@ -429,7 +432,8 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     
     /* BARs */
     if (options.show_bars) {
-        for (int i = 0; i < 6; i++) {
+        int i;
+        for (i = 0; i < 6; i++) {
             display_bar(bus, dev, func, i);
         }
     }
@@ -492,29 +496,32 @@ static void scan_pci_bus(void) {
         start_bus = options.target_bus;
         end_bus = options.target_bus;
     }
-    
+
     /* Scan buses */
-    for (uint8_t bus = start_bus; bus <= end_bus; bus++) {
-        for (uint8_t dev = 0; dev < 32; dev++) {
+    {
+    uint8_t bus, dev;
+    for (bus = start_bus; bus <= end_bus; bus++) {
+        for (dev = 0; dev < 32; dev++) {
             /* Check function 0 first */
             uint16_t vendor_id = pci_read_config_word(bus, dev, 0, PCI_VENDOR_ID);
-            
+
             if (vendor_id == 0xFFFF || vendor_id == 0x0000) {
                 continue;  /* No device */
             }
-            
+
             /* Device exists, scan function 0 */
             scan_device(bus, dev, 0);
             devices_found++;
-            
+
             /* Check if multi-function */
             header_type = pci_read_config_byte(bus, dev, 0, PCI_HEADER_TYPE);
-            
+
             if (header_type & 0x80) {
                 /* Multi-function device, scan other functions */
-                for (uint8_t func = 1; func < 8; func++) {
+                uint8_t func;
+                for (func = 1; func < 8; func++) {
                     vendor_id = pci_read_config_word(bus, dev, func, PCI_VENDOR_ID);
-                    
+
                     if (vendor_id != 0xFFFF && vendor_id != 0x0000) {
                         scan_device(bus, dev, func);
                         devices_found++;
@@ -522,6 +529,7 @@ static void scan_pci_bus(void) {
                 }
             }
         }
+    }
     }
     
     printf("\nTotal devices found: %d\n", devices_found);
@@ -562,7 +570,8 @@ static void show_help(const char* prog_name) {
 
 /* Parse command line */
 static void parse_args(int argc, char* argv[]) {
-    for (int i = 1; i < argc; i++) {
+    int i;
+    for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             options.verbose = true;
         } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bars") == 0) {

@@ -11,21 +11,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <dos.h>
-#include "../include/pktops.h"
-#include "../include/hardware.h"
-#include "../include/routing.h"
-#include "../include/statrt.h"
-#include "../include/arp.h"
-#include "../include/bufaloc.h"
-#include "../include/logging.h"
-#include "../include/stats.h"
-#include "../include/api.h"
-#include "../include/flowctl.h"  // Phase 2.3: 802.3x Flow Control
-#include "../include/prod.h"
-#include "../include/dmamap.h"  // GPT-5: Centralized DMA mapping layer
-#include "../include/3c509pio.h"   // GPT-5: PIO fast path for 3C509B
-#include "../include/vds.h"           // VDS Virtual DMA Services
-#include "../include/pltprob.h" // Platform detection and DMA policy
+#include "pktops.h"
+#include "hardware.h"
+#include "routing.h"
+#include "statrt.h"
+#include "arp.h"
+#include "bufaloc.h"
+#include "logging.h"
+#include "stats.h"
+#include "api.h"
+#include "flowctl.h"  // Phase 2.3: 802.3x Flow Control
+#include "prod.h"
+#include "dmamap.h"  // GPT-5: Centralized DMA mapping layer
+#include "3c509pio.h"   // GPT-5: PIO fast path for 3C509B
+#include "vds.h"           // VDS Virtual DMA Services
+#include "pltprob.h" // Platform detection and DMA policy
 
 /* Timing constants for bottom-half processing */
 #define MAX_BOTTOM_HALF_TICKS  100  /* Max ticks to process packets */
@@ -303,12 +303,13 @@ int packet_ops_init(const config_t *config) {
  * @return true if queued successfully, false if queue full
  */
 static bool vds_queue_deferred_unlock(const vds_mapping_t *mapping) {
+    bool result = false;
+    uint8_t idx;
+
     /* GPT-5 CRITICAL: Protect queue with critical section */
     asm volatile("cli");  /* Disable interrupts */
-    
-    bool result = false;
     if (g_vds_unlock_queue.count < MAX_VDS_DEFERRED_UNLOCKS) {
-        uint8_t idx = g_vds_unlock_queue.tail;
+        idx = g_vds_unlock_queue.tail;
         g_vds_unlock_queue.queue[idx].mapping = *mapping;
         g_vds_unlock_queue.queue[idx].valid = true;
         g_vds_unlock_queue.tail = (g_vds_unlock_queue.tail + 1) % MAX_VDS_DEFERRED_UNLOCKS;
@@ -328,15 +329,17 @@ static bool vds_queue_deferred_unlock(const vds_mapping_t *mapping) {
 void vds_process_deferred_unlocks(void) {
     /* GPT-5 CRITICAL: Guard against interrupt context - VDS calls forbidden from ISR */
     static bool in_interrupt_check = false;
-    
+    uint16_t flags;
+    uint8_t idx;
+    vds_deferred_unlock_t unlock_copy;
+
     /* Simple interrupt context detection */
     if (in_interrupt_check) {
         return; /* Prevent recursion */
     }
     in_interrupt_check = true;
-    
+
     /* Check if interrupts are disabled (strong indicator of ISR/critical section) */
-    uint16_t flags;
     asm volatile("pushf; pop %0" : "=r"(flags));
     if (!(flags & 0x0200)) { /* IF flag clear = interrupts disabled */
         in_interrupt_check = false;
@@ -351,9 +354,9 @@ void vds_process_deferred_unlocks(void) {
             asm volatile("sti");
             break; /* Race condition check */
         }
-        
-        uint8_t idx = g_vds_unlock_queue.head;
-        vds_deferred_unlock_t unlock_copy = g_vds_unlock_queue.queue[idx]; /* Copy under lock */
+
+        idx = g_vds_unlock_queue.head;
+        unlock_copy = g_vds_unlock_queue.queue[idx]; /* Copy under lock */
         g_vds_unlock_queue.queue[idx].valid = false;
         g_vds_unlock_queue.head = (g_vds_unlock_queue.head + 1) % MAX_VDS_DEFERRED_UNLOCKS;
         g_vds_unlock_queue.count--;
@@ -514,16 +517,18 @@ static void packet_recover_tx_overflow(void) {
     nic_info_t *nic;
     uint32_t now_ticks = get_bios_ticks();
     const uint32_t stale_threshold = TX_TIMEOUT_TICKS; /* reuse TX timeout */
+    int n;
+    int i;
 
     /* Scan all NICs for completed descriptors with mappings */
-    for (int n = 0; n < hardware_get_nic_count(); n++) {
+    for (n = 0; n < hardware_get_nic_count(); n++) {
         nic = hardware_get_nic(n);
         if (!nic || nic->type != NIC_TYPE_3C515_TX) {
             continue;
         }
 
         /* Check all TX descriptors in this NIC's ring */
-        for (int i = 0; i < TX_RING_SIZE; i++) {
+        for (i = 0; i < TX_RING_SIZE; i++) {
             /* Look for completed descriptors that still have mappings */
             if ((nic->tx_desc_ring[i].status & _3C515_TX_TX_DESC_COMPLETE) &&
                 nic->tx_desc_ring[i].mapping != NULL) {
@@ -597,7 +602,7 @@ void packet_process_deferred_work(void) {
  * @param handle Sender handle for tracking
  * @return 0 on success, negative on error
  */
-int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data, 
+int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
                         uint16_t length, const uint8_t *dest_addr, uint16_t handle) {
     nic_info_t *nic;
     buffer_desc_t *buffer;
@@ -605,6 +610,12 @@ int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
     int result;
     uint16_t frame_length;
     extern cpu_info_t g_cpu_info;
+    uint32_t pause_time;
+    dma_mapping_t *unified_mapping = NULL;
+    void *dma_safe_buffer;
+    dma_policy_t policy;
+    uint32_t dma_flags;
+    _3c515_tx_tx_desc_t *desc;
     
     if (!packet_data || length == 0 || !dest_addr) {
         log_error("packet_send_enhanced: Invalid parameters");
@@ -676,7 +687,7 @@ int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
     
     /* Check 802.3x Flow Control before transmission (Phase 2.3) */
     if (flow_control_should_pause_transmission(nic->index)) {
-        uint32_t pause_time = flow_control_get_pause_duration(nic->index);
+        pause_time = flow_control_get_pause_duration(nic->index);
         log_debug("Transmission paused due to 802.3x PAUSE frame, waiting %u ms", pause_time);
         
         /* Wait for pause duration with CPU-efficient wait */
@@ -705,12 +716,11 @@ int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
     }
     
     /* GPT-5 UNIFIED: Always use unified DMA mapping abstraction */
-    dma_mapping_t *unified_mapping = NULL;
-    void *dma_safe_buffer = frame_buffer;
-    
+    dma_safe_buffer = frame_buffer;
+
     if (nic->type == NIC_TYPE_3C515_TX && nic->dma_capable) {
-        dma_policy_t policy = platform_get_dma_policy();
-        uint32_t dma_flags = DMA_MAP_READ;  /* TX = device reads from memory */
+        policy = platform_get_dma_policy();
+        dma_flags = DMA_MAP_READ;  /* TX = device reads from memory */
         
         /* Set appropriate flags based on policy */
         if (policy == DMA_POLICY_COMMONBUF && vds_is_available()) {
@@ -743,7 +753,7 @@ int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
     
     /* ALWAYS attach mapping to descriptor - no special cases */
     if (unified_mapping) {
-        _3c515_tx_tx_desc_t *desc = &nic->tx_desc_ring[nic->tx_index];
+        desc = &nic->tx_desc_ring[nic->tx_index];
         desc->mapping = unified_mapping;  // Will be freed by TX completion handler
     }
 
@@ -757,7 +767,7 @@ int packet_send_enhanced(uint8_t interface_num, const uint8_t *packet_data,
         
         /* GPT-5 UNIFIED FIX: Clean up unified DMA mapping on send failure */
         if (unified_mapping) {
-            _3c515_tx_tx_desc_t *desc = &nic->tx_desc_ring[nic->tx_index];
+            desc = &nic->tx_desc_ring[nic->tx_index];
             if (desc->mapping) {
                 /* NOTE: This unmap is safe here because we haven't sent to hardware yet */
                 dma_unmap_tx(desc->mapping);
@@ -924,6 +934,9 @@ int packet_receive_from_nic(int nic_index, uint8_t *buffer, size_t *length) {
     eth_header_t eth_header;
     int result;
     size_t original_buffer_size;
+    size_t packet_length;
+    uint8_t *packet_data;
+    uint32_t buffer_usage;
     
     if (!buffer || !length || *length == 0) {
         log_error("packet_receive_from_nic: Invalid parameters");
@@ -974,7 +987,7 @@ int packet_receive_from_nic(int nic_index, uint8_t *buffer, size_t *length) {
     }
     
     /* Receive packet from hardware via NIC operations vtable - Group 2A integration */
-    size_t packet_length = rx_buffer->size;
+    packet_length = rx_buffer->size;
     result = nic->ops->receive_packet(nic, (uint8_t*)buffer_get_data_ptr(rx_buffer), &packet_length);
     
     if (result < 0) {
@@ -1006,7 +1019,7 @@ int packet_receive_from_nic(int nic_index, uint8_t *buffer, size_t *length) {
     }
     
     /* Parse Ethernet header for validation and classification */
-    uint8_t *packet_data = (uint8_t*)buffer_get_data_ptr(rx_buffer);
+    packet_data = (uint8_t*)buffer_get_data_ptr(rx_buffer);
     result = packet_parse_ethernet_header(packet_data, packet_length, &eth_header);
     if (result < 0) {
         log_warning("Invalid Ethernet header in received packet");
@@ -1028,7 +1041,7 @@ int packet_receive_from_nic(int nic_index, uint8_t *buffer, size_t *length) {
     }
     
     /* Update buffer status for flow control monitoring */
-    uint32_t buffer_usage = calculate_buffer_usage_percentage(nic_index);
+    buffer_usage = calculate_buffer_usage_percentage(nic_index);
     flow_control_update_buffer_status(nic_index, buffer_usage);
     
     /* Validate destination address - check if packet is for us */
@@ -1436,6 +1449,8 @@ int packet_receive_process(uint8_t *raw_data, uint16_t length, uint8_t nic_index
     uint16_t payload_length;
     nic_info_t *nic;
     int result;
+    uint16_t ethertype;
+    uint8_t dest_nic;
     
     if (!raw_data || length == 0) {
         return PACKET_ERR_INVALID_PARAM;
@@ -1500,7 +1515,7 @@ int packet_receive_process(uint8_t *raw_data, uint16_t length, uint8_t nic_index
     packet_statistics.rx_bytes += length;
     
     /* Process specific protocol types */
-    uint16_t ethertype = ntohs(eth_header.ethertype);
+    ethertype = ntohs(eth_header.ethertype);
     
     switch (ethertype) {
         case ETH_P_ARP:
@@ -1519,8 +1534,7 @@ int packet_receive_process(uint8_t *raw_data, uint16_t length, uint8_t nic_index
         case ETH_P_IP:
             /* Process IP packets - may need routing */
             if (static_routing_is_enabled()) {
-                uint8_t dest_nic;
-                result = static_routing_process_ip_packet(payload_data, payload_length, 
+                result = static_routing_process_ip_packet(payload_data, payload_length,
                                                         nic_index, &dest_nic);
                 if (result == SUCCESS && dest_nic != nic_index) {
                     /* Route packet to another interface */
@@ -1623,6 +1637,8 @@ int packet_send_with_retry(const uint8_t *packet_data, uint16_t length,
     int result;
     int retry_count = 0;
     int backoff_delay = 1; /* Start with 1ms backoff */
+    volatile int delay_i;
+    int nic_index;
     
     if (!packet_data || !dest_addr || length == 0) {
         return PACKET_ERR_INVALID_PARAM;
@@ -1634,7 +1650,7 @@ int packet_send_with_retry(const uint8_t *packet_data, uint16_t length,
     
     while (retry_count <= max_retries) {
         /* Try to get optimal NIC for transmission */
-        int nic_index = packet_get_optimal_nic(packet_data, length);
+        nic_index = packet_get_optimal_nic(packet_data, length);
         if (nic_index < 0) {
             /* Use multi-NIC load balancing */
             result = packet_send_multi_nic(packet_data, length, dest_addr, handle);
@@ -1691,7 +1707,7 @@ int packet_send_with_retry(const uint8_t *packet_data, uint16_t length,
         log_debug("Waiting %dms before retry %d", backoff_delay, retry_count + 1);
         
         /* Simple delay simulation - in real code this would use timer */
-        for (volatile int i = 0; i < backoff_delay * 1000; i++) {
+        for (delay_i = 0; delay_i < backoff_delay * 1000; delay_i++) {
             /* Busy wait delay */
         }
         
@@ -1711,12 +1727,14 @@ int packet_send_with_retry(const uint8_t *packet_data, uint16_t length,
  * @param timeout_ms Timeout in milliseconds
  * @return 0 on success, negative on error
  */
-int packet_receive_with_recovery(uint8_t *buffer, size_t max_length, 
-                                size_t *actual_length, int nic_id, 
+int packet_receive_with_recovery(uint8_t *buffer, size_t max_length,
+                                size_t *actual_length, int nic_id,
                                 uint32_t timeout_ms) {
     uint32_t start_time;
     int result;
     nic_info_t *nic;
+    uint32_t elapsed;
+    volatile int delay_i;
     
     if (!buffer || !actual_length || max_length == 0) {
         return PACKET_ERR_INVALID_PARAM;
@@ -1787,7 +1805,7 @@ int packet_receive_with_recovery(uint8_t *buffer, size_t max_length,
         
         /* Check timeout */
         if (timeout_ms > 0) {
-            uint32_t elapsed = stats_get_timestamp() - start_time;
+            elapsed = stats_get_timestamp() - start_time;
             if (elapsed >= timeout_ms) {
                 log_debug("Receive timeout after %lu ms", elapsed);
                 return PACKET_ERR_NO_PACKET;
@@ -1795,7 +1813,7 @@ int packet_receive_with_recovery(uint8_t *buffer, size_t max_length,
         }
         
         /* Small delay before retrying */
-        for (volatile int i = 0; i < 100; i++) {
+        for (delay_i = 0; delay_i < 100; delay_i++) {
             /* Brief delay */
         }
     }
@@ -1858,19 +1876,21 @@ int packet_queue_tx(const uint8_t *packet, size_t length, int priority, uint16_t
  */
 int packet_flush_tx_queue(void) {
     /* Implement queue flushing with priority ordering */
-    log_debug("Flushing transmission queue");
-    
     int packets_sent = 0;
-    
+    int priority;
+    int result;
+
+    log_debug("Flushing transmission queue");
+
     /* Process queues in priority order (high to low) */
-    for (int priority = MAX_PRIORITY_LEVELS - 1; priority >= 0; priority--) {
+    for (priority = MAX_PRIORITY_LEVELS - 1; priority >= 0; priority--) {
         packet_queue_t *queue = &g_packet_queues[priority];
-        
+
         while (queue->count > 0 && queue->head) {
             packet_buffer_t *buffer = queue->head;
-            
+
             /* Attempt to send the packet */
-            int result = packet_send_immediate(buffer->data, buffer->length, 0);
+            result = packet_send_immediate(buffer->data, buffer->length, 0);
             if (result != SUCCESS) {
                 /* Stop flushing if transmission fails */
                 break;
@@ -1968,13 +1988,14 @@ int packet_get_performance_metrics(packet_performance_metrics_t *metrics) {
     uint32_t total_tx_packets = 0;
     uint32_t total_rx_packets = 0;
     uint32_t total_errors = 0;
-    
+    int i;
+
     if (!metrics) {
         return PACKET_ERR_INVALID_PARAM;
     }
-    
+
     memset(metrics, 0, sizeof(packet_performance_metrics_t));
-    
+
     /* Copy basic statistics */
     metrics->tx_packets = packet_statistics.tx_packets;
     metrics->rx_packets = packet_statistics.rx_packets;
@@ -1983,29 +2004,29 @@ int packet_get_performance_metrics(packet_performance_metrics_t *metrics) {
     metrics->tx_errors = packet_statistics.tx_errors;
     metrics->rx_errors = packet_statistics.rx_errors;
     metrics->rx_dropped = packet_statistics.rx_dropped;
-    
+
     /* Calculate performance ratios */
     total_tx_packets = packet_statistics.tx_packets;
     total_rx_packets = packet_statistics.rx_packets;
     total_errors = packet_statistics.tx_errors + packet_statistics.rx_errors;
-    
+
     if (total_tx_packets > 0) {
         metrics->tx_error_rate = (packet_statistics.tx_errors * 100) / total_tx_packets;
     }
-    
+
     if (total_rx_packets > 0) {
         metrics->rx_error_rate = (packet_statistics.rx_errors * 100) / total_rx_packets;
         metrics->rx_drop_rate = (packet_statistics.rx_dropped * 100) / total_rx_packets;
     }
-    
+
     /* Calculate throughput (simplified - packets per second estimate) */
     /* In real implementation, this would use actual time measurements */
     metrics->tx_throughput = total_tx_packets; /* Simplified */
     metrics->rx_throughput = total_rx_packets; /* Simplified */
-    
+
     /* Aggregate per-NIC statistics */
     total_nics = hardware_get_nic_count();
-    for (int i = 0; i < total_nics && i < MAX_NICS; i++) {
+    for (i = 0; i < total_nics && i < MAX_NICS; i++) {
         nic = hardware_get_nic(i);
         if (nic) {
             metrics->nic_stats[i].active = (nic->status & NIC_STATUS_ACTIVE) ? 1 : 0;
@@ -2035,22 +2056,26 @@ int packet_monitor_health(void) {
     nic_info_t *nic;
     uint32_t total_packets;
     uint32_t total_errors;
-    
+    int active_nics = 0;
+    int i;
+    uint32_t tx_error_rate;
+    uint32_t rx_error_rate;
+    uint32_t global_error_rate;
+
     /* Check if packet operations are initialized */
     if (!packet_ops_initialized) {
         log_warning("Packet operations not initialized");
         return -10;
     }
-    
+
     /* Check for active NICs */
     total_nics = hardware_get_nic_count();
     if (total_nics == 0) {
         log_error("No NICs available");
         return -20;
     }
-    
-    int active_nics = 0;
-    for (int i = 0; i < total_nics; i++) {
+
+    for (i = 0; i < total_nics; i++) {
         nic = hardware_get_nic(i);
         if (nic && (nic->status & NIC_STATUS_ACTIVE)) {
             active_nics++;
@@ -2063,7 +2088,7 @@ int packet_monitor_health(void) {
             
             /* Check error rates */
             if (nic->tx_packets > 0) {
-                uint32_t tx_error_rate = (nic->tx_errors * 100) / nic->tx_packets;
+                tx_error_rate = (nic->tx_errors * 100) / nic->tx_packets;
                 if (tx_error_rate > 10) {
                     log_warning("NIC %d high TX error rate: %lu%%", i, tx_error_rate);
                     health_score += 10;
@@ -2073,7 +2098,7 @@ int packet_monitor_health(void) {
             }
             
             if (nic->rx_packets > 0) {
-                uint32_t rx_error_rate = (nic->rx_errors * 100) / nic->rx_packets;
+                rx_error_rate = (nic->rx_errors * 100) / nic->rx_packets;
                 if (rx_error_rate > 10) {
                     log_warning("NIC %d high RX error rate: %lu%%", i, rx_error_rate);
                     health_score += 10;
@@ -2094,7 +2119,7 @@ int packet_monitor_health(void) {
     total_errors = packet_statistics.tx_errors + packet_statistics.rx_errors;
     
     if (total_packets > 0) {
-        uint32_t global_error_rate = (total_errors * 100) / total_packets;
+        global_error_rate = (total_errors * 100) / total_packets;
         if (global_error_rate > 15) {
             log_warning("High global error rate: %lu%%", global_error_rate);
             health_score += 15;
@@ -2131,7 +2156,8 @@ int packet_monitor_health(void) {
 void packet_print_detailed_stats(void) {
     int total_nics;
     nic_info_t *nic;
-    
+    int i;
+
     log_info("=== Packet Driver Statistics ===");
     log_info("Global Counters:");
     log_info("  TX: %lu packets, %lu bytes, %lu errors",
@@ -2145,10 +2171,10 @@ void packet_print_detailed_stats(void) {
              packet_statistics.rx_dropped);
     log_info("  Routed: %lu packets", packet_statistics.routed_packets);
     log_info("  Buffer events: %lu TX full", packet_statistics.tx_buffer_full);
-    
+
     /* Per-NIC statistics */
     total_nics = hardware_get_nic_count();
-    for (int i = 0; i < total_nics; i++) {
+    for (i = 0; i < total_nics; i++) {
         nic = hardware_get_nic(i);
         if (nic) {
             log_info("NIC %d (%s):", i, 
@@ -2174,13 +2200,14 @@ void packet_print_detailed_stats(void) {
 int packet_reset_statistics(void) {
     int total_nics;
     nic_info_t *nic;
-    
+    int i;
+
     log_info("Resetting packet statistics");
     memset(&packet_statistics, 0, sizeof(packet_statistics));
-    
+
     /* Reset per-NIC statistics as well */
     total_nics = hardware_get_nic_count();
-    for (int i = 0; i < total_nics; i++) {
+    for (i = 0; i < total_nics; i++) {
         nic = hardware_get_nic(i);
         if (nic) {
             nic->tx_packets = 0;
@@ -2333,6 +2360,7 @@ int packet_build_ethernet_frame_optimized(uint8_t *frame_buffer, uint16_t frame_
                                          uint16_t ethertype, const uint8_t *payload,
                                          uint16_t payload_len) {
     uint16_t frame_len;
+    uint16_t pad_len;
     extern cpu_info_t g_cpu_info;
     
     if (!frame_buffer || !dest_mac || !src_mac || !payload) {
@@ -2364,7 +2392,7 @@ int packet_build_ethernet_frame_optimized(uint8_t *frame_buffer, uint16_t frame_
     
     /* Pad to minimum frame size if necessary using optimized memset */
     if (frame_len < ETH_MIN_FRAME) {
-        uint16_t pad_len = ETH_MIN_FRAME - frame_len;
+        pad_len = ETH_MIN_FRAME - frame_len;
         memory_set_optimized(frame_buffer + frame_len, 0, pad_len);
         frame_len = ETH_MIN_FRAME;
     }
@@ -2478,7 +2506,7 @@ uint16_t packet_get_ethertype(const uint8_t *frame_data) {
     return ntohs(*(uint16_t*)(frame_data + 2 * ETH_ALEN));
 }
 
-/**\n * @brief Multi-NIC packet routing based on configuration\n * @param packet_data Packet data\n * @param length Packet length\n * @param src_nic_index Source NIC index (for received packets)\n * @return Target NIC index, or negative for local delivery\n */\nint packet_route_multi_nic(const uint8_t *packet_data, uint16_t length, int src_nic_index) {\n    eth_header_t eth_header;\n    int total_nics;\n    int target_nic = -1;\n    \n    if (!packet_data || length < ETH_HEADER_LEN) {\n        return -1;\n    }\n    \n    /* Parse Ethernet header for routing decisions */\n    if (packet_parse_ethernet_header(packet_data, length, &eth_header) < 0) {\n        return -1;\n    }\n    \n    /* Get total number of NICs */\n    total_nics = hardware_get_nic_count();\n    if (total_nics <= 1) {\n        /* Single NIC - no routing needed */\n        return -1;\n    }\n    \n    /* Check if this is a broadcast packet - send to all other NICs */\n    if (packet_is_broadcast(packet_data)) {\n        log_debug(\"Broadcast packet - would forward to all NICs except source %d\", src_nic_index);\n        /* For now, deliver locally. Full implementation would queue to all other NICs */\n        return -1;\n    }\n    \n    /* Check if destination is on a different segment */\n    /* This is a simplified routing - real implementation would use routing table */\n    for (int i = 0; i < total_nics; i++) {\n        nic_info_t *nic = hardware_get_nic(i);\n        if (!nic || i == src_nic_index) {\n            continue;\n        }\n        \n        /* Check if destination MAC matches this NIC's subnet */\n        /* For now, use simple even/odd MAC address routing as example */\n        if ((eth_header.dest_mac[5] & 1) == (i & 1)) {\n            target_nic = i;\n            log_debug(\"Routing packet to NIC %d based on MAC address\", target_nic);\n            break;\n        }\n    }\n    \n    return target_nic;\n}\n\n/**\n * @brief Coordinate packet sending across multiple NICs with load balancing\n * @param packet_data Packet data\n * @param length Packet length\n * @param dest_addr Destination MAC address\n * @param handle Sender handle\n * @return 0 on success, negative on error\n */\nint packet_send_multi_nic(const uint8_t *packet_data, uint16_t length,\n                          const uint8_t *dest_addr, uint16_t handle) {\n    static int next_nic_index = 0; /* Simple round-robin counter */\n    int total_nics;\n    int selected_nic;\n    int result;\n    nic_info_t *nic;\n    \n    if (!packet_data || !dest_addr || length == 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    total_nics = hardware_get_nic_count();\n    if (total_nics == 0) {\n        log_error(\"No NICs available for transmission\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    /* For broadcast packets, send on primary NIC */\n    if (packet_is_broadcast(packet_data)) {\n        selected_nic = 0;\n        log_debug(\"Broadcast packet - using primary NIC 0\");\n    }\n    /* For unicast, use load balancing or routing table */\n    else {\n        /* Simple round-robin load balancing for now */\n        /* Real implementation would use routing table lookup */\n        selected_nic = next_nic_index % total_nics;\n        next_nic_index = (next_nic_index + 1) % total_nics;\n        \n        /* Skip inactive NICs */\n        for (int attempts = 0; attempts < total_nics; attempts++) {\n            nic = hardware_get_nic(selected_nic);\n            if (nic && (nic->status & NIC_STATUS_ACTIVE)) {\n                break;\n            }\n            selected_nic = (selected_nic + 1) % total_nics;\n        }\n        \n        log_debug(\"Load balancing: selected NIC %d for transmission\", selected_nic);\n    }\n    \n    /* Send using the enhanced packet send function */\n    result = packet_send_enhanced(selected_nic, packet_data, length, dest_addr, handle);\n    if (result < 0) {\n        log_error(\"Failed to send packet via NIC %d: %d\", selected_nic, result);\n        return result;\n    }\n    \n    return 0;\n}\n\n/**\n * @brief Check and handle NIC failover\n * @param failed_nic_index Index of failed NIC\n * @return 0 on successful failover, negative on error\n */\nint packet_handle_nic_failover(int failed_nic_index) {\n    int total_nics;\n    int active_nics = 0;\n    nic_info_t *nic;\n    \n    log_warning(\"Handling failover for failed NIC %d\", failed_nic_index);\n    \n    total_nics = hardware_get_nic_count();\n    \n    /* Count active NICs */\n    for (int i = 0; i < total_nics; i++) {\n        nic = hardware_get_nic(i);\n        if (nic && (nic->status & NIC_STATUS_ACTIVE) && i != failed_nic_index) {\n            active_nics++;\n        }\n    }\n    \n    if (active_nics == 0) {\n        log_error(\"No active NICs available after failover\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Failover completed: %d active NICs remaining\", active_nics);\n    \n    /* Update routing to avoid failed NIC */\n    /* Real implementation would update routing table */\n    \n    return 0;\n}\n\n/**\n * @brief Get optimal NIC for packet transmission based on load and link status\n * @param packet_data Packet data for routing decisions\n * @param length Packet length\n * @return NIC index, or negative on error\n */\nint packet_get_optimal_nic(const uint8_t *packet_data, uint16_t length) {\n    int total_nics;\n    int best_nic = -1;\n    uint32_t best_score = 0;\n    nic_info_t *nic;\n    \n    total_nics = hardware_get_nic_count();\n    \n    for (int i = 0; i < total_nics; i++) {\n        nic = hardware_get_nic(i);\n        if (!nic || !(nic->status & NIC_STATUS_ACTIVE)) {\n            continue;\n        }\n        \n        /* Calculate score based on multiple factors */\n        uint32_t score = 100; /* Base score */\n        \n        /* Link quality factor */\n        if (nic->status & NIC_STATUS_LINK_UP) {\n            score += 50;\n        }\n        \n        /* Speed factor */\n        if (nic->status & NIC_STATUS_100MBPS) {\n            score += 30;\n        }\n        \n        /* Load factor (inverse of error rate) */\n        if (nic->tx_packets > 0) {\n            uint32_t error_rate = (nic->tx_errors * 100) / nic->tx_packets;\n            score += (100 - error_rate);\n        }\n        \n        /* Duplex factor */\n        if (nic->status & NIC_STATUS_FULL_DUPLEX) {\n            score += 20;\n        }\n        \n        if (score > best_score) {\n            best_score = score;\n            best_nic = i;\n        }\n    }\n    \n    if (best_nic >= 0) {\n        log_debug(\"Selected optimal NIC %d (score=%lu)\", best_nic, best_score);\n    }\n    \n    return best_nic;\n}\n\n/**
+/**\n * @brief Multi-NIC packet routing based on configuration\n * @param packet_data Packet data\n * @param length Packet length\n * @param src_nic_index Source NIC index (for received packets)\n * @return Target NIC index, or negative for local delivery\n */\nint packet_route_multi_nic(const uint8_t *packet_data, uint16_t length, int src_nic_index) {\n    eth_header_t eth_header;\n    int total_nics;\n    int target_nic = -1;\n    \n    if (!packet_data || length < ETH_HEADER_LEN) {\n        return -1;\n    }\n    \n    /* Parse Ethernet header for routing decisions */\n    if (packet_parse_ethernet_header(packet_data, length, &eth_header) < 0) {\n        return -1;\n    }\n    \n    /* Get total number of NICs */\n    total_nics = hardware_get_nic_count();\n    if (total_nics <= 1) {\n        /* Single NIC - no routing needed */\n        return -1;\n    }\n    \n    /* Check if this is a broadcast packet - send to all other NICs */\n    if (packet_is_broadcast(packet_data)) {\n        log_debug(\"Broadcast packet - would forward to all NICs except source %d\", src_nic_index);\n        /* For now, deliver locally. Full implementation would queue to all other NICs */\n        return -1;\n    }\n    \n    /* Check if destination is on a different segment */\n    /* This is a simplified routing - real implementation would use routing table */\n    int i;\n    for (i = 0; i < total_nics; i++) {\n        nic_info_t *nic = hardware_get_nic(i);\n        if (!nic || i == src_nic_index) {\n            continue;\n        }\n        \n        /* Check if destination MAC matches this NIC's subnet */\n        /* For now, use simple even/odd MAC address routing as example */\n        if ((eth_header.dest_mac[5] & 1) == (i & 1)) {\n            target_nic = i;\n            log_debug(\"Routing packet to NIC %d based on MAC address\", target_nic);\n            break;\n        }\n    }\n    \n    return target_nic;\n}\n\n/**\n * @brief Coordinate packet sending across multiple NICs with load balancing\n * @param packet_data Packet data\n * @param length Packet length\n * @param dest_addr Destination MAC address\n * @param handle Sender handle\n * @return 0 on success, negative on error\n */\nint packet_send_multi_nic(const uint8_t *packet_data, uint16_t length,\n                          const uint8_t *dest_addr, uint16_t handle) {\n    static int next_nic_index = 0; /* Simple round-robin counter */\n    int total_nics;\n    int selected_nic;\n    int result;\n    nic_info_t *nic;\n    \n    if (!packet_data || !dest_addr || length == 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    total_nics = hardware_get_nic_count();\n    if (total_nics == 0) {\n        log_error(\"No NICs available for transmission\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    /* For broadcast packets, send on primary NIC */\n    if (packet_is_broadcast(packet_data)) {\n        selected_nic = 0;\n        log_debug(\"Broadcast packet - using primary NIC 0\");\n    }\n    /* For unicast, use load balancing or routing table */\n    else {\n        /* Simple round-robin load balancing for now */\n        /* Real implementation would use routing table lookup */\n        selected_nic = next_nic_index % total_nics;\n        next_nic_index = (next_nic_index + 1) % total_nics;\n        \n        /* Skip inactive NICs */\n        int attempts;\n        for (attempts = 0; attempts < total_nics; attempts++) {\n            nic = hardware_get_nic(selected_nic);\n            if (nic && (nic->status & NIC_STATUS_ACTIVE)) {\n                break;\n            }\n            selected_nic = (selected_nic + 1) % total_nics;\n        }\n        \n        log_debug(\"Load balancing: selected NIC %d for transmission\", selected_nic);\n    }\n    \n    /* Send using the enhanced packet send function */\n    result = packet_send_enhanced(selected_nic, packet_data, length, dest_addr, handle);\n    if (result < 0) {\n        log_error(\"Failed to send packet via NIC %d: %d\", selected_nic, result);\n        return result;\n    }\n    \n    return 0;\n}\n\n/**\n * @brief Check and handle NIC failover\n * @param failed_nic_index Index of failed NIC\n * @return 0 on successful failover, negative on error\n */\nint packet_handle_nic_failover(int failed_nic_index) {\n    int total_nics;\n    int active_nics = 0;\n    nic_info_t *nic;\n    \n    log_warning(\"Handling failover for failed NIC %d\", failed_nic_index);\n    \n    total_nics = hardware_get_nic_count();\n    \n    /* Count active NICs */\n    int i;\n    for (i = 0; i < total_nics; i++) {\n        nic = hardware_get_nic(i);\n        if (nic && (nic->status & NIC_STATUS_ACTIVE) && i != failed_nic_index) {\n            active_nics++;\n        }\n    }\n    \n    if (active_nics == 0) {\n        log_error(\"No active NICs available after failover\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Failover completed: %d active NICs remaining\", active_nics);\n    \n    /* Update routing to avoid failed NIC */\n    /* Real implementation would update routing table */\n    \n    return 0;\n}\n\n/**\n * @brief Get optimal NIC for packet transmission based on load and link status\n * @param packet_data Packet data for routing decisions\n * @param length Packet length\n * @return NIC index, or negative on error\n */\nint packet_get_optimal_nic(const uint8_t *packet_data, uint16_t length) {\n    int total_nics;\n    int best_nic = -1;\n    uint32_t best_score = 0;\n    nic_info_t *nic;\n    \n    total_nics = hardware_get_nic_count();\n    \n    int i;\n    for (i = 0; i < total_nics; i++) {\n        nic = hardware_get_nic(i);\n        if (!nic || !(nic->status & NIC_STATUS_ACTIVE)) {\n            continue;\n        }\n        \n        /* Calculate score based on multiple factors */\n        uint32_t score = 100; /* Base score */\n        \n        /* Link quality factor */\n        if (nic->status & NIC_STATUS_LINK_UP) {\n            score += 50;\n        }\n        \n        /* Speed factor */\n        if (nic->status & NIC_STATUS_100MBPS) {\n            score += 30;\n        }\n        \n        /* Load factor (inverse of error rate) */\n        if (nic->tx_packets > 0) {\n            uint32_t error_rate = (nic->tx_errors * 100) / nic->tx_packets;\n            score += (100 - error_rate);\n        }\n        \n        /* Duplex factor */\n        if (nic->status & NIC_STATUS_FULL_DUPLEX) {\n            score += 20;\n        }\n        \n        if (score > best_score) {\n            best_score = score;\n            best_nic = i;\n        }\n    }\n    \n    if (best_nic >= 0) {\n        log_debug(\"Selected optimal NIC %d (score=%lu)\", best_nic, best_score);\n    }\n    \n    return best_nic;\n}\n\n/**
  * @brief Comprehensive loopback testing suite
  * This implements internal, external, and cross-NIC loopback testing
  */
@@ -2519,28 +2547,30 @@ int packet_test_internal_loopback(int nic_index, const uint8_t *test_pattern, ui
     log_info("Starting internal loopback test on NIC %d", nic_index);
     
     /* Build test frame with broadcast destination */
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};\n    frame_length = packet_build_ethernet_frame(test_frame, sizeof(test_frame),\n                                              broadcast_mac, nic->mac,\n                                              0x0800, /* IP ethertype */\n                                              test_pattern, pattern_size);\n    \n    if (frame_length < 0) {\n        log_error(\"Failed to build loopback test frame\");\n        return frame_length;\n    }\n    \n    /* Enable internal loopback mode */\n    result = packet_enable_loopback_mode(nic, LOOPBACK_INTERNAL);\n    if (result != 0) {\n        log_error(\"Failed to enable internal loopback mode: %d\", result);\n        return result;\n    }\n    \n    /* Clear any pending RX packets */\n    rx_length = sizeof(rx_buffer);\n    while (packet_receive_from_nic(nic_index, rx_buffer, &rx_length) == 0) {\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    /* Send test frame */\n    result = packet_send_enhanced(nic_index, test_pattern, pattern_size, broadcast_mac, 0x1234);\n    if (result != 0) {\n        log_error(\"Failed to send loopback test frame: %d\", result);\n        packet_disable_loopback_mode(nic);\n        return result;\n    }\n    \n    log_debug(\"Loopback test frame sent, waiting for reception...\");\n    \n    /* Wait for loopback reception */\n    start_time = stats_get_timestamp();\n    rx_length = sizeof(rx_buffer);\n    \n    while ((stats_get_timestamp() - start_time) < timeout_ms) {\n        result = packet_receive_from_nic(nic_index, rx_buffer, &rx_length);\n        \n        if (result == 0) {\n            /* Verify received frame */\n            if (rx_length >= ETH_HEADER_LEN + pattern_size) {\n                /* Extract payload from received frame */\n                uint8_t *rx_payload = rx_buffer + ETH_HEADER_LEN;\n                \n                if (memcmp(rx_payload, test_pattern, pattern_size) == 0) {\n                    log_info(\"Internal loopback test PASSED on NIC %d\", nic_index);\n                    packet_disable_loopback_mode(nic);\n                    return 0;\n                } else {\n                    log_error(\"Loopback data mismatch on NIC %d\", nic_index);\n                    packet_disable_loopback_mode(nic);\n                    return PACKET_ERR_INVALID_DATA;\n                }\n            }\n        }\n        \n        /* Brief delay before retry */\n        for (volatile int i = 0; i < 1000; i++);\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    log_error(\"Internal loopback test TIMEOUT on NIC %d\", nic_index);\n    packet_disable_loopback_mode(nic);\n    return PACKET_ERR_TIMEOUT;\n}\n\n/**\n * @brief Test external loopback with physical connector\n * @param nic_index NIC to test\n * @param test_patterns Array of test patterns\n * @param num_patterns Number of test patterns\n * @return 0 on success, negative on error\n */\nint packet_test_external_loopback(int nic_index, const loopback_test_pattern_t *test_patterns, int num_patterns) {\n    nic_info_t *nic;\n    int passed_tests = 0;\n    int failed_tests = 0;\n    \n    if (!test_patterns || num_patterns <= 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    nic = hardware_get_nic(nic_index);\n    if (!nic) {\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Starting external loopback test on NIC %d (%d patterns)\", nic_index, num_patterns);\n    \n    /* Disable internal loopback, enable external */\n    int result = packet_enable_loopback_mode(nic, LOOPBACK_EXTERNAL);\n    if (result != 0) {\n        log_error(\"Failed to enable external loopback mode: %d\", result);\n        return result;\n    }\n    \n    /* Test each pattern */\n    for (int i = 0; i < num_patterns; i++) {\n        log_debug(\"Testing external loopback pattern %d: %s\", i, test_patterns[i].name);\n        \n        result = packet_test_single_loopback_pattern(nic_index, &test_patterns[i]);\n        if (result == 0) {\n            passed_tests++;\n            log_debug(\"Pattern %d PASSED\", i);\n        } else {\n            failed_tests++;\n            log_warning(\"Pattern %d FAILED: %d\", i, result);\n        }\n    }\n    \n    packet_disable_loopback_mode(nic);\n    \n    log_info(\"External loopback test completed: %d passed, %d failed\", passed_tests, failed_tests);\n    \n    return (failed_tests == 0) ? 0 : PACKET_ERR_LOOPBACK_FAILED;\n}\n\n/**\n * @brief Test cross-NIC loopback for multi-NIC validation\n * @param src_nic_index Source NIC\n * @param dest_nic_index Destination NIC \n * @param test_data Test data to send\n * @param data_size Size of test data\n * @return 0 on success, negative on error\n */\nint packet_test_cross_nic_loopback(int src_nic_index, int dest_nic_index, \n                                  const uint8_t *test_data, uint16_t data_size) {\n    nic_info_t *src_nic, *dest_nic;\n    uint8_t test_frame[ETH_MAX_FRAME];\n    uint8_t rx_buffer[ETH_MAX_FRAME];\n    uint16_t frame_length;\n    size_t rx_length;\n    int result;\n    uint32_t timeout_ms = 2000;  /* Longer timeout for cross-NIC */\n    uint32_t start_time;\n    \n    if (!test_data || data_size == 0 || src_nic_index == dest_nic_index) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    src_nic = hardware_get_nic(src_nic_index);\n    dest_nic = hardware_get_nic(dest_nic_index);\n    \n    if (!src_nic || !dest_nic) {\n        log_error(\"Invalid NIC indices for cross-NIC test: src=%d, dest=%d\", \n                 src_nic_index, dest_nic_index);\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    if (!(src_nic->status & NIC_STATUS_ACTIVE) || !(dest_nic->status & NIC_STATUS_ACTIVE)) {\n        log_error(\"NICs not active for cross-NIC test\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Starting cross-NIC loopback test: NIC %d -> NIC %d\", src_nic_index, dest_nic_index);\n    \n    /* Build test frame addressed to destination NIC */\n    frame_length = packet_build_ethernet_frame(test_frame, sizeof(test_frame),\n                                              dest_nic->mac, src_nic->mac,\n                                              0x0800, /* IP ethertype */\n                                              test_data, data_size);\n    \n    if (frame_length < 0) {\n        log_error(\"Failed to build cross-NIC test frame\");\n        return frame_length;\n    }\n    \n    /* Enable promiscuous mode on destination NIC to receive all packets */\n    result = hardware_set_promiscuous_mode(dest_nic, true);\n    if (result != 0) {\n        log_warning(\"Failed to enable promiscuous mode on dest NIC %d\", dest_nic_index);\n    }\n    \n    /* Clear any pending packets on destination NIC */\n    rx_length = sizeof(rx_buffer);\n    while (packet_receive_from_nic(dest_nic_index, rx_buffer, &rx_length) == 0) {\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    /* Send packet from source NIC */\n    result = packet_send_enhanced(src_nic_index, test_data, data_size, dest_nic->mac, 0x5678);\n    if (result != 0) {\n        log_error(\"Failed to send cross-NIC test packet: %d\", result);\n        hardware_set_promiscuous_mode(dest_nic, false);\n        return result;\n    }\n    \n    log_debug(\"Cross-NIC packet sent, waiting for reception on NIC %d...\", dest_nic_index);\n    \n    /* Wait for packet on destination NIC */\n    start_time = stats_get_timestamp();\n    rx_length = sizeof(rx_buffer);\n    \n    while ((stats_get_timestamp() - start_time) < timeout_ms) {\n        result = packet_receive_from_nic(dest_nic_index, rx_buffer, &rx_length);\n        \n        if (result == 0) {\n            /* Verify received frame */\n            eth_header_t eth_header;\n            result = packet_parse_ethernet_header(rx_buffer, rx_length, &eth_header);\n            \n            if (result == 0) {\n                /* Check if this is our test packet */\n                if (memcmp(eth_header.dest_mac, dest_nic->mac, ETH_ALEN) == 0 &&\n                    memcmp(eth_header.src_mac, src_nic->mac, ETH_ALEN) == 0) {\n                    \n                    /* Verify payload */\n                    uint8_t *rx_payload = rx_buffer + ETH_HEADER_LEN;\n                    uint16_t payload_length = rx_length - ETH_HEADER_LEN;\n                    \n                    if (payload_length >= data_size && \n                        memcmp(rx_payload, test_data, data_size) == 0) {\n                        log_info(\"Cross-NIC loopback test PASSED: NIC %d -> NIC %d\", \n                                src_nic_index, dest_nic_index);\n                        hardware_set_promiscuous_mode(dest_nic, false);\n                        return 0;\n                    } else {\n                        log_error(\"Cross-NIC payload mismatch\");\n                        hardware_set_promiscuous_mode(dest_nic, false);\n                        return PACKET_ERR_INVALID_DATA;\n                    }\n                }\n            }\n        }\n        \n        /* Brief delay before retry */\n        for (volatile int i = 0; i < 1000; i++);\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    log_error(\"Cross-NIC loopback test TIMEOUT: NIC %d -> NIC %d\", src_nic_index, dest_nic_index);\n    hardware_set_promiscuous_mode(dest_nic, false);\n    return PACKET_ERR_TIMEOUT;\n}\n\n/**\n * @brief Comprehensive packet integrity verification during loopback\n * @param original_data Original packet data\n * @param received_data Received packet data\n * @param data_length Length of data to compare\n * @param integrity_result Pointer to store detailed integrity result\n * @return 0 if integrity check passed, negative on error\n */\nint packet_verify_loopback_integrity(const uint8_t *original_data, const uint8_t *received_data,\n                                    uint16_t data_length, packet_integrity_result_t *integrity_result) {\n    if (!original_data || !received_data || !integrity_result || data_length == 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    memset(integrity_result, 0, sizeof(packet_integrity_result_t));\n    integrity_result->bytes_compared = data_length;\n    \n    /* Byte-by-byte comparison */\n    for (uint16_t i = 0; i < data_length; i++) {\n        if (original_data[i] != received_data[i]) {\n            integrity_result->mismatch_count++;\n            \n            /* Store first few mismatches for debugging */\n            if (integrity_result->mismatch_count <= MAX_MISMATCH_DETAILS) {\n                packet_mismatch_detail_t *detail = \n                    &integrity_result->mismatch_details[integrity_result->mismatch_count - 1];\n                detail->offset = i;\n                detail->expected = original_data[i];\n                detail->actual = received_data[i];\n            }\n        }\n    }\n    \n    /* Calculate error statistics */\n    if (integrity_result->mismatch_count > 0) {\n        integrity_result->error_rate_percent = \n            (integrity_result->mismatch_count * 100) / data_length;\n        \n        /* Analyze error patterns */\n        packet_analyze_error_patterns(integrity_result);\n        \n        log_error(\"Packet integrity check FAILED: %d mismatches out of %d bytes (%.2f%%)\",\n                 integrity_result->mismatch_count, data_length, \n                 (float)integrity_result->error_rate_percent);\n        \n        return PACKET_ERR_INTEGRITY_FAILED;\n    }\n    \n    log_debug(\"Packet integrity check PASSED: %d bytes verified\", data_length);\n    return 0;\n}\n\n/**\n * @brief Enable loopback mode on a NIC\n * @param nic NIC to configure\n * @param loopback_type Type of loopback to enable\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_loopback_mode(nic_info_t *nic, loopback_type_t loopback_type) {\n    if (!nic) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    log_debug(\"Enabling loopback mode %d on NIC %d\", loopback_type, nic->index);\n    \n    if (nic->type == NIC_TYPE_3C509B) {\n        return packet_enable_3c509b_loopback(nic, loopback_type);\n    } else if (nic->type == NIC_TYPE_3C515_TX) {\n        return packet_enable_3c515_loopback(nic, loopback_type);\n    }\n    \n    return PACKET_ERR_NOT_SUPPORTED;\n}\n\n/**\n * @brief Disable loopback mode on a NIC\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_loopback_mode(nic_info_t *nic) {\n    if (!nic) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    log_debug(\"Disabling loopback mode on NIC %d\", nic->index);\n    \n    if (nic->type == NIC_TYPE_3C509B) {\n        return packet_disable_3c509b_loopback(nic);\n    } else if (nic->type == NIC_TYPE_3C515_TX) {\n        return packet_disable_3c515_loopback(nic);\n    }\n    \n    return PACKET_ERR_NOT_SUPPORTED;\n}\n\n/**\n * @brief Enable 3C509B loopback mode\n * @param nic NIC to configure\n * @param loopback_type Type of loopback\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_3c509b_loopback(nic_info_t *nic, loopback_type_t loopback_type) {\n    uint16_t rx_filter = 0x01;  /* Individual address */\n    \n    _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);\n    \n    switch (loopback_type) {\n        case LOOPBACK_INTERNAL:\n            /* Set internal loopback in RX filter */\n            rx_filter |= 0x08;  /* Loopback mode */\n            break;\n            \n        case LOOPBACK_EXTERNAL:\n            /* External loopback requires physical connector */\n            /* No special register settings needed */\n            break;\n            \n        default:\n            return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    /* Apply RX filter settings */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | rx_filter);\n    \n    /* Enable TX and RX */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_TX_ENABLE);\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_RX_ENABLE);\n    \n    return 0;\n}\n\n/**\n * @brief Enable 3C515-TX loopback mode\n * @param nic NIC to configure\n * @param loopback_type Type of loopback\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_3c515_loopback(nic_info_t *nic, loopback_type_t loopback_type) {\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_4);\n    \n    uint16_t media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);\n    \n    switch (loopback_type) {\n        case LOOPBACK_INTERNAL:\n            /* Enable internal loopback */\n            media_options |= 0x0008;  /* Internal loopback bit */\n            break;\n            \n        case LOOPBACK_EXTERNAL:\n            /* Disable internal loopback for external testing */\n            media_options &= ~0x0008;\n            break;\n            \n        default:\n            return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    outw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG, media_options);\n    \n    /* Enable TX and RX */\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_1);\n    outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_TX_ENABLE);\n    outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_RX_ENABLE);\n    \n    return 0;\n}\n\n/**\n * @brief Disable 3C509B loopback mode\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_3c509b_loopback(nic_info_t *nic) {\n    _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);\n    \n    /* Reset to normal RX filter (individual + broadcast) */\n    uint16_t rx_filter = 0x01 | 0x02;  /* Individual + broadcast */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | rx_filter);\n    \n    return 0;\n}\n\n/**\n * @brief Disable 3C515-TX loopback mode\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_3c515_loopback(nic_info_t *nic) {\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_4);\n    \n    /* Disable internal loopback */\n    uint16_t media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);\n    media_options &= ~0x0008;  /* Clear internal loopback bit */\n    outw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG, media_options);\n    \n    return 0;\n}\n\n/**\n * @brief Test a single loopback pattern\n * @param nic_index NIC to test\n * @param pattern Test pattern to use\n * @return 0 on success, negative on error\n */\nstatic int packet_test_single_loopback_pattern(int nic_index, const loopback_test_pattern_t *pattern) {\n    uint8_t rx_buffer[ETH_MAX_FRAME];\n    size_t rx_length;\n    packet_integrity_result_t integrity_result;\n    int result;\n    uint32_t timeout_ms = pattern->timeout_ms ? pattern->timeout_ms : 1000;\n    uint32_t start_time;\n    \n    /* Send test pattern */\n    result = packet_test_internal_loopback(nic_index, pattern->data, pattern->size);\n    if (result != 0) {\n        return result;\n    }\n    \n    return 0;  /* Success if internal loopback passed */\n}\n\n/**\n * @brief Analyze error patterns in received data\n * @param integrity_result Integrity result to analyze\n */\nstatic void packet_analyze_error_patterns(packet_integrity_result_t *integrity_result) {\n    if (!integrity_result || integrity_result->mismatch_count == 0) {\n        return;\n    }\n    \n    /* Look for common error patterns */\n    int bit_errors = 0;\n    int byte_shifts = 0;\n    int burst_errors = 0;\n    \n    for (int i = 0; i < integrity_result->mismatch_count && i < MAX_MISMATCH_DETAILS; i++) {\n        packet_mismatch_detail_t *detail = &integrity_result->mismatch_details[i];\n        uint8_t xor_result = detail->expected ^ detail->actual;\n        \n        /* Count bit errors */\n        int bits_different = 0;\n        for (int bit = 0; bit < 8; bit++) {\n            if (xor_result & (1 << bit)) {\n                bits_different++;\n            }\n        }\n        \n        if (bits_different == 1) {\n            bit_errors++;\n        }\n        \n        /* Check for byte shift patterns */\n        if (i > 0) {\n            packet_mismatch_detail_t *prev = &integrity_result->mismatch_details[i - 1];\n            if (detail->offset == prev->offset + 1) {\n                burst_errors++;\n            }\n        }\n    }\n    \n    /* Store pattern analysis results */\n    integrity_result->single_bit_errors = bit_errors;\n    integrity_result->burst_errors = burst_errors;\n    \n    /* Determine likely error cause */\n    if (bit_errors > burst_errors) {\n        strcpy(integrity_result->error_pattern_description, \"Single-bit errors (electrical noise)\");\n    } else if (burst_errors > 0) {\n        strcpy(integrity_result->error_pattern_description, \"Burst errors (synchronization issue)\");\n    } else {\n        strcpy(integrity_result->error_pattern_description, \"Random data corruption\");\n    }\n}\n\n/**\n * @brief Route packet to another interface\n * @param packet Packet data\n * @param length Packet length\n * @param dest_nic Destination NIC index\n * @return 0 on success, negative on error\n */\nstatic int route_packet_to_interface(const uint8_t *packet, uint16_t length, uint8_t dest_nic) {
+    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};\n    frame_length = packet_build_ethernet_frame(test_frame, sizeof(test_frame),\n                                              broadcast_mac, nic->mac,\n                                              0x0800, /* IP ethertype */\n                                              test_pattern, pattern_size);\n    \n    if (frame_length < 0) {\n        log_error(\"Failed to build loopback test frame\");\n        return frame_length;\n    }\n    \n    /* Enable internal loopback mode */\n    result = packet_enable_loopback_mode(nic, LOOPBACK_INTERNAL);\n    if (result != 0) {\n        log_error(\"Failed to enable internal loopback mode: %d\", result);\n        return result;\n    }\n    \n    /* Clear any pending RX packets */\n    rx_length = sizeof(rx_buffer);\n    while (packet_receive_from_nic(nic_index, rx_buffer, &rx_length) == 0) {\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    /* Send test frame */\n    result = packet_send_enhanced(nic_index, test_pattern, pattern_size, broadcast_mac, 0x1234);\n    if (result != 0) {\n        log_error(\"Failed to send loopback test frame: %d\", result);\n        packet_disable_loopback_mode(nic);\n        return result;\n    }\n    \n    log_debug(\"Loopback test frame sent, waiting for reception...\");\n    \n    /* Wait for loopback reception */\n    start_time = stats_get_timestamp();\n    rx_length = sizeof(rx_buffer);\n    \n    while ((stats_get_timestamp() - start_time) < timeout_ms) {\n        result = packet_receive_from_nic(nic_index, rx_buffer, &rx_length);\n        \n        if (result == 0) {\n            /* Verify received frame */\n            if (rx_length >= ETH_HEADER_LEN + pattern_size) {\n                /* Extract payload from received frame */\n                uint8_t *rx_payload = rx_buffer + ETH_HEADER_LEN;\n                \n                if (memcmp(rx_payload, test_pattern, pattern_size) == 0) {\n                    log_info(\"Internal loopback test PASSED on NIC %d\", nic_index);\n                    packet_disable_loopback_mode(nic);\n                    return 0;\n                } else {\n                    log_error(\"Loopback data mismatch on NIC %d\", nic_index);\n                    packet_disable_loopback_mode(nic);\n                    return PACKET_ERR_INVALID_DATA;\n                }\n            }\n        }\n        \n        /* Brief delay before retry */\n        { volatile int delay_i; for (delay_i = 0; delay_i < 1000; delay_i++); }\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    log_error(\"Internal loopback test TIMEOUT on NIC %d\", nic_index);\n    packet_disable_loopback_mode(nic);\n    return PACKET_ERR_TIMEOUT;\n}\n\n/**\n * @brief Test external loopback with physical connector\n * @param nic_index NIC to test\n * @param test_patterns Array of test patterns\n * @param num_patterns Number of test patterns\n * @return 0 on success, negative on error\n */\nint packet_test_external_loopback(int nic_index, const loopback_test_pattern_t *test_patterns, int num_patterns) {\n    nic_info_t *nic;\n    int passed_tests = 0;\n    int failed_tests = 0;\n    \n    if (!test_patterns || num_patterns <= 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    nic = hardware_get_nic(nic_index);\n    if (!nic) {\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Starting external loopback test on NIC %d (%d patterns)\", nic_index, num_patterns);\n    \n    /* Disable internal loopback, enable external */\n    int result;\n    int i;\n    result = packet_enable_loopback_mode(nic, LOOPBACK_EXTERNAL);\n    if (result != 0) {\n        log_error(\"Failed to enable external loopback mode: %d\", result);\n        return result;\n    }\n    \n    /* Test each pattern */\n    for (i = 0; i < num_patterns; i++) {\n        log_debug(\"Testing external loopback pattern %d: %s\", i, test_patterns[i].name);\n        \n        result = packet_test_single_loopback_pattern(nic_index, &test_patterns[i]);\n        if (result == 0) {\n            passed_tests++;\n            log_debug(\"Pattern %d PASSED\", i);\n        } else {\n            failed_tests++;\n            log_warning(\"Pattern %d FAILED: %d\", i, result);\n        }\n    }\n    \n    packet_disable_loopback_mode(nic);\n    \n    log_info(\"External loopback test completed: %d passed, %d failed\", passed_tests, failed_tests);\n    \n    return (failed_tests == 0) ? 0 : PACKET_ERR_LOOPBACK_FAILED;\n}\n\n/**\n * @brief Test cross-NIC loopback for multi-NIC validation\n * @param src_nic_index Source NIC\n * @param dest_nic_index Destination NIC \n * @param test_data Test data to send\n * @param data_size Size of test data\n * @return 0 on success, negative on error\n */\nint packet_test_cross_nic_loopback(int src_nic_index, int dest_nic_index, \n                                  const uint8_t *test_data, uint16_t data_size) {\n    nic_info_t *src_nic, *dest_nic;\n    uint8_t test_frame[ETH_MAX_FRAME];\n    uint8_t rx_buffer[ETH_MAX_FRAME];\n    uint16_t frame_length;\n    size_t rx_length;\n    int result;\n    uint32_t timeout_ms = 2000;  /* Longer timeout for cross-NIC */\n    uint32_t start_time;\n    \n    if (!test_data || data_size == 0 || src_nic_index == dest_nic_index) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    src_nic = hardware_get_nic(src_nic_index);\n    dest_nic = hardware_get_nic(dest_nic_index);\n    \n    if (!src_nic || !dest_nic) {\n        log_error(\"Invalid NIC indices for cross-NIC test: src=%d, dest=%d\", \n                 src_nic_index, dest_nic_index);\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    if (!(src_nic->status & NIC_STATUS_ACTIVE) || !(dest_nic->status & NIC_STATUS_ACTIVE)) {\n        log_error(\"NICs not active for cross-NIC test\");\n        return PACKET_ERR_INVALID_NIC;\n    }\n    \n    log_info(\"Starting cross-NIC loopback test: NIC %d -> NIC %d\", src_nic_index, dest_nic_index);\n    \n    /* Build test frame addressed to destination NIC */\n    frame_length = packet_build_ethernet_frame(test_frame, sizeof(test_frame),\n                                              dest_nic->mac, src_nic->mac,\n                                              0x0800, /* IP ethertype */\n                                              test_data, data_size);\n    \n    if (frame_length < 0) {\n        log_error(\"Failed to build cross-NIC test frame\");\n        return frame_length;\n    }\n    \n    /* Enable promiscuous mode on destination NIC to receive all packets */\n    result = hardware_set_promiscuous_mode(dest_nic, true);\n    if (result != 0) {\n        log_warning(\"Failed to enable promiscuous mode on dest NIC %d\", dest_nic_index);\n    }\n    \n    /* Clear any pending packets on destination NIC */\n    rx_length = sizeof(rx_buffer);\n    while (packet_receive_from_nic(dest_nic_index, rx_buffer, &rx_length) == 0) {\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    /* Send packet from source NIC */\n    result = packet_send_enhanced(src_nic_index, test_data, data_size, dest_nic->mac, 0x5678);\n    if (result != 0) {\n        log_error(\"Failed to send cross-NIC test packet: %d\", result);\n        hardware_set_promiscuous_mode(dest_nic, false);\n        return result;\n    }\n    \n    log_debug(\"Cross-NIC packet sent, waiting for reception on NIC %d...\", dest_nic_index);\n    \n    /* Wait for packet on destination NIC */\n    start_time = stats_get_timestamp();\n    rx_length = sizeof(rx_buffer);\n    \n    while ((stats_get_timestamp() - start_time) < timeout_ms) {\n        result = packet_receive_from_nic(dest_nic_index, rx_buffer, &rx_length);\n        \n        if (result == 0) {\n            /* Verify received frame */\n            eth_header_t eth_header;\n            result = packet_parse_ethernet_header(rx_buffer, rx_length, &eth_header);\n            \n            if (result == 0) {\n                /* Check if this is our test packet */\n                if (memcmp(eth_header.dest_mac, dest_nic->mac, ETH_ALEN) == 0 &&\n                    memcmp(eth_header.src_mac, src_nic->mac, ETH_ALEN) == 0) {\n                    \n                    /* Verify payload */\n                    uint8_t *rx_payload = rx_buffer + ETH_HEADER_LEN;\n                    uint16_t payload_length = rx_length - ETH_HEADER_LEN;\n                    \n                    if (payload_length >= data_size && \n                        memcmp(rx_payload, test_data, data_size) == 0) {\n                        log_info(\"Cross-NIC loopback test PASSED: NIC %d -> NIC %d\", \n                                src_nic_index, dest_nic_index);\n                        hardware_set_promiscuous_mode(dest_nic, false);\n                        return 0;\n                    } else {\n                        log_error(\"Cross-NIC payload mismatch\");\n                        hardware_set_promiscuous_mode(dest_nic, false);\n                        return PACKET_ERR_INVALID_DATA;\n                    }\n                }\n            }\n        }\n        \n        /* Brief delay before retry */\n        { volatile int delay_i; for (delay_i = 0; delay_i < 1000; delay_i++); }\n        rx_length = sizeof(rx_buffer);\n    }\n    \n    log_error(\"Cross-NIC loopback test TIMEOUT: NIC %d -> NIC %d\", src_nic_index, dest_nic_index);\n    hardware_set_promiscuous_mode(dest_nic, false);\n    return PACKET_ERR_TIMEOUT;\n}\n\n/**\n * @brief Comprehensive packet integrity verification during loopback\n * @param original_data Original packet data\n * @param received_data Received packet data\n * @param data_length Length of data to compare\n * @param integrity_result Pointer to store detailed integrity result\n * @return 0 if integrity check passed, negative on error\n */\nint packet_verify_loopback_integrity(const uint8_t *original_data, const uint8_t *received_data,\n                                    uint16_t data_length, packet_integrity_result_t *integrity_result) {\n    if (!original_data || !received_data || !integrity_result || data_length == 0) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    memset(integrity_result, 0, sizeof(packet_integrity_result_t));\n    integrity_result->bytes_compared = data_length;\n    \n    /* Byte-by-byte comparison */\n    uint16_t i;\n    for (i = 0; i < data_length; i++) {\n        if (original_data[i] != received_data[i]) {\n            integrity_result->mismatch_count++;\n            \n            /* Store first few mismatches for debugging */\n            if (integrity_result->mismatch_count <= MAX_MISMATCH_DETAILS) {\n                packet_mismatch_detail_t *detail = \n                    &integrity_result->mismatch_details[integrity_result->mismatch_count - 1];\n                detail->offset = i;\n                detail->expected = original_data[i];\n                detail->actual = received_data[i];\n            }\n        }\n    }\n    \n    /* Calculate error statistics */\n    if (integrity_result->mismatch_count > 0) {\n        integrity_result->error_rate_percent = \n            (integrity_result->mismatch_count * 100) / data_length;\n        \n        /* Analyze error patterns */\n        packet_analyze_error_patterns(integrity_result);\n        \n        log_error(\"Packet integrity check FAILED: %d mismatches out of %d bytes (%.2f%%)\",\n                 integrity_result->mismatch_count, data_length, \n                 (float)integrity_result->error_rate_percent);\n        \n        return PACKET_ERR_INTEGRITY_FAILED;\n    }\n    \n    log_debug(\"Packet integrity check PASSED: %d bytes verified\", data_length);\n    return 0;\n}\n\n/**\n * @brief Enable loopback mode on a NIC\n * @param nic NIC to configure\n * @param loopback_type Type of loopback to enable\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_loopback_mode(nic_info_t *nic, loopback_type_t loopback_type) {\n    if (!nic) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    log_debug(\"Enabling loopback mode %d on NIC %d\", loopback_type, nic->index);\n    \n    if (nic->type == NIC_TYPE_3C509B) {\n        return packet_enable_3c509b_loopback(nic, loopback_type);\n    } else if (nic->type == NIC_TYPE_3C515_TX) {\n        return packet_enable_3c515_loopback(nic, loopback_type);\n    }\n    \n    return PACKET_ERR_NOT_SUPPORTED;\n}\n\n/**\n * @brief Disable loopback mode on a NIC\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_loopback_mode(nic_info_t *nic) {\n    if (!nic) {\n        return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    log_debug(\"Disabling loopback mode on NIC %d\", nic->index);\n    \n    if (nic->type == NIC_TYPE_3C509B) {\n        return packet_disable_3c509b_loopback(nic);\n    } else if (nic->type == NIC_TYPE_3C515_TX) {\n        return packet_disable_3c515_loopback(nic);\n    }\n    \n    return PACKET_ERR_NOT_SUPPORTED;\n}\n\n/**\n * @brief Enable 3C509B loopback mode\n * @param nic NIC to configure\n * @param loopback_type Type of loopback\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_3c509b_loopback(nic_info_t *nic, loopback_type_t loopback_type) {\n    uint16_t rx_filter = 0x01;  /* Individual address */\n    \n    _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);\n    \n    switch (loopback_type) {\n        case LOOPBACK_INTERNAL:\n            /* Set internal loopback in RX filter */\n            rx_filter |= 0x08;  /* Loopback mode */\n            break;\n            \n        case LOOPBACK_EXTERNAL:\n            /* External loopback requires physical connector */\n            /* No special register settings needed */\n            break;\n            \n        default:\n            return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    /* Apply RX filter settings */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | rx_filter);\n    \n    /* Enable TX and RX */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_TX_ENABLE);\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_RX_ENABLE);\n    \n    return 0;\n}\n\n/**\n * @brief Enable 3C515-TX loopback mode\n * @param nic NIC to configure\n * @param loopback_type Type of loopback\n * @return 0 on success, negative on error\n */\nstatic int packet_enable_3c515_loopback(nic_info_t *nic, loopback_type_t loopback_type) {\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_4);\n    \n    uint16_t media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);\n    \n    switch (loopback_type) {\n        case LOOPBACK_INTERNAL:\n            /* Enable internal loopback */\n            media_options |= 0x0008;  /* Internal loopback bit */\n            break;\n            \n        case LOOPBACK_EXTERNAL:\n            /* Disable internal loopback for external testing */\n            media_options &= ~0x0008;\n            break;\n            \n        default:\n            return PACKET_ERR_INVALID_PARAM;\n    }\n    \n    outw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG, media_options);\n    \n    /* Enable TX and RX */\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_1);\n    outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_TX_ENABLE);\n    outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_RX_ENABLE);\n    \n    return 0;\n}\n\n/**\n * @brief Disable 3C509B loopback mode\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_3c509b_loopback(nic_info_t *nic) {\n    _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);\n    \n    /* Reset to normal RX filter (individual + broadcast) */\n    uint16_t rx_filter = 0x01 | 0x02;  /* Individual + broadcast */\n    outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_SET_RX_FILTER | rx_filter);\n    \n    return 0;\n}\n\n/**\n * @brief Disable 3C515-TX loopback mode\n * @param nic NIC to configure\n * @return 0 on success, negative on error\n */\nstatic int packet_disable_3c515_loopback(nic_info_t *nic) {\n    _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_4);\n    \n    /* Disable internal loopback */\n    uint16_t media_options = inw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG);\n    media_options &= ~0x0008;  /* Clear internal loopback bit */\n    outw(nic->io_base + _3C515_TX_MEDIA_OPTIONS_REG, media_options);\n    \n    return 0;\n}\n\n/**\n * @brief Test a single loopback pattern\n * @param nic_index NIC to test\n * @param pattern Test pattern to use\n * @return 0 on success, negative on error\n */\nstatic int packet_test_single_loopback_pattern(int nic_index, const loopback_test_pattern_t *pattern) {\n    uint8_t rx_buffer[ETH_MAX_FRAME];\n    size_t rx_length;\n    packet_integrity_result_t integrity_result;\n    int result;\n    uint32_t timeout_ms = pattern->timeout_ms ? pattern->timeout_ms : 1000;\n    uint32_t start_time;\n    \n    /* Send test pattern */\n    result = packet_test_internal_loopback(nic_index, pattern->data, pattern->size);\n    if (result != 0) {\n        return result;\n    }\n    \n    return 0;  /* Success if internal loopback passed */\n}\n\n/**\n * @brief Analyze error patterns in received data\n * @param integrity_result Integrity result to analyze\n */\nstatic void packet_analyze_error_patterns(packet_integrity_result_t *integrity_result) {\n    if (!integrity_result || integrity_result->mismatch_count == 0) {\n        return;\n    }\n    \n    /* Look for common error patterns */\n    int bit_errors = 0;\n    int byte_shifts = 0;\n    int burst_errors = 0;\n    int i;\n    int bit;\n    int bits_different;\n    \n    for (i = 0; i < integrity_result->mismatch_count && i < MAX_MISMATCH_DETAILS; i++) {\n        packet_mismatch_detail_t *detail = &integrity_result->mismatch_details[i];\n        uint8_t xor_result = detail->expected ^ detail->actual;\n        \n        /* Count bit errors */\n        bits_different = 0;\n        for (bit = 0; bit < 8; bit++) {\n            if (xor_result & (1 << bit)) {\n                bits_different++;\n            }\n        }\n        \n        if (bits_different == 1) {\n            bit_errors++;\n        }\n        \n        /* Check for byte shift patterns */\n        if (i > 0) {\n            packet_mismatch_detail_t *prev = &integrity_result->mismatch_details[i - 1];\n            if (detail->offset == prev->offset + 1) {\n                burst_errors++;\n            }\n        }\n    }\n    \n    /* Store pattern analysis results */\n    integrity_result->single_bit_errors = bit_errors;\n    integrity_result->burst_errors = burst_errors;\n    \n    /* Determine likely error cause */\n    if (bit_errors > burst_errors) {\n        strcpy(integrity_result->error_pattern_description, \"Single-bit errors (electrical noise)\");\n    } else if (burst_errors > 0) {\n        strcpy(integrity_result->error_pattern_description, \"Burst errors (synchronization issue)\");\n    } else {\n        strcpy(integrity_result->error_pattern_description, \"Random data corruption\");\n    }\n}\n\n/**\n * @brief Route packet to another interface\n * @param packet Packet data\n * @param length Packet length\n * @param dest_nic Destination NIC index\n * @return 0 on success, negative on error\n */\nstatic int route_packet_to_interface(const uint8_t *packet, uint16_t length, uint8_t dest_nic) {
     nic_info_t *nic;
     ip_addr_t dest_ip;
     uint8_t dest_mac[ETH_ALEN];
     uint8_t nic_index;
     int result;
-    
+    const uint8_t *ip_header;
+    uint8_t *mutable_packet;
+
     if (!packet || length == 0) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get destination NIC */
     nic = hardware_get_nic(dest_nic);
     if (!nic || !(nic->status & NIC_STATUS_ACTIVE)) {
         log_error("Destination NIC %d not active", dest_nic);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* For IP packets, we need to resolve MAC address via ARP */
     if (packet_get_ethertype(packet) == ETH_P_IP) {
         /* Extract destination IP from IP header */
-        const uint8_t *ip_header = packet + ETH_HEADER_LEN;
+        ip_header = packet + ETH_HEADER_LEN;
         memory_copy(dest_ip.addr, ip_header + 16, 4); /* Dest IP at offset 16 */
         
         /* Try to resolve MAC address */
@@ -2548,7 +2578,7 @@ int packet_test_internal_loopback(int nic_index, const uint8_t *test_pattern, ui
             result = arp_resolve(&dest_ip, dest_mac, &nic_index);
             if (result == SUCCESS) {
                 /* Update destination MAC in packet */
-                uint8_t *mutable_packet = (uint8_t*)packet;
+                mutable_packet = (uint8_t*)packet;
                 memory_copy(mutable_packet, dest_mac, ETH_ALEN);
                 
                 /* Update source MAC to our NIC's MAC */
@@ -2665,13 +2695,15 @@ static int packet_queue_init_all(void) {
  * @brief Cleanup all production packet queues
  */
 static void packet_queue_cleanup_all(void) {
+    int i;
+
     log_info("Cleaning up production packet queues");
-    
+
     /* Emergency drain all queues before cleanup */
     packet_emergency_queue_drain();
-    
+
     /* Cleanup TX queues */
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         packet_queue_cleanup(&g_queue_state.tx_queues[i]);
     }
     
@@ -2749,9 +2781,12 @@ static int packet_enqueue_with_priority(packet_buffer_t *buffer, int priority) {
  */
 static packet_buffer_t* packet_dequeue_by_priority(void) {
     packet_buffer_t *buffer = NULL;
-    
+    int priority;
+    int i;
+    uint32_t total_usage;
+
     /* Check queues in priority order (urgent first) */
-    for (int priority = PACKET_PRIORITY_URGENT; priority >= PACKET_PRIORITY_LOW; priority--) {
+    for (priority = PACKET_PRIORITY_URGENT; priority >= PACKET_PRIORITY_LOW; priority--) {
         if (!packet_queue_is_empty(&g_queue_state.tx_queues[priority])) {
             /* Dequeue from priority queue - CRITICAL SECTION */
             __asm__ __volatile__("cli");  /* Disable interrupts */
@@ -2759,10 +2794,10 @@ static packet_buffer_t* packet_dequeue_by_priority(void) {
             __asm__ __volatile__("sti");  /* Enable interrupts */
             if (buffer) {
                 log_trace("Dequeued packet from priority %d queue", priority);
-                
+
                 /* Check if we can disable flow control */
-                uint32_t total_usage = 0;
-                for (int i = 0; i < 4; i++) {
+                total_usage = 0;
+                for (i = 0; i < 4; i++) {
                     total_usage += packet_calculate_queue_usage(&g_queue_state.tx_queues[i]);
                 }
                 
@@ -2786,18 +2821,21 @@ static packet_buffer_t* packet_dequeue_by_priority(void) {
 static int packet_check_queue_health(void) {
     uint32_t current_time = stats_get_timestamp();
     bool health_issues = false;
-    
+    int i;
+    packet_queue_t *queue;
+    uint32_t usage;
+
     /* Only check periodically */
     if (current_time - g_queue_state.last_queue_check < QUEUE_CHECK_INTERVAL_MS) {
         return 0;
     }
-    
+
     g_queue_state.last_queue_check = current_time;
-    
+
     /* Check each TX queue for health issues */
-    for (int i = 0; i < 4; i++) {
-        packet_queue_t *queue = &g_queue_state.tx_queues[i];
-        uint32_t usage = packet_calculate_queue_usage(queue);
+    for (i = 0; i < 4; i++) {
+        queue = &g_queue_state.tx_queues[i];
+        usage = packet_calculate_queue_usage(queue);
         
         if (usage > QUEUE_WATERMARK_HIGH) {
             log_warning("Queue %d usage high: %d%%", i, usage);
@@ -2842,11 +2880,12 @@ static void packet_apply_flow_control(void) {
      * 3. Adjust NIC interrupt rates
      * 4. Apply per-connection throttling
      */
-    
+    volatile int delay_i;
+
     log_debug("Applying flow control backpressure");
-    
+
     /* For now, just add a small delay to slow down packet processing */
-    for (volatile int i = 0; i < 100; i++) {
+    for (delay_i = 0; delay_i < 100; delay_i++) {
         /* Brief backpressure delay */
     }
 }
@@ -2857,20 +2896,23 @@ static void packet_apply_flow_control(void) {
 static void packet_adaptive_queue_resize(void) {
     static uint32_t last_resize = 0;
     uint32_t current_time = stats_get_timestamp();
-    
+    int i;
+    packet_queue_t *queue;
+    uint32_t usage;
+
     /* Limit resize frequency */
     if (current_time - last_resize < 10000) {  /* 10 second minimum */
         return;
     }
-    
+
     last_resize = current_time;
-    
+
     log_info("Performing adaptive queue resize analysis");
-    
+
     /* Analyze queue usage patterns */
-    for (int i = 0; i < 4; i++) {
-        packet_queue_t *queue = &g_queue_state.tx_queues[i];
-        uint32_t usage = packet_calculate_queue_usage(queue);
+    for (i = 0; i < 4; i++) {
+        queue = &g_queue_state.tx_queues[i];
+        usage = packet_calculate_queue_usage(queue);
         
         if (usage > 90 && queue->max_count < 512) {
             /* Queue consistently full - consider expansion */
@@ -2891,10 +2933,12 @@ static void packet_adaptive_queue_resize(void) {
  */
 static void packet_handle_queue_overflow(int priority) {
     int dropped = 0;
-    
+    int lower_priority;
+    packet_queue_t *lower_queue;
+
     /* Try to drop packets from lower priority queues */
-    for (int lower_priority = PACKET_PRIORITY_LOW; lower_priority < priority; lower_priority++) {
-        packet_queue_t *lower_queue = &g_queue_state.tx_queues[lower_priority];
+    for (lower_priority = PACKET_PRIORITY_LOW; lower_priority < priority; lower_priority++) {
+        lower_queue = &g_queue_state.tx_queues[lower_priority];
         
         while (!packet_queue_is_empty(lower_queue) && dropped < 5) {
             packet_buffer_t *dropped_buffer = packet_queue_dequeue(lower_queue);
@@ -2962,14 +3006,18 @@ static void packet_update_queue_stats(void) {
  */
 static int packet_emergency_queue_drain(void) {
     int total_drained = 0;
-    
+    int i;
+    packet_queue_t *queue;
+    int drained;
+    int rx_drained = 0;
+
     log_warning("Emergency draining all packet queues");
-    
+
     /* Drain TX queues */
-    for (int i = 0; i < 4; i++) {
-        packet_queue_t *queue = &g_queue_state.tx_queues[i];
-        int drained = 0;
-        
+    for (i = 0; i < 4; i++) {
+        queue = &g_queue_state.tx_queues[i];
+        drained = 0;
+
         while (!packet_queue_is_empty(queue)) {
             packet_buffer_t *buffer = packet_queue_dequeue(queue);
             if (buffer) {
@@ -2977,15 +3025,14 @@ static int packet_emergency_queue_drain(void) {
                 drained++;
             }
         }
-        
+
         if (drained > 0) {
             log_info("Drained %d packets from TX queue %d", drained, i);
             total_drained += drained;
         }
     }
-    
+
     /* Drain RX queue */
-    int rx_drained = 0;
     while (!packet_queue_is_empty(&g_queue_state.rx_queue)) {
         packet_buffer_t *buffer = packet_queue_dequeue(&g_queue_state.rx_queue);
         if (buffer) {
@@ -3107,14 +3154,16 @@ int packet_flush_tx_queue_enhanced(void) {
  * @return 0 on success, negative on error
  */
 int packet_get_queue_stats(packet_queue_management_stats_t *stats) {
+    int i;
+
     if (!stats) {
         return PACKET_ERR_INVALID_PARAM;
     }
-    
+
     memset(stats, 0, sizeof(packet_queue_management_stats_t));
-    
+
     /* Copy queue counts and usage */
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         stats->tx_queue_counts[i] = g_queue_state.tx_queues[i].count;
         stats->tx_queue_max[i] = g_queue_state.tx_queues[i].max_count;
         stats->tx_queue_usage[i] = packet_calculate_queue_usage(&g_queue_state.tx_queues[i]);

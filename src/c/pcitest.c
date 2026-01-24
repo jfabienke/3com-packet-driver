@@ -534,44 +534,45 @@ static int test_cross_width_consistency(void) {
     uint8_t bytes[4];
     uint16_t words[2];
     uint32_t dword;
-    
+    int i;
+
     /* Read vendor/device ID as 4 bytes */
-    for (int i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) {
         memset(&regs, 0, sizeof(regs));
         memset(&sregs, 0, sizeof(sregs));
-        
+
         regs.x.ax = PCI_FUNCTION_ID | PCI_READ_CONFIG_BYTE;
-        regs.x.bx = (test_config.test_device_bus << 8) | 
-                     (test_config.test_device_dev << 3) | 
+        regs.x.bx = (test_config.test_device_bus << 8) |
+                     (test_config.test_device_dev << 3) |
                      test_config.test_device_func;
         regs.x.di = i;
-        
+
         int86x(0x1A, &regs, &regs, &sregs);
-        
+
         if (regs.x.cflag != 0) {
             return TEST_SKIP;
         }
-        
+
         bytes[i] = regs.h.cl;
     }
-    
+
     /* Read as 2 words */
-    for (int i = 0; i < 2; i++) {
+    for (i = 0; i < 2; i++) {
         memset(&regs, 0, sizeof(regs));
         memset(&sregs, 0, sizeof(sregs));
-        
+
         regs.x.ax = PCI_FUNCTION_ID | PCI_READ_CONFIG_WORD;
-        regs.x.bx = (test_config.test_device_bus << 8) | 
-                     (test_config.test_device_dev << 3) | 
+        regs.x.bx = (test_config.test_device_bus << 8) |
+                     (test_config.test_device_dev << 3) |
                      test_config.test_device_func;
         regs.x.di = i * 2;
-        
+
         int86x(0x1A, &regs, &regs, &sregs);
-        
+
         if (regs.x.cflag != 0) {
             return TEST_SKIP;
         }
-        
+
         words[i] = regs.x.cx;
     }
     
@@ -864,17 +865,18 @@ static int test_interrupt_storm(void) {
     struct SREGS sregs;
     uint16_t iterations = 1000;
     uint16_t errors = 0;
-    
-    for (uint16_t i = 0; i < iterations; i++) {
+    uint16_t i;
+
+    for (i = 0; i < iterations; i++) {
         memset(&regs, 0, sizeof(regs));
         memset(&sregs, 0, sizeof(sregs));
-        
+
         regs.x.ax = PCI_FUNCTION_ID | PCI_READ_CONFIG_WORD;
         regs.x.bx = 0;  /* Device 0:0:0 */
         regs.x.di = 0x00;  /* Vendor ID */
-        
+
         int86x(0x1A, &regs, &regs, &sregs);
-        
+
         if (regs.x.cflag != 0) {
             errors++;
         }
@@ -944,10 +946,11 @@ static int test_3com_nic_detection(void) {
     union REGS regs;
     struct SREGS sregs;
     uint16_t found_3com = 0;
-    
+    uint8_t bus, dev;
+
     /* Scan for 3Com devices (vendor ID 0x10B7) */
-    for (uint8_t bus = 0; bus <= 1; bus++) {
-        for (uint8_t dev = 0; dev < 32; dev++) {
+    for (bus = 0; bus <= 1; bus++) {
+        for (dev = 0; dev < 32; dev++) {
             memset(&regs, 0, sizeof(regs));
             memset(&sregs, 0, sizeof(sregs));
             
@@ -988,11 +991,12 @@ static int test_3com_nic_detection(void) {
 static bool find_test_device(void) {
     union REGS regs;
     struct SREGS sregs;
-    
+    uint8_t bus, dev, func;
+
     /* Try to find any valid PCI device */
-    for (uint8_t bus = 0; bus <= 1; bus++) {
-        for (uint8_t dev = 0; dev < 32; dev++) {
-            for (uint8_t func = 0; func < 8; func++) {
+    for (bus = 0; bus <= 1; bus++) {
+        for (dev = 0; dev < 32; dev++) {
+            for (func = 0; func < 8; func++) {
                 memset(&regs, 0, sizeof(regs));
                 memset(&sregs, 0, sizeof(sregs));
                 
@@ -1059,7 +1063,8 @@ static void print_summary(void) {
  * Parse command line arguments
  */
 static void parse_args(int argc, char* argv[]) {
-    for (int i = 1; i < argc; i++) {
+    int i;
+    for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             test_config.verbose = true;
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--stop") == 0) {
