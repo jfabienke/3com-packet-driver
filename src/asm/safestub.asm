@@ -7,69 +7,71 @@
 ; 286-compatible unless specifically gated for 386+.
 ;
 ; GPT-5 validated: Realistic TSR overhead with proper register preservation
+;
+; Converted to NASM syntax: 2026-01-23
 
-.MODEL SMALL
-.286                            ; Base compatibility level
+bits 16
+cpu 286                             ; Base compatibility level
 
 ; External data references
-EXTERN _vds_pool:BYTE           ; VDS buffer pool
-EXTERN _bounce_pool:BYTE        ; Bounce buffer pool
-EXTERN _cpu_type:BYTE           ; CPU type for gating
-EXTERN _nic_io_base:WORD        ; NIC I/O base address
-EXTERN _saved_int_mask:BYTE     ; Saved interrupt mask
-EXTERN _mask_method:BYTE        ; How interrupts were masked
+extern _vds_pool                    ; VDS buffer pool
+extern _bounce_pool                 ; Bounce buffer pool
+extern _cpu_type                    ; CPU type for gating
+extern _nic_io_base                 ; NIC I/O base address
+extern _saved_int_mask              ; Saved interrupt mask
+extern _mask_method                 ; How interrupts were masked
 
 ; Public exports
-PUBLIC vds_lock_stub
-PUBLIC vds_unlock_stub
-PUBLIC cache_flush_486
-PUBLIC bounce_tx_stub
-PUBLIC bounce_rx_stub
-PUBLIC check_64kb_stub
-PUBLIC pio_fallback_stub
-PUBLIC safe_disable_interrupts
-PUBLIC safe_enable_interrupts
-PUBLIC serialize_after_smc
+global vds_lock_stub
+global vds_unlock_stub
+global cache_flush_486
+global bounce_tx_stub
+global bounce_rx_stub
+global check_64kb_stub
+global pio_fallback_stub
+global safe_disable_interrupts
+global safe_enable_interrupts
+global serialize_after_smc
 
 ; CPU type constants
-CPU_286         EQU 2
-CPU_386         EQU 3
-CPU_486         EQU 4
+CPU_286         equ 2
+CPU_386         equ 3
+CPU_486         equ 4
 
 ; NIC interrupt mask register offset
-INT_MASK_REG    EQU 0Eh
+INT_MASK_REG    equ 0Eh
 
-.CODE
+segment _TEXT class=CODE
 
 ;-----------------------------------------------------------------------------
 ; VDS lock stub - Lock buffer for DMA in V86 mode
 ; Preserves: All registers
 ; Size: ~45 bytes
 ;-----------------------------------------------------------------------------
-vds_lock_stub PROC NEAR
+vds_lock_stub:
         push    ax
         push    bx
         push    cx
         push    dx
         push    es
         push    di
-        
+
         ; Get next available VDS buffer from pool
         call    get_vds_buffer      ; Returns buffer index in AX
         test    ax, ax
         js      .no_buffer          ; Negative = no buffer available
-        
+
         ; Buffer already locked at init, just mark as in-use
         mov     bx, ax
         shl     bx, 4               ; Multiply by struct size (16)
-        mov     BYTE PTR [_vds_pool + bx + 14], 1  ; Set in_use flag
-        
+        mov     byte [_vds_pool + bx + 14], 1  ; Set in_use flag
+
         clc                         ; Success
         jmp     .done
-        
+
 .no_buffer:
         stc                         ; Failure
-        
+
 .done:
         pop     di
         pop     es
@@ -78,24 +80,22 @@ vds_lock_stub PROC NEAR
         pop     bx
         pop     ax
         ret
-vds_lock_stub ENDP
 
 ;-----------------------------------------------------------------------------
 ; VDS unlock stub - Unlock buffer after DMA complete
 ; Preserves: All registers
 ; Size: ~35 bytes
 ;-----------------------------------------------------------------------------
-vds_unlock_stub PROC NEAR
+vds_unlock_stub:
         push    ax
         push    bx
-        
+
         ; Find and release VDS buffer
         call    release_vds_buffer
-        
+
         pop     bx
         pop     ax
         ret
-vds_unlock_stub ENDP
 
 ;-----------------------------------------------------------------------------
 ; Cache flush for 486+ - WBINVD instruction
@@ -103,43 +103,42 @@ vds_unlock_stub ENDP
 ; Preserves: All registers
 ; Size: 5 bytes
 ;-----------------------------------------------------------------------------
-cache_flush_486 PROC NEAR
-        .486                        ; Enable 486 instructions
+cache_flush_486:
+        cpu 486                     ; Enable 486 instructions
         wbinvd                      ; Write-back and invalidate cache
-        .286                        ; Back to 286 mode
+        cpu 286                     ; Back to 286 mode
         ret
-cache_flush_486 ENDP
 
 ;-----------------------------------------------------------------------------
 ; Bounce buffer TX stub - Copy data to bounce buffer for TX
 ; Preserves: All registers except AX (returns bounce address)
 ; Size: ~55 bytes
 ;-----------------------------------------------------------------------------
-bounce_tx_stub PROC NEAR
+bounce_tx_stub:
         push    cx
         push    si
         push    di
         push    es
         push    ds
         pushf
-        
+
         cld                         ; Clear direction flag
-        
+
         ; Get bounce buffer
         call    get_bounce_buffer   ; Returns segment in AX
         mov     es, ax              ; ES = bounce buffer segment
         xor     di, di              ; ES:DI = destination
-        
+
         ; DS:SI already points to source data
         mov     cx, 768             ; 1536 bytes / 2
         rep     movsw               ; Copy data
-        
+
         ; Return bounce buffer physical address in DX:AX
         mov     ax, es
         xor     dx, dx
         shl     ax, 4               ; Convert segment to physical
         adc     dx, 0               ; Handle overflow
-        
+
         popf
         pop     ds
         pop     es
@@ -147,14 +146,13 @@ bounce_tx_stub PROC NEAR
         pop     si
         pop     cx
         ret
-bounce_tx_stub ENDP
 
 ;-----------------------------------------------------------------------------
 ; Bounce buffer RX stub - Copy data from bounce buffer after RX
 ; Preserves: All registers
 ; Size: ~55 bytes
 ;-----------------------------------------------------------------------------
-bounce_rx_stub PROC NEAR
+bounce_rx_stub:
         push    ax
         push    cx
         push    si
@@ -162,24 +160,24 @@ bounce_rx_stub PROC NEAR
         push    es
         push    ds
         pushf
-        
+
         cld                         ; Clear direction flag
-        
+
         ; Get bounce buffer that was used for RX
         call    get_rx_bounce_buffer ; Returns segment in AX
         push    ds
         mov     ds, ax              ; DS = bounce buffer segment
         xor     si, si              ; DS:SI = source
-        
+
         ; ES:DI already points to destination
         mov     cx, 768             ; 1536 bytes / 2
         rep     movsw               ; Copy data
-        
+
         pop     ds
-        
+
         ; Release bounce buffer
         call    release_bounce_buffer
-        
+
         popf
         pop     ds
         pop     es
@@ -188,290 +186,376 @@ bounce_rx_stub PROC NEAR
         pop     cx
         pop     ax
         ret
-bounce_rx_stub ENDP
 
 ;-----------------------------------------------------------------------------
-; 64KB boundary check stub - Verify buffer doesn't cross 64KB
-; If it does, switch to bounce buffer
-; Preserves: All registers
-; Size: ~30 bytes
+; 64KB boundary check stub - Pure detector for DMA boundary crossing
+;
+; This is a simplified implementation per SAFESTUB_COMPLETION.md:
+; - Pure detector: returns CF=1 if boundary crossed, CF=0 if safe
+; - Caller handles fallback (typically pio_fallback_stub)
+; - No transparent bounce buffer in ISR hot path to keep it simple
+;
+; Input:  DX:AX = physical address (24-bit for ISA)
+;         CX = transfer length in bytes
+; Output: CF = 0 if DMA is safe (no boundary crossing)
+;         CF = 1 if 64KB boundary crossed (force PIO fallback)
+; Preserves: AX, BX, CX, DX
+; Size: ~20 bytes
 ;-----------------------------------------------------------------------------
-check_64kb_stub PROC NEAR
+check_64kb_stub:
         push    ax
-        push    dx
-        push    cx
-        
-        ; Check if buffer + length crosses 64KB
-        ; Assume: DX:AX = physical address, CX = length
-        mov     dx, ax
-        add     dx, cx              ; Add length
-        jnc     .no_cross           ; No carry = no 64KB crossing
-        
-        ; Crosses 64KB - use bounce buffer
-        call    use_bounce_for_64kb
-        
-.no_cross:
-        pop     cx
-        pop     dx
+        push    bx
+
+        ; Check if buffer + length crosses 64KB boundary
+        ; 64KB boundary is when low 16 bits wrap around (carry out of AX)
+        mov     bx, ax              ; Save start low word
+        add     ax, cx              ; Add length to low word
+        jc      .crossed            ; Carry = crossed 64KB boundary
+
+        ; Additional check: did we wrap from high address to low?
+        ; If (start + len) < start, we wrapped
+        cmp     ax, bx
+        jb      .crossed            ; Wrapped around = crossed
+
+        ; No crossing - DMA is safe
+        pop     bx
         pop     ax
+        clc                         ; CF=0: safe for DMA
         ret
-check_64kb_stub ENDP
+
+.crossed:
+        ; Boundary crossed - caller should use PIO fallback
+        pop     bx
+        pop     ax
+        stc                         ; CF=1: force PIO fallback
+        ret
 
 ;-----------------------------------------------------------------------------
 ; PIO fallback stub - Redirect to PIO when DMA is disabled
 ; Preserves: All registers
 ; Size: ~20 bytes
 ;-----------------------------------------------------------------------------
-pio_fallback_stub PROC NEAR
+pio_fallback_stub:
         push    ax
         push    dx
-        
+
         ; Redirect to PIO implementation
         call    pio_transfer        ; Implement PIO transfer
-        
+
         pop     dx
         pop     ax
         ret
-pio_fallback_stub ENDP
 
 ;-----------------------------------------------------------------------------
 ; Safe interrupt disable - Handles V86/IOPL correctly
 ; Size: ~60 bytes (286-compatible with 386+ enhancements)
 ;-----------------------------------------------------------------------------
-safe_disable_interrupts PROC NEAR
+safe_disable_interrupts:
         push    ax
         push    dx
-        
+
         ; Check CPU type
-        cmp     BYTE PTR [_cpu_type], CPU_386
+        cmp     byte [_cpu_type], CPU_386
         jb      .use_cli            ; 286 or below - simple CLI
-        
+
         ; 386+ - Need to check V86 mode
-        .386
+        cpu 386
         pushfd
         pop     eax
         test    eax, 00020000h      ; Check VM bit (17)
         jz      .use_cli_386        ; Not in V86
-        
+
         ; Check IOPL
         mov     edx, eax
         shr     edx, 12
         and     edx, 3              ; Extract IOPL bits
         cmp     dl, 3
         je      .use_cli_386        ; IOPL=3, can use CLI
-        
+
         ; V86 with IOPL<3 - mask at device
-        .286
+        cpu 286
         mov     dx, [_nic_io_base]
         add     dx, INT_MASK_REG
         in      al, dx
         mov     [_saved_int_mask], al
         or      al, 0FFh            ; Mask all interrupts
         out     dx, al
-        mov     BYTE PTR [_mask_method], 1
+        mov     byte [_mask_method], 1
         jmp     .done
-        
+
 .use_cli_386:
-        .286
+        cpu 286
 .use_cli:
         cli
-        mov     BYTE PTR [_mask_method], 0
-        
+        mov     byte [_mask_method], 0
+
 .done:
         pop     dx
         pop     ax
         ret
-safe_disable_interrupts ENDP
 
 ;-----------------------------------------------------------------------------
 ; Safe interrupt enable - Restores previous state
 ; Size: ~35 bytes
 ;-----------------------------------------------------------------------------
-safe_enable_interrupts PROC NEAR
+safe_enable_interrupts:
         push    ax
         push    dx
-        
-        cmp     BYTE PTR [_mask_method], 0
+
+        cmp     byte [_mask_method], 0
         je      .use_sti
-        
+
         ; Restore device mask
         mov     dx, [_nic_io_base]
         add     dx, INT_MASK_REG
         mov     al, [_saved_int_mask]
         out     dx, al
         jmp     .done
-        
+
 .use_sti:
         sti
-        
+
 .done:
         pop     dx
         pop     ax
         ret
-safe_enable_interrupts ENDP
 
 ;-----------------------------------------------------------------------------
 ; Serialize after SMC - Proper serialization for 286-Pentium
 ; Size: ~45 bytes
 ;-----------------------------------------------------------------------------
-serialize_after_smc PROC NEAR
+serialize_after_smc:
         ; Flush prefetch queue
-        jmp     $+2
-        
+        jmp     short $+2
+
         ; Check CPU type for serialization method
-        cmp     BYTE PTR [_cpu_type], CPU_486
+        cmp     byte [_cpu_type], CPU_486
         jb      .use_far_ret        ; 286/386 - use far return
-        
+
         ; 486+ - Check for CPUID
         call    check_cpuid_available
         test    ax, ax
         jz      .use_far_ret
-        
+
         ; CPUID available - use it for serialization
-        .486
+        cpu 486
         xor     eax, eax
         cpuid
-        .286
+        cpu 286
         ret
-        
+
 .use_far_ret:
         ; Far return to serialize on 286/386/486-without-CPUID
         push    cs
-        push    OFFSET .serialized
+        push    word .serialized
         retf
 .serialized:
         ret
-serialize_after_smc ENDP
 
 ;-----------------------------------------------------------------------------
 ; Check CPUID availability (286-safe)
 ; Returns: AX = 1 if CPUID available, 0 if not
 ; Size: ~50 bytes
 ;-----------------------------------------------------------------------------
-check_cpuid_available PROC NEAR
+check_cpuid_available:
         ; First check if we're on 386+
-        cmp     BYTE PTR [_cpu_type], CPU_386
+        cmp     byte [_cpu_type], CPU_386
         jb      .no_cpuid           ; 286 - no CPUID
-        
+
         ; 386+ - Check EFLAGS.ID bit
-        .386
+        cpu 386
         pushfd
         pop     eax
         mov     ecx, eax            ; Save original
-        
+
         xor     eax, 00200000h      ; Toggle ID bit (21)
         push    eax
         popfd                       ; Try to set it
-        
+
         pushfd
         pop     eax                 ; Read back
-        
+
         push    ecx
         popfd                       ; Restore original
-        
+
         xor     eax, ecx            ; Check if bit toggled
         and     eax, 00200000h
         jz      .no_cpuid_386
-        
+
         mov     ax, 1               ; CPUID available
-        jmp     .done_386
-        
+        jmp     short .done_386
+
 .no_cpuid_386:
         xor     ax, ax              ; No CPUID
-        
+
 .done_386:
-        .286
+        cpu 286
         ret
-        
+
 .no_cpuid:
         xor     ax, ax
         ret
-check_cpuid_available ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: Get available VDS buffer
 ; Returns: AX = buffer index, or -1 if none available
 ;-----------------------------------------------------------------------------
-get_vds_buffer PROC NEAR
+get_vds_buffer:
         push    bx
         push    cx
-        
+
         xor     ax, ax
         mov     cx, 32              ; VDS_POOL_SIZE
-        
+
 .search:
         mov     bx, ax
         shl     bx, 4               ; Multiply by struct size
-        cmp     BYTE PTR [_vds_pool + bx + 14], 0  ; Check in_use flag
+        cmp     byte [_vds_pool + bx + 14], 0  ; Check in_use flag
         je      .found
-        
+
         inc     ax
         loop    .search
-        
+
         mov     ax, -1              ; No buffer available
-        jmp     .done
-        
+        jmp     short .done
+
 .found:
         ; AX contains buffer index
-        
+
 .done:
         pop     cx
         pop     bx
         ret
-get_vds_buffer ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: Release VDS buffer
+;
+; Releases a VDS buffer back to the pool by matching physical address
+; and clearing the in_use flag.
+;
+; Input:  DX:AX = physical address of buffer to release
+; Output: CF = 0 if buffer found and released
+;         CF = 1 if buffer not found in pool
+; Preserves: All registers except flags
+;
+; VDS pool entry structure (16 bytes per entry):
+;   offset 0:  physical_addr (4 bytes)
+;   offset 14: flags         (1 byte) - Bit 0: in_use
 ;-----------------------------------------------------------------------------
-release_vds_buffer PROC NEAR
-        ; TODO: Find buffer by address and clear in_use flag
+release_vds_buffer:
+        push    ax
+        push    bx
+        push    cx
+        push    dx
+        push    si
+
+        ; Search through VDS pool for matching physical address
+        xor     cx, cx              ; Entry counter
+        mov     si, _vds_pool       ; SI = pool base address
+
+.search_loop:
+        cmp     cx, 32              ; VDS_POOL_SIZE = 32
+        jae     .not_found
+
+        ; Check if this entry matches our physical address
+        ; Compare low word first (offset 0)
+        cmp     ax, [si]
+        jne     .next_entry
+
+        ; Compare high word (offset 2)
+        cmp     dx, [si+2]
+        jne     .next_entry
+
+        ; Match found - clear in_use flag (offset 14)
+        and     byte [si+14], 0FEh  ; Clear bit 0 (in_use)
+
+        ; Success
+        pop     si
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        clc                         ; CF=0: success
         ret
-release_vds_buffer ENDP
+
+.next_entry:
+        add     si, 16              ; Move to next entry (16 bytes per struct)
+        inc     cx
+        jmp     .search_loop
+
+.not_found:
+        ; Buffer not found in pool - this is an error condition
+        pop     si
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        stc                         ; CF=1: not found
+        ret
 
 ;-----------------------------------------------------------------------------
 ; Helper: Get bounce buffer
 ; Returns: AX = segment of bounce buffer
 ;-----------------------------------------------------------------------------
-get_bounce_buffer PROC NEAR
+get_bounce_buffer:
         ; For now, return first bounce buffer
         ; TODO: Implement proper pool management
-        mov     ax, SEG _bounce_pool
+        mov     ax, _bounce_pool
+        shr     ax, 4               ; Convert to segment (assuming aligned)
         ret
-get_bounce_buffer ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: Get RX bounce buffer
 ; Returns: AX = segment of bounce buffer used for RX
 ;-----------------------------------------------------------------------------
-get_rx_bounce_buffer PROC NEAR
+get_rx_bounce_buffer:
         ; For now, return first bounce buffer
         ; TODO: Track which buffer was used for RX
-        mov     ax, SEG _bounce_pool
+        mov     ax, _bounce_pool
+        shr     ax, 4               ; Convert to segment (assuming aligned)
         ret
-get_rx_bounce_buffer ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: Release bounce buffer
 ;-----------------------------------------------------------------------------
-release_bounce_buffer PROC NEAR
+release_bounce_buffer:
         ; TODO: Implement proper pool management
         ret
-release_bounce_buffer ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: Use bounce buffer for 64KB crossing
 ;-----------------------------------------------------------------------------
-use_bounce_for_64kb PROC NEAR
+use_bounce_for_64kb:
         ; TODO: Switch to bounce buffer
         ret
-use_bounce_for_64kb ENDP
 
 ;-----------------------------------------------------------------------------
 ; Helper: PIO transfer implementation
+; Uses pre-set I/O handler from dispatch table for CPU-adaptive transfers.
+;
+; Input:  ES:DI = destination buffer
+;         CX = word count
+;         [_nic_io_base] = NIC I/O base address
+; Output: ES:DI advanced by bytes transferred
+; Uses:   AX, CX, DX, DI
 ;-----------------------------------------------------------------------------
-pio_transfer PROC NEAR
-        ; TODO: Implement PIO data transfer
-        ret
-pio_transfer ENDP
+pio_transfer:
+        push    ax
+        push    dx
 
-END
+        ; Get NIC I/O base address
+        mov     dx, [_nic_io_base]
+        ; Note: For 3C509B/3C515, RX FIFO is at base+0 (offset 0)
+
+        ; Clear direction flag for forward string ops
+        cld
+
+        ; Call pre-set I/O handler from dispatch table
+        ; The handler expects: ES:DI = dest, DX = port, CX = word count
+        ; insw_handler is set by init_io_dispatch() in nicirq.asm
+        extern  insw_handler
+        call    [insw_handler]
+
+        pop     dx
+        pop     ax
+        ret

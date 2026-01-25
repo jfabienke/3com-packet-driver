@@ -14,23 +14,24 @@
 ;; - NIC interrupt acknowledged before PIC EOI to prevent re-triggering
 ;;
 ;; Constraints:
-;; - ISR execution <100μs
+;; - ISR execution <100us
 ;; - No reentrancy (protected)
 ;; - Proper EOI to PIC (slave before master for IRQ>=8)
 ;; - All segment registers preserved (including ES)
 ;; - BP preserved for stack frame compatibility
+;;
+;; Converted to NASM syntax - 2026-01-23
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-        .8086                           ; Base compatibility
-        .model small
-        .386                            ; Enable 386+ instructions (SHR imm, REP INS/OUTS)
+        bits 16
+        cpu 386                         ; Enable 386+ instructions (SHR imm, REP INS/OUTS)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; CPU Optimization Constants and Macros
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; External CPU optimization level from packet_ops.asm
-EXTRN current_cpu_opt:BYTE
+extern current_cpu_opt
 
 ; CPU optimization level constants (must match packet_ops.asm)
 OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
@@ -47,9 +48,9 @@ OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
 ; 38-cycle per-call CPU detection overhead. The handler is set during init
 ; by init_io_dispatch() based on detected CPU type.
 ;------------------------------------------------------------------------------
-INSW_SAFE MACRO
+%macro INSW_SAFE 0
         call [insw_handler]     ; 8 cycles vs 38 cycles for inline detection
-ENDM
+%endmacro
 
 ;------------------------------------------------------------------------------
 ; INSB_SAFE - Input single byte from port (always 8086-compatible)
@@ -57,10 +58,10 @@ ENDM
 ; Input: ES:DI = dest buffer, DX = port
 ; Clobbers: AL, DI
 ;------------------------------------------------------------------------------
-INSB_SAFE MACRO
+%macro INSB_SAFE 0
         in al, dx               ; AL = byte from port
         stosb                   ; [ES:DI] = AL, DI += 1
-ENDM
+%endmacro
 
 ;------------------------------------------------------------------------------
 ; REP_INSB_SAFE - Input byte array from port (8086-compatible)
@@ -72,24 +73,23 @@ ENDM
 ; otherwise fall back to word handler with byte conversion. The insw_8086_byte_mode
 ; routine provides optimized byte-at-a-time transfer for small packets.
 ;------------------------------------------------------------------------------
-REP_INSB_SAFE MACRO
-        LOCAL use_insb, insb_loop, done
+%macro REP_INSB_SAFE 0
         push bx
         mov bl, [current_cpu_opt]
         test bl, OPT_16BIT
         pop bx
-        jnz use_insb
+        jnz %%use_insb
         ;; 8086 path: manual loop (kept for byte-mode flexibility)
-        jcxz done
-insb_loop:
+        jcxz %%done
+%%insb_loop:
         in al, dx
         stosb
-        loop insb_loop
-        jmp short done
-use_insb:
+        loop %%insb_loop
+        jmp short %%done
+%%use_insb:
         rep insb
-done:
-ENDM
+%%done:
+%endmacro
 
 ;------------------------------------------------------------------------------
 ; SHR_SAFE - Shift right by immediate count (8086-compatible)
@@ -106,7 +106,7 @@ ENDM
 ; 2. Software cache touch (shr cx, 5) requires 386+ CPU
 ; Neither code path will execute on 8086/8088 systems.
 
-        .code
+segment _TEXT class=CODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Module Header (64 bytes)
@@ -114,7 +114,7 @@ ENDM
         align 16
 module_header:
 nic_irq_module_header:                  ; Export for C code
-        public  nic_irq_module_header   ; Make visible to patch_apply.c
+        global  nic_irq_module_header   ; Make visible to patch_apply.c
         db      'PKTDRV',0              ; 7+1 bytes: Signature
         db      1, 0                    ; 2 bytes: Version 1.0
         dw      hot_section_start       ; 2 bytes: Hot start
@@ -127,7 +127,7 @@ nic_irq_module_header:                  ; Export for C code
         dw      2*1024                  ; 2 bytes: Required memory (2KB)
         db      2                       ; 1 byte: Min CPU (286)
         db      0                       ; 1 byte: NIC type (any)
-        db      37 dup(0)               ; 37 bytes: Reserved
+        times 37 db 0                   ; 37 bytes: Reserved
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; HOT SECTION - Resident interrupt handlers
@@ -136,17 +136,17 @@ nic_irq_module_header:                  ; Export for C code
 hot_section_start:
 
         ; Public exports
-        public  nic_irq_handler
-        public  nic_3c509_handler
-        public  nic_3c515_handler
-        public  PATCH_3c515_transfer    ; Export patch point
-        public  PATCH_dma_boundary_check ; Export patch point
-        public  PATCH_cache_flush_pre    ; Export patch point
-        public  PATCH_cache_flush_post   ; Export patch point
+        global  nic_irq_handler
+        global  nic_3c509_handler
+        global  nic_3c515_handler
+        global  PATCH_3c515_transfer    ; Export patch point
+        global  PATCH_dma_boundary_check ; Export patch point
+        global  PATCH_cache_flush_pre    ; Export patch point
+        global  PATCH_cache_flush_post   ; Export patch point
 
         ; External references
-        extern  packet_isr_receive:near
-        extern  statistics:byte
+        extern  packet_isr_receive
+        extern  statistics
 
         ; Constants
         ISR_REENTRY_FLAG    equ 0x01
@@ -162,11 +162,11 @@ nic_irq_handler:
         push    ax
         push    dx
         push    ds
-        
+
         ; CRITICAL: Establish data segment for accessing driver variables
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax                  ; DS = _DATA for variable access
-        
+
         ; Quick ownership check - is this interrupt for us?
         mov     dx, [nic_io_base]       ; Access from data segment
         add     dx, 0x0E                ; INT_STATUS register (16-bit on 3C509B/515)
@@ -190,18 +190,18 @@ nic_irq_handler:
         jz      irq_check_tx_fast
 
         ; Minimal RX acknowledgment
-        inc     word ptr [rx_ack_count] ; Update counter
+        inc     word [rx_ack_count] ; Update counter
 
 irq_check_tx_fast:
         test    ax, 0x0002              ; TX_COMPLETE?
         jz      irq_fast_done
 
         ; Minimal TX acknowledgment
-        inc     word ptr [tx_ack_count] ; Update counter
+        inc     word [tx_ack_count] ; Update counter
 
 irq_fast_done:
         ; Send EOI and exit fast path
-        cmp     byte ptr [effective_nic_irq], 8
+        cmp     byte [effective_nic_irq], 8
         jb      irq_fast_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC
@@ -216,7 +216,7 @@ irq_fast_master_only:
 
 irq_not_ours:
         ; Not our interrupt but MUST still send EOI for spurious interrupts
-        cmp     byte ptr [effective_nic_irq], 8
+        cmp     byte [effective_nic_irq], 8
         jb      irq_not_ours_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC
@@ -238,11 +238,11 @@ irq_complex_interrupt:
         push    bp
         push    ds
         push    es
-        
+
         ; Set up data segment
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
-        
+
         ; Clear direction flag for any string operations
         cld
 
@@ -250,18 +250,18 @@ irq_complex_interrupt:
         ; Save caller's stack
         mov     [saved_ss], ss
         mov     [saved_sp], sp
-        
+
         ; Switch to our private stack
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ss, ax                      ; Stack segment = data segment
-        mov     sp, OFFSET isr_stack_top    ; Top of our private stack
+        mov     sp, isr_stack_top           ; Top of our private stack
 
         ; Check for reentrancy
-        test    byte ptr [isr_flags], ISR_REENTRY_FLAG
-        jnz     .already_in_isr
+        test    byte [isr_flags], ISR_REENTRY_FLAG
+        jnz     nic_irq_already_in_isr
 
         ; Mark ISR active
-        or      byte ptr [isr_flags], ISR_REENTRY_FLAG
+        or      byte [isr_flags], ISR_REENTRY_FLAG
 
         ; PATCH POINT: NIC-specific dispatch
 PATCH_nic_dispatch:
@@ -273,18 +273,18 @@ PATCH_nic_dispatch:
         ; 3C515: call nic_3c515_handler
 
         ; Clear ISR active flag
-        and     byte ptr [isr_flags], not ISR_REENTRY_FLAG
+        and     byte [isr_flags], ~ISR_REENTRY_FLAG
 
 nic_irq_send_eoi:
         ; Send EOI to PIC (constraint requirement)
         ; CRITICAL: Must send to slave BEFORE master for IRQ >= 8
-        cmp     byte ptr [effective_nic_irq], 8
+        cmp     byte [effective_nic_irq], 8
         jb      nic_irq_master_only
-        
+
         ; Slave PIC - send EOI to slave first
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC FIRST
-        
+
 nic_irq_master_only:
         ; Master PIC - always send
         mov     al, 20h
@@ -309,7 +309,7 @@ nic_irq_done:
 
 nic_irq_already_in_isr:
         ; Already processing, just acknowledge and exit
-        inc     word ptr [reentry_count]
+        inc     word [reentry_count]
         jmp     nic_irq_send_eoi
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -340,7 +340,7 @@ nic_3c509_handler:
 
         ; CRITICAL: Set up segments for data access
         ; Both packet_buffer and variables are in _DATA segment
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax                  ; DS = data segment for variables
         mov     es, ax                  ; ES = data segment for packet_buffer
 
@@ -363,7 +363,7 @@ PATCH_pio_batch_init:
         mov     cx, 8                   ; Default; SMC-patched per CPU (B9 imm16 90 90)
         nop
         nop
-        mov     word ptr [packet_budget], cx
+        mov     word [packet_budget], cx
 
         ; 286 OPTIMIZATION: Align loop entry for prefetch
         align   4
@@ -402,7 +402,7 @@ c509_rx_loop:
         jz      c509_rx_fifo_empty      ; No more packets - exit RX loop early
 
         ; Also check packet budget before processing
-        cmp     word ptr [packet_budget], 0
+        cmp     word [packet_budget], 0
         jle     c509_check_tx_int       ; Budget exhausted
 
         ; Check for RX errors
@@ -415,7 +415,7 @@ c509_rx_loop:
         add     dx, 0x0E                ; COMMAND register
         mov     ax, 0x4000              ; RX_DISCARD
         out     dx, ax
-        inc     word ptr [rx_errors]
+        inc     word [rx_errors]
         jmp     c509_rx_next
 
 c509_rx_good:
@@ -430,14 +430,14 @@ c509_rx_good:
         ; Read packet data from FIFO (optimized for 16-bit FIFO)
         push    cx                      ; Save packet budget counter
         mov     cx, ax                  ; Total byte count
-        mov     di, offset packet_buffer ; ES:DI -> destination buffer (ES=_DATA)
+        mov     di, packet_buffer       ; ES:DI -> destination buffer (ES=_DATA)
         ; 286 OPT: Use BP cache instead of memory read
         mov     dx, bp                  ; DX = cached nic_io_base (2 cy vs 8 cy)
         ; add     dx, 0x00              ; RX_DATA register (FIFO) - offset 0, no add needed
 
         ;-----------------------------------------------------------------------
         ; 8086 OPTIMIZATION: Use byte-mode I/O for small packets (<64 bytes)
-        ; On 8088's 8-bit bus, byte I/O is faster for small transfers:
+        ; On 8088's 8-bit bus, byte I/O can be faster for small transfers:
         ; - Word mode: IN AX (15cy) + STOSW (9cy) / 2 bytes = 12 cycles/byte
         ; - Byte mode: IN AL (12cy) + STOSB (5cy) / 1 byte = 17 cycles/byte
         ; However, word mode has loop overhead (17cy/iter), so for small packets
@@ -531,15 +531,15 @@ c509_read_done:
         mov     al, [current_nic_index]
         xor     ah, ah
         push    ax
-        push    word ptr [packet_length]; Packet size
-        mov     ax, offset packet_buffer
+        push    word [packet_length]; Packet size
+        mov     ax, packet_buffer
         push    ax                      ; Pointer to packet data
         call    packet_isr_receive
         add     sp, 6                   ; Clean up 3 args
         pop     cx                      ; Restore packet budget counter
 
         ; Successfully received
-        inc     word ptr [packets_received]
+        inc     word [packets_received]
 
 c509_rx_discard:
         ; Discard packet from FIFO (required to advance)
@@ -551,7 +551,7 @@ c509_rx_discard:
 
 c509_rx_next:
         ; Check for more RX packets (up to batch limit)
-        dec     word ptr [packet_budget]
+        dec     word [packet_budget]
         jnz     c509_rx_loop
 
 c509_rx_fifo_empty:
@@ -565,7 +565,7 @@ c509_check_tx_int:
         jz      c509_check_errors               ; Skip if TX bit not set
 
         ; TX bit is set - acknowledge TX completion
-        inc     word ptr [packets_sent]
+        inc     word [packets_sent]
 
 c509_check_errors:
         ; Handle any error interrupts
@@ -574,7 +574,7 @@ c509_check_errors:
         jz      c509_continue_mitigation        ; Skip if error bit not set
 
         ; Error bit is set - log error and attempt recovery
-        inc     word ptr [adapter_errors]
+        inc     word [adapter_errors]
         call    reset_adapter_minimal
 
 c509_continue_mitigation:
@@ -583,7 +583,7 @@ c509_continue_mitigation:
         jae     c509_mitigation_done
 
         ; Check if we've processed maximum packets
-        cmp     word ptr [packet_budget], 0
+        cmp     word [packet_budget], 0
         jle     c509_mitigation_done
 
         ; Loop back to check for more pending interrupts
@@ -593,19 +593,19 @@ c509_mitigation_done:
         ; Update mitigation statistics
         cmp     bx, 1
         jbe     c509_no_mitigation
-        inc     word ptr [interrupts_mitigated]
-        add     word ptr [mitigation_savings], bx
+        inc     word [interrupts_mitigated]
+        add     word [mitigation_savings], bx
 
 c509_no_mitigation:
         ; Send EOI to PIC before returning
-        cmp     byte ptr [effective_nic_irq], 8
+        cmp     byte [effective_nic_irq], 8
         jb      c509_handler_master_only
         mov     al, 20h
         out     0A0h, al                ; EOI to slave PIC first
 c509_handler_master_only:
         mov     al, 20h
         out     20h, al                 ; EOI to master PIC
-        
+
         ; Restore all registers
         pop     es                      ; Restore ES
         pop     ds
@@ -626,12 +626,12 @@ nic_3c515_handler:
         push    si
         push    ds
         push    es
-        
+
         ; Set up segments
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
         mov     es, ax
-        
+
         ; Use internal ASM mitigation path unconditionally (no C in ISR)
 c515_use_legacy:
         ; Check interrupt status
@@ -678,7 +678,7 @@ PATCH_3c515_transfer:
         pop     si
 
         ; Mark descriptor as processed
-        and     word ptr [si], 0x7FFF   ; Clear OWN bit
+        and     word [si], 0x7FFF   ; Clear OWN bit
 
         ; Advance ring pointer
         add     si, 8                   ; Next descriptor
@@ -695,11 +695,11 @@ c515_rx_ring_done:
 
 nic_3c515_check_tx:
         ; Check for TX complete
-        test    word ptr [int_status], 0x0004  ; TX_COMPLETE
+        test    word [int_status], 0x0004  ; TX_COMPLETE
         jz      nic_3c515_ack_irq
 
         ; Update TX statistics
-        inc     word ptr [packets_sent]
+        inc     word [packets_sent]
 
         ; Free TX buffer
         call    free_tx_buffer
@@ -721,14 +721,14 @@ nic_3c515_done:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Transfer Methods (Patchable)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        public  transfer_pio
+        global  transfer_pio
 transfer_pio:
         ; Programmed I/O transfer
         ; On 8086, SMC is disabled so REP_INSB_SAFE provides fallback
         push    dx
         push    di
 
-        mov     di, offset packet_buffer
+        mov     di, packet_buffer
         mov     dx, [nic_io_base]
 
         ; PATCH POINT: Optimized PIO
@@ -745,7 +745,7 @@ PATCH_pio_loop:
         pop     dx
         ret
 
-        public  transfer_dma
+        global  transfer_dma
 transfer_dma:
         ; DMA transfer (3C515 only)
         push    ax
@@ -862,7 +862,7 @@ dma_boundary_crossed:
         pop     ax                      ; Restore original address
         pop     bx
         ; Boundary crossed - use bounce buffer
-        inc     word ptr [dma_boundary_hits]
+        inc     word [dma_boundary_hits]
         call    allocate_bounce_buffer
         jc      dma_check_pio_fallback
         jmp     dma_boundary_ok
@@ -887,11 +887,66 @@ dma_check_pio_fallback:
         stc                             ; Error - use PIO
         ret
 
-; Allocate bounce buffer for DMA
+; Allocate bounce buffer for DMA (RX path)
+;
+; Called when DMA boundary crossing detected. Gets a pre-allocated
+; bounce buffer from the C pool (dmabnd.c) that is guaranteed to:
+; - Be in conventional memory (<640KB)
+; - Not cross 64KB boundaries
+; - Be within ISA 24-bit DMA limit
+;
+; Input:  [packet_length] = size needed
+; Output: CF = 0 if success, DX:AX = physical address of bounce buffer
+;         CF = 1 if failure (no buffer available, force PIO)
+; Uses:   AX, BX, CX, DX
+;
 allocate_bounce_buffer:
-        ; This would interface with dma_safety.c bounce buffer pool
-        ; For now, return error to force PIO
-        stc
+        push    bx
+        push    cx
+
+        ; Call C function: void* dma_get_rx_bounce_buffer(size_t size)
+        ; Push size argument (small model, near call)
+        mov     ax, [packet_length]
+        push    ax
+        extern  _dma_get_rx_bounce_buffer
+        call    _dma_get_rx_bounce_buffer
+        add     sp, 2               ; Clean up argument
+
+        ; Check if allocation succeeded (AX = pointer or NULL)
+        test    ax, ax
+        jz      .alloc_failed
+
+        ; Convert returned near pointer to physical address
+        ; In small model, pointer is in default data segment
+        ; Physical = (DS * 16) + offset
+        push    ax                  ; Save offset
+        mov     bx, ds
+        xor     dx, dx
+        mov     cx, 4
+
+.shift_loop:
+        shl     bx, 1
+        rcl     dx, 1
+        loop    .shift_loop
+
+        pop     ax                  ; Restore offset
+        add     ax, bx              ; Add segment * 16 to offset
+        adc     dx, 0               ; Carry to high word
+
+        ; Store bounce buffer address for later copy-back
+        mov     [bounce_buffer_phys], ax
+        mov     [bounce_buffer_phys+2], dx
+
+        pop     cx
+        pop     bx
+        clc                         ; CF=0: success
+        ret
+
+.alloc_failed:
+        ; No bounce buffer available - force PIO fallback
+        pop     cx
+        pop     bx
+        stc                         ; CF=1: failure
         ret
 
 ;==============================================================================
@@ -915,17 +970,17 @@ cache_flush_clflush:
         push    cx
         push    di
         push    es
-        
+
         ; Get segment:offset of buffer (not physical address)
         mov     ax, [packet_buffer_seg]
         mov     es, ax
         mov     di, [packet_buffer_off]
-        
+
         ; Align DI down to 64-byte boundary
         mov     bx, di
         and     bx, 63                  ; Get misalignment amount
         sub     di, bx                  ; Align down to cache line
-        
+
         ; Calculate number of cache lines to flush
         ; Lines = (length + misalignment + 63) / 64
         mov     cx, [packet_length]
@@ -952,8 +1007,8 @@ clflush_no_wrap:
         loop    clflush_loop
 
 clflush_done:
-        inc     word ptr [cache_flushes]
-        
+        inc     word [cache_flushes]
+
         pop     es
         pop     di
         pop     cx
@@ -964,7 +1019,7 @@ clflush_done:
 ; Cache flush using WBINVD (486+)
 cache_flush_wbinvd:
         db      0Fh, 09h                ; WBINVD instruction
-        inc     word ptr [cache_flushes]
+        inc     word [cache_flushes]
         ret
 
 ; Software cache management (386)
@@ -984,7 +1039,7 @@ cache_sw_touch_loop:
         add     si, 32                  ; Next cache line
         loop    cache_sw_touch_loop
 
-        inc     word ptr [cache_flushes]
+        inc     word [cache_flushes]
 
         pop     ax
         pop     cx
@@ -1011,11 +1066,11 @@ reset_delay_loop:
         nop
         loop    reset_delay_loop
         pop     cx
-        
+
         ; Re-enable receiver and transmitter
         mov     ax, 0x0101              ; RX_ENABLE | TX_ENABLE
         out     dx, ax
-        
+
         pop     dx
         pop     ax
         ret
@@ -1025,7 +1080,7 @@ reset_delay_loop:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 generic_nic_handler:
         ; Should never be called after patching
-        inc     word ptr [unhandled_irqs]
+        inc     word [unhandled_irqs]
         ret
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1046,8 +1101,8 @@ generic_nic_handler:
 ; Just REP INSW + RET = 2 bytes of code, minimal overhead
 ; No dispatch, no checks - pure string I/O
 ;------------------------------------------------------------------------------
-        public  insw_186
-        public  insw_286_direct
+        global  insw_186
+        global  insw_286_direct
 insw_186:
 insw_286_direct:                        ; Alias for 286-specific documentation
         rep insw                        ; 186+ string I/O, ~4 cycles/word
@@ -1061,7 +1116,7 @@ insw_286_direct:                        ; Alias for 286-specific documentation
 ; Unrolled 4x:   4*(IN AX + STOSW) + SUB + JA = 4*24+7 = 103 cycles/4 words
 ;                = 25.75 cycles/word (37% faster)
 ;------------------------------------------------------------------------------
-        public  insw_8086_unrolled
+        global  insw_8086_unrolled
 insw_8086_unrolled:
         ; Handle small counts (< 4 words) directly
         cmp     cx, 4
@@ -1099,8 +1154,8 @@ insw_8086_done:
 ; Just REP OUTSW + RET = 2 bytes of code, minimal overhead
 ; No dispatch, no checks - pure string I/O
 ;------------------------------------------------------------------------------
-        public  outsw_186
-        public  outsw_286_direct
+        global  outsw_186
+        global  outsw_286_direct
 outsw_186:
 outsw_286_direct:                       ; Alias for 286-specific documentation
         rep outsw                       ; 186+ string I/O, ~4 cycles/word
@@ -1120,7 +1175,7 @@ outsw_286_direct:                       ; Alias for 286-specific documentation
 ; NOTE: This is optimized for bulk transfers. For transfers < 4 bytes,
 ;       callers should use outsw_286_direct or individual OUT instructions.
 ;------------------------------------------------------------------------------
-        public  outsd_386_direct
+        global  outsd_386_direct
 outsd_386_direct:
         db      66h                     ; 32-bit operand prefix
         rep outsd                       ; 386+ string I/O, 32 bits at a time
@@ -1133,7 +1188,7 @@ outsd_386_direct:
 ; Input: ES:DI = dest buffer, DX = port, CX = DWORD count (NOT byte/word!)
 ; Clobbers: EAX, ECX, EDI
 ;------------------------------------------------------------------------------
-        public  insd_386_direct
+        global  insd_386_direct
 insd_386_direct:
         db      66h                     ; 32-bit operand prefix
         rep insd                        ; 386+ string I/O, 32 bits at a time
@@ -1149,7 +1204,7 @@ insd_386_direct:
 ; Input: DS:SI = source buffer, DX = port, CX = WORD count (same as 286 handler)
 ; Clobbers: EAX, ECX, ESI
 ;------------------------------------------------------------------------------
-        public  outsw_386_wrapper
+        global  outsw_386_wrapper
 outsw_386_wrapper:
         ; Convert word count to DWORD count: 2 words = 1 DWORD
         push    ax
@@ -1179,7 +1234,7 @@ outsw_386_done:
 ; Input: ES:DI = dest buffer, DX = port, CX = WORD count (same as 286 handler)
 ; Clobbers: EAX, ECX, EDI
 ;------------------------------------------------------------------------------
-        public  insw_386_wrapper
+        global  insw_386_wrapper
 insw_386_wrapper:
         ; Convert word count to DWORD count
         push    ax
@@ -1206,7 +1261,7 @@ insw_386_done:
 ; Input: DS:SI = source buffer, DX = port, CX = word count
 ; Clobbers: AX, CX, SI
 ;------------------------------------------------------------------------------
-        public  outsw_8086_unrolled
+        global  outsw_8086_unrolled
 outsw_8086_unrolled:
         ; Handle small counts (< 4 words) directly
         cmp     cx, 4
@@ -1241,7 +1296,7 @@ outsw_8086_done:
 ; On 8088 (8-bit bus), byte I/O can be faster for small transfers
 ; Input: ES:DI = dest buffer, DX = port, CX = BYTE count (not words!)
 ;------------------------------------------------------------------------------
-        public  insw_8086_byte_mode
+        global  insw_8086_byte_mode
 insw_8086_byte_mode:
         jcxz    byte_mode_done
 byte_mode_loop:
@@ -1268,7 +1323,7 @@ byte_mode_done:
 ; with existing callers that pass word counts. They handle odd word counts
 ; by transferring the remainder with 16-bit I/O.
 ;------------------------------------------------------------------------------
-        public  init_io_dispatch
+        global  init_io_dispatch
 init_io_dispatch:
         push    ax
         push    bx
@@ -1278,8 +1333,8 @@ init_io_dispatch:
         jnz     dispatch_setup_186_plus
 
         ; 8086 path: use unrolled loops (37% faster than simple loop)
-        mov     word ptr [insw_handler], offset insw_8086_unrolled
-        mov     word ptr [outsw_handler], offset outsw_8086_unrolled
+        mov     word [insw_handler], insw_8086_unrolled
+        mov     word [outsw_handler], outsw_8086_unrolled
         jmp     dispatch_done
 
 dispatch_setup_186_plus:
@@ -1288,16 +1343,16 @@ dispatch_setup_186_plus:
         jnz     dispatch_setup_386_plus
 
         ; 186/286 path: use REP INSW/OUTSW (tightest possible code)
-        mov     word ptr [insw_handler], offset insw_286_direct
-        mov     word ptr [outsw_handler], offset outsw_286_direct
+        mov     word [insw_handler], insw_286_direct
+        mov     word [outsw_handler], outsw_286_direct
         jmp     dispatch_done
 
 dispatch_setup_386_plus:
         ; 386+ path: use 32-bit I/O wrappers for 2x throughput
         ; These wrappers accept word count (compatible API) but internally
         ; use REP INSD/OUTSD with proper remainder handling
-        mov     word ptr [insw_handler], offset insw_386_wrapper
-        mov     word ptr [outsw_handler], offset outsw_386_wrapper
+        mov     word [insw_handler], insw_386_wrapper
+        mov     word [outsw_handler], outsw_386_wrapper
 
 dispatch_done:
         pop     bx
@@ -1388,17 +1443,17 @@ patch_table:
         ; With 2 packets = ~12ms, better interrupt responsiveness
         db      0B9h, 02h, 00h, 90h, 90h
         ; 286:  PIO=8 (increased from 6 for better interrupt efficiency)
-        ; 286 @ 12 MHz: 8 packets × ~1ms = 8ms ISR time (acceptable)
+        ; 286 @ 12 MHz: 8 packets x ~1ms = 8ms ISR time (acceptable)
         ; 33% better efficiency vs 6 packets (fewer ISR entries/exits)
         db      0B9h, 08h, 00h, 90h, 90h
         ; 386:  PIO=12 (increased from 10 - faster CPU handles more)
-        ; 386 @ 33 MHz: 12 packets × ~300μs = 3.6ms ISR (well within limits)
+        ; 386 @ 33 MHz: 12 packets x ~300us = 3.6ms ISR (well within limits)
         db      0B9h, 0Ch, 00h, 90h, 90h
         ; 486:  PIO=16 (increased from 12 - L1 cache helps)
-        ; 486 @ 66 MHz: 16 packets × ~150μs = 2.4ms ISR (acceptable)
+        ; 486 @ 66 MHz: 16 packets x ~150us = 2.4ms ISR (acceptable)
         db      0B9h, 10h, 00h, 90h, 90h
         ; Pentium: PIO=24 (increased from 16 - dual pipeline very fast)
-        ; Pentium @ 100 MHz: 24 packets × ~80μs = 1.9ms ISR (acceptable)
+        ; Pentium @ 100 MHz: 24 packets x ~80us = 1.9ms ISR (acceptable)
         db      0B9h, 18h, 00h, 90h, 90h
 
         ; Patch: DMA batch size (mov cx, imm16; nop; nop)
@@ -1444,7 +1499,7 @@ patch_count     equ     9
 ;; IRQ Handler Initialization
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 irq_handler_init:
-        public  irq_handler_init
+        global  irq_handler_init
         push    ax
         push    bx
         push    cx
@@ -1454,13 +1509,13 @@ irq_handler_init:
 
         ; Set up data segment first for variable access
         push    ds
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
-        
+
         ; Load NIC IRQ selected during detection
         mov     al, [detected_nic_irq]
         mov     [nic_irq], al
-        
+
         pop     ds
 
         ; Compute effective IRQ (map 2->9)
@@ -1470,7 +1525,7 @@ irq_handler_init:
         mov     dl, 9
 irq_init_have_eff:
         push    ds
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
         mov     [effective_nic_irq], dl
 
@@ -1494,7 +1549,7 @@ irq_init_have_eff:
         cmp     dl, 8                   ; DL still has effective_nic_irq
         jb      irq_init_skip_cascade
         push    ds
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
         push    ax
         pushf
@@ -1503,7 +1558,7 @@ irq_init_have_eff:
         in      al, dx
         test    al, 04h                 ; Check if IRQ2 is masked
         jz      irq_init_cascade_ok     ; Already unmasked, skip
-        mov     byte ptr [cascade_modified], 1  ; Mark that we modified it
+        mov     byte [cascade_modified], 1  ; Mark that we modified it
         and     al, 0FBh                ; Clear bit 2 (unmask IRQ2 cascade)
         out     dx, al
 irq_init_cascade_ok:
@@ -1533,7 +1588,7 @@ irq_init_have_vector:
 
         ; Store old vector in _DATA
         push    ds
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
         mov     [old_vector_off], bx
         mov     [old_vector_seg], es
@@ -1541,7 +1596,7 @@ irq_init_have_vector:
         pop     ds
 
         ; Install new handler (AH=25h expects DS:DX -> handler address)
-        mov     dx, offset nic_irq_handler
+        mov     dx, nic_irq_handler
         push    cs
         pop     ds                      ; DS = CS so DS:DX points to code
         mov     ah, 0x25
@@ -1606,7 +1661,7 @@ mask_irq_done:
 ; Unmask the NIC IRQ line in the PIC IMR (for enable_driver_interrupts)
 ; AL = effective IRQ number (0-15, already mapped 2->9)
 unmask_irq_in_pic:
-        public  unmask_irq_in_pic
+        global  unmask_irq_in_pic
         pushf
         cli                     ; Atomic IMR update
         push    ax
@@ -1650,7 +1705,7 @@ unmask_irq_done:
 
 ; Uninstall IRQ handler and restore previous vector
 irq_handler_uninstall:
-        public  irq_handler_uninstall
+        global  irq_handler_uninstall
         push    ax
         push    bx
         push    cx                      ; Need CX for shift operations
@@ -1658,7 +1713,7 @@ irq_handler_uninstall:
         push    ds
 
         ; Set up data segment
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
 
         ; Keep IRQ masked while restoring
@@ -1685,16 +1740,16 @@ irq_handler_uninstall:
         int     21h
 
         ; Clear tracking variables for idempotency
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
-        mov     byte ptr [installed_vector], 0
-        mov     word ptr [old_vector_off], 0
-        mov     word ptr [old_vector_seg], 0
+        mov     byte [installed_vector], 0
+        mov     word [old_vector_off], 0
+        mov     word [old_vector_seg], 0
 
 uninst_restore_imr_bit:
         ; Restore ONLY our IRQ bit in IMR (preserve other drivers' changes)
         ; NOTE: DS is saved/restored by function prologue/epilogue
-        mov     ax, seg _DATA
+        mov     ax, _DATA
         mov     ds, ax
         mov     al, [effective_nic_irq]
 
@@ -1739,14 +1794,14 @@ uninst_restore_master:
 
 uninst_restore_done:
         ; Restore IRQ2 cascade if we modified it
-        cmp     byte ptr [cascade_modified], 0
+        cmp     byte [cascade_modified], 0
         jz      uninst_skip_cascade
         push    ax
         pushf
         cli
         mov     dx, 021h                ; Master PIC IMR
         in      al, dx
-        test    byte ptr [original_imr_master], 04h  ; Was IRQ2 originally masked?
+        test    byte [original_imr_master], 04h  ; Was IRQ2 originally masked?
         jz      uninst_cascade_unmask
         or      al, 04h                 ; Re-mask IRQ2
         jmp     uninst_cascade_write
@@ -1770,25 +1825,24 @@ cold_section_end:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Binding helper - set IO base, IRQ, and NIC index from C
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        .code
 nic_irq_set_binding:
-        public  nic_irq_set_binding
+        global  nic_irq_set_binding
         ; Args (small model near): [SP+2]=io_base (word), [SP+4]=irq (byte), [SP+6]=nic_index (byte)
         push    bp
         mov     bp, sp
         push    ax
         push    ds
-        
-        mov     ax, seg _DATA
+
+        mov     ax, _DATA
         mov     ds, ax
-        
+
         mov     ax, [bp+4]             ; io_base
         mov     [nic_io_base], ax
         mov     al, [bp+6]             ; irq
         mov     [detected_nic_irq], al
         mov     al, [bp+8]             ; nic_index
         mov     [current_nic_index], al
-        
+
         pop     ds
         pop     ax
         pop     bp
@@ -1797,8 +1851,7 @@ nic_irq_set_binding:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Section
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        .data
-_DATA   segment
+segment _DATA class=DATA
 
         ; Safety flags (set during initialization)
 dma_safety_flags    dw      0
@@ -1820,13 +1873,13 @@ nic_irq             db      0
 nic_io_base         dw      0
 detected_nic_irq    db      0
 current_nic_index   db      0
-        public  current_nic_index
+        global  current_nic_index
 int_status          dw      0
 
         ; CRITICAL FIX: Private ISR stack (2KB)
         ; Prevents stack corruption from other TSRs
         align 16
-isr_private_stack   db      2048 DUP(0)     ; 2KB private stack
+isr_private_stack   times 2048 db 0     ; 2KB private stack
 isr_stack_top       equ     $               ; Top of stack (grows down)
 saved_ss            dw      0               ; Saved caller's SS
 saved_sp            dw      0               ; Saved caller's SP
@@ -1857,7 +1910,7 @@ effective_nic_irq   db      0
         ; 8086 Performance Optimization: Function Dispatch Table
         ; Set during init based on CPU type to eliminate per-call overhead
         ;-----------------------------------------------------------------------
-        public  insw_handler, outsw_handler
+        global  insw_handler, outsw_handler
 insw_handler        dw      0       ; Points to insw_186 or insw_8086_unrolled
 outsw_handler       dw      0       ; Points to outsw_186 or outsw_8086_unrolled
 
@@ -1877,8 +1930,11 @@ packet_budget       dw      0       ; Separate counter for mitigation loop
         ; Aligned to 32-byte cache line boundary for optimal 486+/Pentium performance
         ; This eliminates cache-line splits during DMA transfers and memory copies
         align 32
-packet_buffer       db      1536 dup(?)     ; Max Ethernet frame (1514) + padding to 32-byte multiple
-        public  packet_buffer           ; Export for C code if needed
+packet_buffer       resb    1536            ; Max Ethernet frame (1514) + padding to 32-byte multiple
+        global  packet_buffer           ; Export for C code if needed
+
+        ; Bounce buffer physical address (for RX copy-back)
+bounce_buffer_phys  dd      0               ; Physical address of allocated bounce buffer
 
         ; 3C515 ring buffer pointers
 rx_ring_start       dw      0
@@ -1893,6 +1949,5 @@ dma_desc_len        dw      0
         ; Module size
 module_size         equ     cold_section_end - module_header
 
-_DATA   ends
-
-        end
+        ; External function (needed for 3C515)
+        extern  free_tx_buffer

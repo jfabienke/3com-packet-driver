@@ -320,6 +320,115 @@ SPSC Queue -> Bottom-half processing
 
 ---
 
+## 6.1 TINY ISR FAST PATH
+
+**Location:** `src/asm/nicirq.asm:159-230`
+
+The main interrupt handler implements a "tiny ISR" optimization for the common case:
+
+### Fast Path Design
+
+```asm
+nic_irq_handler:
+    ; Minimal register saves (AX, DX, DS only)
+    push    ax
+    push    dx
+    push    ds
+
+    ; Quick ownership check
+    in      ax, dx          ; Read INT_STATUS
+    test    ax, ax
+    jz      irq_not_ours    ; Not our interrupt
+
+    ; Check if only simple RX/TX bits set (90% of cases)
+    mov     dx, ax
+    and     dx, 0xFFEC      ; Mask OFF simple bits
+    jnz     irq_complex_interrupt  ; Other bits = full handler
+```
+
+**Key Optimizations:**
+- Only 3 registers saved on fast path (vs. 9 for full handler)
+- Bitmask `0xFFEC` detects if only TX_COMPLETE(0x02), TX_AVAIL(0x01), or RX_COMPLETE(0x10) are set
+- Falls through to `irq_complex_interrupt` for adapter failures, link changes, etc.
+- Fast path handles ~90% of interrupts with minimal overhead
+
+---
+
+## 4.1 SMC DISPATCH TABLE
+
+**Location:** `src/asm/nicirq.asm:1318-1441` (`patch_table`)
+
+The Self-Modifying Code (SMC) system uses a patch table for CPU-specific optimizations:
+
+### Patch Table Structure
+
+| Entry | Type | Purpose |
+|-------|------|---------|
+| PATCH_nic_dispatch | ISR | NIC-specific handler dispatch |
+| PATCH_3c509_read | IO | CPU-optimized packet read (REP INSW/INSD) |
+| PATCH_3c515_transfer | ISR | DMA vs PIO transfer selection |
+| PATCH_pio_loop | IO | PIO loop optimization |
+| PATCH_dma_boundary_check | DMA_CHECK | 64KB boundary verification |
+| PATCH_pio_batch_init | ISR | PIO batch size (2-24 based on CPU) |
+| PATCH_dma_batch_init | ISR | DMA batch size (8-48 based on CPU) |
+| PATCH_cache_flush_pre | CACHE_PRE | Pre-DMA cache management |
+| PATCH_cache_flush_post | CACHE_POST | Post-DMA cache invalidation |
+
+### CPU-Specific I/O Handlers
+
+The `init_io_dispatch()` function (lines 1271-1305) sets handler pointers:
+
+| CPU | Handler | Description |
+|-----|---------|-------------|
+| 8086/8088 | `insw_8086_unrolled` | 4x unrolled loop, 37% faster than LOOP |
+| 186/286 | `insw_286_direct` | Pure REP INSW, ~4 cycles/word |
+| 386+ | `insw_386_wrapper` | REP INSD with word-count API, 2x throughput |
+
+---
+
+## 5.1 DEFENSIVE PROGRAMMING IMPLEMENTATION
+
+The driver implements multiple layers of runtime safety:
+
+### 5.1.1 Private ISR Stack (nicirq.asm:1824-1830)
+
+```asm
+isr_private_stack   times 2048 db 0     ; 2KB private stack
+isr_stack_top       equ     $           ; Top of stack (grows down)
+saved_ss            dw      0           ; Saved caller's SS
+saved_sp            dw      0           ; Saved caller's SP
+```
+
+**Purpose:** Prevents stack corruption from other TSRs or applications with limited stack space.
+
+### 5.1.2 Vector Ownership Check (nicirq.asm:172-176)
+
+```asm
+in      ax, dx          ; Read INT_STATUS
+test    ax, ax          ; Any bits set?
+jz      irq_not_ours    ; Not our interrupt - chain or EOI
+```
+
+**Purpose:** Ensures the driver only processes its own interrupts on shared IRQ lines.
+
+### 5.1.3 API Readiness Flag (api.c:60)
+
+The `api_ready` flag gates API calls until full initialization is complete, preventing calls during driver setup.
+
+### 5.1.4 DMA Boundary Detection (nicirq.asm:818-888)
+
+```asm
+check_dma_boundary:
+    ; Check if buffer + length crosses 64KB boundary
+    mov     cx, [packet_length]
+    add     ax, cx
+    jc      dma_boundary_crossed    ; Carry = crossed 64KB
+```
+
+**Current Status:** Boundary detection is complete. Bounce buffer allocation (`allocate_bounce_buffer`) returns error to force PIO fallback. Full bounce buffer integration is **in progress** - see design/SAFESTUB_COMPLETION.md.
+
+---
+
 ## 7. IDENTIFIED STRENGTHS
 
 1. **Modular Design**: Clear separation between layers
@@ -395,8 +504,21 @@ The architecture is **sound and well-implemented**. Key design decisions are app
 
 ---
 
+---
+
+## 11. CROSS-REFERENCES
+
+| Document | Description |
+|----------|-------------|
+| [DESIGN_REVIEW_JAN_2026.md](DESIGN_REVIEW_JAN_2026.md) | Gemini CLI design review with 4 recommendations |
+| [design/SAFESTUB_COMPLETION.md](design/SAFESTUB_COMPLETION.md) | DMA safety stub implementation design |
+| [architecture/benchmarks/IO_MODE_BENCHMARKING.md](architecture/benchmarks/IO_MODE_BENCHMARKING.md) | 8086 byte-mode I/O benchmark results (planned) |
+
+---
+
 ## REVISION HISTORY
 
 | Date | Change |
 |------|--------|
 | Dec 2024 | Initial architecture review completed |
+| Jan 2026 | Added Tiny ISR (6.1), SMC Dispatch Table (4.1), Defensive Programming (5.1), cross-references (11) |
