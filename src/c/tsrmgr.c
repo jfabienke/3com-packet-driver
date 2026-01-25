@@ -56,7 +56,7 @@ static struct {
  * @return 0 on success, negative on error
  */
 int tsr_relocate(void) {
-    uint16_t current_segment;
+    uint16_t current_segment = 0;  /* Set by inline asm */
     uint16_t target_segment;
     uint16_t tsr_size;
     void far *source;
@@ -113,7 +113,7 @@ int tsr_relocate(void) {
  * @return true if ELCR is present
  */
 static int detect_elcr(void) {
-    uint8_t test_val1, test_val2, orig_val;
+    uint8_t test_val1 = 0, test_val2 = 0, orig_val = 0;  /* Set by inline asm */
     
     /* ELCR only exists on EISA/PCI systems */
     /* Try to detect by reading and verifying consistency */
@@ -124,25 +124,27 @@ static int detect_elcr(void) {
         mov dx, ELCR_PORT1
         in al, dx
         mov orig_val, al
-        
+
         /* Write test pattern */
         mov al, 0x55
         out dx, al
-        jmp short $+2      ; I/O delay
-        
+        nop                /* I/O delay */
+        nop
+
         /* Read back */
         in al, dx
         mov test_val1, al
-        
+
         /* Write inverted pattern */
         mov al, 0xAA
         out dx, al
-        jmp short $+2      ; I/O delay
-        
+        nop                /* I/O delay */
+        nop
+
         /* Read back */
         in al, dx
         mov test_val2, al
-        
+
         /* Restore original */
         mov al, orig_val
         out dx, al
@@ -162,24 +164,28 @@ static int detect_elcr(void) {
  * @brief Save ELCR state for restoration
  */
 static void save_elcr_state(void) {
+    uint8_t elcr1_val = 0, elcr2_val = 0;  /* Set by inline asm */
+
     if (g_interrupt_state.elcr_saved) {
         return;
     }
-    
+
     _asm {
         cli
         /* Save ELCR1 */
         mov dx, ELCR_PORT1
         in al, dx
-        mov g_interrupt_state.saved_elcr1, al
-        
+        mov elcr1_val, al
+
         /* Save ELCR2 */
         mov dx, ELCR_PORT2
         in al, dx
-        mov g_interrupt_state.saved_elcr2, al
+        mov elcr2_val, al
         sti
     }
-    
+
+    g_interrupt_state.saved_elcr1 = elcr1_val;
+    g_interrupt_state.saved_elcr2 = elcr2_val;
     g_interrupt_state.elcr_saved = 1;
 }
 
@@ -187,24 +193,29 @@ static void save_elcr_state(void) {
  * @brief Restore ELCR state
  */
 static void restore_elcr_state(void) {
+    uint8_t elcr1_val, elcr2_val;
+
     if (!g_interrupt_state.elcr_saved || !g_interrupt_state.elcr_present) {
         return;
     }
-    
+
+    elcr1_val = g_interrupt_state.saved_elcr1;
+    elcr2_val = g_interrupt_state.saved_elcr2;
+
     _asm {
         cli
         /* Restore ELCR1 */
         mov dx, ELCR_PORT1
-        mov al, g_interrupt_state.saved_elcr1
+        mov al, elcr1_val
         out dx, al
-        
+
         /* Restore ELCR2 */
         mov dx, ELCR_PORT2
-        mov al, g_interrupt_state.saved_elcr2
+        mov al, elcr2_val
         out dx, al
         sti
     }
-    
+
     log_info("ELCR restored to original state");
 }
 
@@ -218,7 +229,7 @@ static void restore_elcr_state(void) {
  * @param force Force change even if already set
  */
 static void program_elcr(uint8_t irq, uint8_t trigger_type, int force) {
-    uint8_t elcr_val, orig_val;
+    uint8_t elcr_val = 0, orig_val = 0;  /* Set by inline asm */
     uint16_t elcr_port;
     uint8_t irq_bit;
     
@@ -298,7 +309,7 @@ static void program_elcr(uint8_t irq, uint8_t trigger_type, int force) {
  */
 int enable_driver_interrupts(void) {
     nic_info_t *nic;
-    uint8_t irq_mask;
+    uint8_t irq_mask = 0;  /* Set by inline asm */
     uint8_t actual_irq;
     int result;
     driver_state_t *state;
@@ -369,7 +380,7 @@ int enable_driver_interrupts(void) {
         }
     } else {
         /* Slave PIC (IRQ 8-15) */
-        uint8_t slave_mask;
+        uint8_t slave_mask = 0;  /* Set by inline asm */
         _asm {
             in al, 0xA1        ; Read slave PIC mask
             mov byte ptr slave_mask, al

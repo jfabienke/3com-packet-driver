@@ -18,9 +18,13 @@ extern "C" {
 /* Includes */
 #include "common.h"
 
+/* Forward declaration for config_t (full definition in config.h) */
+struct config;
+typedef struct config config_t;
+
 /* Memory allocation types */
 typedef enum {
-    MEM_TYPE_GENERAL = 0,                   /* General purpose memory */
+    MEM_TYPE_GENERAL,                       /* General purpose memory */
     MEM_TYPE_PACKET_BUFFER,                 /* Packet buffer memory */
     MEM_TYPE_DMA_BUFFER,                    /* DMA-compatible memory */
     MEM_TYPE_DESCRIPTOR,                    /* Descriptor memory */
@@ -42,13 +46,14 @@ typedef struct mem_block {
     uint32_t flags;                         /* Block flags */
     mem_type_t type;                        /* Memory type */
     uint32_t magic;                         /* Magic number for validation */
+    uint32_t original_addr;                 /* Original linear address (for aligned allocs) */
     struct mem_block *next;                 /* Next block in free list */
     struct mem_block *prev;                 /* Previous block */
 } mem_block_t;
 
 /* Memory pool structure */
 typedef struct mem_pool {
-    void *base;                             /* Pool base address */
+    void far *base;                         /* Pool base address (far ptr for DMA) */
     uint32_t size;                          /* Total pool size */
     uint32_t used;                          /* Used memory */
     uint32_t free;                          /* Free memory */
@@ -81,7 +86,7 @@ extern mem_pool_t g_dma_pool;
 extern mem_stats_t g_mem_stats;
 
 /* Memory initialization and cleanup */
-int memory_init(void);
+int memory_init(const config_t *config);    /* Primary init - must match init.h */
 int memory_init_core(config_t *config);     /* Phase 5: Core memory init */
 int memory_init_dma(config_t *config);      /* Phase 9: DMA buffer init */
 void memory_cleanup(void);
@@ -177,7 +182,7 @@ int memory_map_ems_page(uint16_t handle, uint16_t logical_page, uint16_t physica
 
 /* Memory error handling */
 typedef enum {
-    MEM_ERROR_NONE = 0,
+    MEM_ERROR_NONE,
     MEM_ERROR_OUT_OF_MEMORY,
     MEM_ERROR_INVALID_POINTER,
     MEM_ERROR_DOUBLE_FREE,

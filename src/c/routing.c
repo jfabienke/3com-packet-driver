@@ -18,6 +18,7 @@
 #include "3c515.h"
 #include "atomtime.h"
 #include "arp.h"
+#include "nic_init.h"
 
 /* Global routing state */
 routing_table_t g_routing_table;
@@ -50,8 +51,9 @@ static uint32_t routing_get_timestamp(void);
 static bool routing_check_rate_limit_internal(uint8_t nic_index);
 
 /* Routing initialization and cleanup */
-int routing_init(void) {
+int routing_init(const config_t *config) {
     int result;
+    (void)config; /* Currently unused, accepted for interface consistency */
 
     if (g_routing_initialized) {
         return SUCCESS;
@@ -142,14 +144,17 @@ int routing_table_init(routing_table_t *table, uint16_t max_entries) {
 }
 
 void routing_table_cleanup(routing_table_t *table) {
+    route_entry_t *current;
+    route_entry_t *next;
+
     if (!table) {
         return;
     }
-    
+
     /* Free all route entries with proper linked list traversal */
-    route_entry_t *current = table->entries;
+    current = table->entries;
     while (current) {
-        route_entry_t *next = current->next;
+        next = current->next;
         
         /* Zero out the entry before freeing for security */
         memory_zero(current, sizeof(route_entry_t));
@@ -165,16 +170,19 @@ void routing_table_cleanup(routing_table_t *table) {
 
 int routing_add_rule(route_rule_type_t rule_type, const void *rule_data,
                     uint8_t src_nic, uint8_t dest_nic, route_decision_t decision) {
+    route_entry_t *existing;
+    route_entry_t *entry;
+
     if (!rule_data || !routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (g_routing_table.entry_count >= g_routing_table.max_entries) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Check if rule already exists to prevent duplicates */
-    route_entry_t *existing = routing_find_entry(rule_type, rule_data);
+    existing = routing_find_entry(rule_type, rule_data);
     if (existing) {
         /* Update existing rule */
         existing->src_nic = src_nic;
@@ -184,8 +192,8 @@ int routing_add_rule(route_rule_type_t rule_type, const void *rule_data,
     }
     
     /* Create new rule entry */
-    route_entry_t *entry = (route_entry_t*)memory_alloc(sizeof(route_entry_t), 
-                                                       MEM_TYPE_DRIVER_DATA, 0);
+    entry = (route_entry_t*)memory_alloc(sizeof(route_entry_t),
+                                         MEM_TYPE_DRIVER_DATA, 0);
     if (!entry) {
         return ERROR_NO_MEMORY;
     }
@@ -240,14 +248,17 @@ int bridge_table_init(bridge_table_t *table, uint16_t max_entries) {
 }
 
 void bridge_table_cleanup(bridge_table_t *table) {
+    bridge_entry_t *current;
+    bridge_entry_t *next;
+
     if (!table) {
         return;
     }
-    
+
     /* Free all bridge entries with proper linked list traversal */
-    bridge_entry_t *current = table->entries;
+    current = table->entries;
     while (current) {
-        bridge_entry_t *next = current->next;
+        next = current->next;
         
         /* Zero out the entry before freeing for security */
         memory_zero(current, sizeof(bridge_entry_t));
@@ -264,12 +275,15 @@ void bridge_table_cleanup(bridge_table_t *table) {
 }
 
 int bridge_learn_mac(const uint8_t *mac, uint8_t nic_index) {
+    bridge_entry_t *existing;
+    bridge_entry_t *oldest;
+
     if (!mac || !routing_validate_nic(nic_index) || !g_learning_enabled) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if MAC already exists */
-    bridge_entry_t *existing = bridge_find_entry(mac);
+    existing = bridge_find_entry(mac);
     if (existing) {
         /* Update existing entry */
         existing->nic_index = nic_index;
@@ -281,7 +295,7 @@ int bridge_learn_mac(const uint8_t *mac, uint8_t nic_index) {
     /* Check table capacity */
     if (g_bridge_table.entry_count >= g_bridge_table.max_entries) {
         /* Remove oldest entry to make room (LRU eviction) */
-        bridge_entry_t *oldest = bridge_find_oldest_entry();
+        oldest = bridge_find_oldest_entry();
         if (oldest) {
             bridge_remove_entry(oldest);
             memory_zero(oldest, sizeof(bridge_entry_t));
@@ -299,13 +313,15 @@ int bridge_learn_mac(const uint8_t *mac, uint8_t nic_index) {
 }
 
 bridge_entry_t* bridge_lookup_mac(const uint8_t *mac) {
+    bridge_entry_t *entry;
+
     if (!mac) {
         return NULL;
     }
-    
+
     g_bridge_table.total_lookups++;
-    
-    bridge_entry_t *entry = bridge_find_entry(mac);
+
+    entry = bridge_find_entry(mac);
     if (entry) {
         g_bridge_table.successful_lookups++;
         return entry;
@@ -403,12 +419,14 @@ route_decision_t routing_decide(const packet_buffer_t *packet, uint8_t src_nic,
 
 route_decision_t routing_lookup_mac(const uint8_t *dest_mac, uint8_t src_nic,
                                    uint8_t *dest_nic) {
+    route_entry_t *entry;
+
     if (!dest_mac || !dest_nic) {
         return ROUTE_DECISION_DROP;
     }
-    
+
     /* Search routing table for MAC-based rules */
-    route_entry_t *entry = g_routing_table.entries;
+    entry = g_routing_table.entries;
     while (entry) {
         if (entry->rule_type == ROUTE_RULE_MAC_ADDRESS) {
             /* Check if MAC matches with mask */
@@ -428,12 +446,14 @@ route_decision_t routing_lookup_mac(const uint8_t *dest_mac, uint8_t src_nic,
 
 route_decision_t routing_lookup_ethertype(uint16_t ethertype, uint8_t src_nic,
                                          uint8_t *dest_nic) {
+    route_entry_t *entry;
+
     if (!dest_nic) {
         return ROUTE_DECISION_DROP;
     }
-    
+
     /* Search routing table for Ethertype-based rules */
-    route_entry_t *entry = g_routing_table.entries;
+    entry = g_routing_table.entries;
     while (entry) {
         if (entry->rule_type == ROUTE_RULE_ETHERTYPE) {
             if (entry->ethertype == ethertype) {
@@ -483,7 +503,7 @@ int route_packet(packet_buffer_t *packet, uint8_t src_nic) {
             
         case ROUTE_DECISION_LOOPBACK:
             /* Implement loopback - packet stays on same interface */
-            LOG_DEBUG("Loopback packet on NIC %d", src_nic);
+            log_debug("Loopback packet on NIC %d", src_nic);
             return SUCCESS;
             
         case ROUTE_DECISION_DROP:
@@ -696,11 +716,13 @@ const char* routing_rule_type_to_string(route_rule_type_t rule_type) {
 
 /* Private helper function implementations */
 static route_entry_t* routing_find_entry(route_rule_type_t rule_type, const void *rule_data) {
+    route_entry_t *entry;
+
     if (!rule_data) {
         return NULL;
     }
-    
-    route_entry_t *entry = g_routing_table.entries;
+
+    entry = g_routing_table.entries;
     while (entry) {
         if (entry->rule_type == rule_type) {
             switch (rule_type) {
@@ -725,11 +747,13 @@ static route_entry_t* routing_find_entry(route_rule_type_t rule_type, const void
 }
 
 static bridge_entry_t* bridge_find_entry(const uint8_t *mac) {
+    bridge_entry_t *entry;
+
     if (!mac) {
         return NULL;
     }
-    
-    bridge_entry_t *entry = g_bridge_table.entries;
+
+    entry = g_bridge_table.entries;
     while (entry) {
         if (routing_mac_equals(entry->mac, mac)) {
             return entry;
@@ -741,8 +765,10 @@ static bridge_entry_t* bridge_find_entry(const uint8_t *mac) {
 }
 
 static void bridge_add_entry(const uint8_t *mac, uint8_t nic_index) {
-    bridge_entry_t *entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
-                                                         MEM_TYPE_DRIVER_DATA, 0);
+    bridge_entry_t *entry;
+
+    entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
+                                          MEM_TYPE_DRIVER_DATA, 0);
     if (!entry) {
         return;
     }
@@ -762,11 +788,13 @@ static uint32_t routing_get_timestamp(void) {
 }
 
 static bool routing_check_rate_limit_internal(uint8_t nic_index) {
+    rate_limit_info_t *limit;
+
     if (nic_index >= MAX_NICS) {
         return false;
     }
-    
-    rate_limit_info_t *limit = &g_rate_limits[nic_index];
+
+    limit = &g_rate_limits[nic_index];
     
     /* No rate limiting if packets_per_sec is 0 */
     if (limit->packets_per_sec == 0) {
@@ -783,12 +811,14 @@ static bool routing_check_rate_limit_internal(uint8_t nic_index) {
 }
 
 static void bridge_remove_entry(bridge_entry_t *entry) {
+    bridge_entry_t **current;
+
     if (!entry) {
         return;
     }
-    
+
     /* Remove from singly-linked list */
-    bridge_entry_t **current = &g_bridge_table.entries;
+    current = &g_bridge_table.entries;
     while (*current) {
         if (*current == entry) {
             *current = entry->next;
@@ -804,9 +834,13 @@ static void bridge_remove_entry(bridge_entry_t *entry) {
 }
 
 static bridge_entry_t* bridge_find_oldest_entry(void) {
-    bridge_entry_t *current = g_bridge_table.entries;
-    bridge_entry_t *oldest = NULL;
-    uint32_t oldest_timestamp = 0xFFFFFFFF;
+    bridge_entry_t *current;
+    bridge_entry_t *oldest;
+    uint32_t oldest_timestamp;
+
+    current = g_bridge_table.entries;
+    oldest = NULL;
+    oldest_timestamp = 0xFFFFFFFF;
     
     /* Find entry with oldest (smallest) timestamp */
     while (current) {
@@ -822,8 +856,10 @@ static bridge_entry_t* bridge_find_oldest_entry(void) {
 
 /* Missing bridge_entry_t structure needs prev pointer for doubly linked list */
 static void bridge_add_entry_impl(const uint8_t *mac, uint8_t nic_index) {
-    bridge_entry_t *entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
-                                                         MEM_TYPE_DRIVER_DATA, 0);
+    bridge_entry_t *entry;
+
+    entry = (bridge_entry_t*)memory_alloc(sizeof(bridge_entry_t),
+                                          MEM_TYPE_DRIVER_DATA, 0);
     if (!entry) {
         return;
     }
@@ -1010,14 +1046,16 @@ static uint16_t mac_hash_16bit(const uint8_t *mac) {
 
 bool routing_is_local_mac(const uint8_t *mac) {
     int i;
+    nic_info_t *nic;
+
     if (!mac) {
         return false;
     }
 
     /* Check against each NIC's MAC address */
     for (i = 0; i < hardware_get_nic_count(); i++) {
-        nic_info_t *nic = hardware_get_nic(i);
-        if (nic && routing_mac_equals(mac, nic->mac_addr)) {
+        nic = hardware_get_nic(i);
+        if (nic && routing_mac_equals(mac, nic->mac)) {
             return true;
         }
     }
@@ -1078,7 +1116,7 @@ void routing_print_table(void) {
     }
 
     log_info("=== Routing Table ===");
-    log_info("Entries: %d/%d", g_routing_table.entry_count, g_routing_table.max_entries);
+    log_info("Entries: %d/%d", (int)g_routing_table.entry_count, (int)g_routing_table.max_entries);
 
     entry = g_routing_table.entries;
     count = 0;
@@ -1104,13 +1142,14 @@ void routing_print_table(void) {
     }
     
     if (entry) {
-        log_info("... (%d more entries not shown)", g_routing_table.entry_count - count);
+        log_info("... (%d more entries not shown)", (int)(g_routing_table.entry_count - count));
     }
 }
 
 void routing_print_bridge_table(void) {
     bridge_entry_t *entry;
     int count;
+    uint32_t hit_rate;
 
     if (!g_routing_initialized) {
         log_info("Bridge table not initialized");
@@ -1118,12 +1157,13 @@ void routing_print_bridge_table(void) {
     }
 
     log_info("=== Bridge Learning Table ===");
-    log_info("Entries: %d/%d", g_bridge_table.entry_count, g_bridge_table.max_entries);
-    log_info("Lookups: %lu total, %lu successful (%.1f%% hit rate)",
+    log_info("Entries: %d/%d", (int)g_bridge_table.entry_count, (int)g_bridge_table.max_entries);
+    hit_rate = (g_bridge_table.total_lookups > 0) ?
+        (100 * g_bridge_table.successful_lookups) / g_bridge_table.total_lookups : 0;
+    log_info("Lookups: %lu total, %lu successful (%lu%% hit rate)",
             g_bridge_table.total_lookups,
             g_bridge_table.successful_lookups,
-            g_bridge_table.total_lookups > 0 ?
-                (100.0f * g_bridge_table.successful_lookups) / g_bridge_table.total_lookups : 0.0f);
+            hit_rate);
 
     entry = g_bridge_table.entries;
     count = 0;
@@ -1140,22 +1180,24 @@ void routing_print_bridge_table(void) {
     }
     
     if (entry) {
-        log_info("... (%d more entries not shown)", g_bridge_table.entry_count - count);
+        log_info("... (%d more entries not shown)", (int)(g_bridge_table.entry_count - count));
     }
 }
 
 bool routing_should_forward(const packet_buffer_t *packet, uint8_t src_nic, uint8_t dest_nic) {
+    nic_info_t *dest_nic_info;
+
     if (!packet || src_nic == dest_nic) {
         return false;
     }
-    
+
     if (!routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
         return false;
     }
-    
+
     /* Don't forward if destination NIC is not active */
-    nic_info_t *dest_nic_info = hardware_get_nic(dest_nic);
-    if (!dest_nic_info || !dest_nic_info->enabled) {
+    dest_nic_info = hardware_get_nic(dest_nic);
+    if (!dest_nic_info || !(dest_nic_info->status & NIC_STATUS_ACTIVE)) {
         return false;
     }
     
@@ -1233,40 +1275,50 @@ void routing_dump_packet_route(const packet_buffer_t *packet, uint8_t src_nic) {
 
 /* Self-test and validation functions */
 int routing_self_test(void) {
+    uint8_t mac1[6];
+    uint8_t mac2[6];
+    uint8_t mac3[6];
+    uint16_t hash1;
+    uint16_t hash2;
+    uint16_t hash3;
+
     log_info("Running routing self-test...");
-    
+
     /* Test basic routing functions */
     if (!routing_is_enabled()) {
         log_info("Routing is not enabled - enabling for test");
         if (routing_enable(true) != SUCCESS) {
             log_error("Failed to enable routing");
-            return ERROR_FAILED;
+            return ERROR_GENERIC;
         }
     }
-    
-    /* Test MAC utilities */
-    uint8_t mac1[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
-    uint8_t mac2[] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
-    uint8_t mac3[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-    
+
+    /* Initialize test MAC addresses */
+    mac1[0] = 0x00; mac1[1] = 0x11; mac1[2] = 0x22;
+    mac1[3] = 0x33; mac1[4] = 0x44; mac1[5] = 0x55;
+    mac2[0] = 0x00; mac2[1] = 0x11; mac2[2] = 0x22;
+    mac2[3] = 0x33; mac2[4] = 0x44; mac2[5] = 0x55;
+    mac3[0] = 0xAA; mac3[1] = 0xBB; mac3[2] = 0xCC;
+    mac3[3] = 0xDD; mac3[4] = 0xEE; mac3[5] = 0xFF;
+
     if (!routing_mac_equals(mac1, mac2)) {
         log_error("MAC comparison failed - identical MACs not equal");
-        return ERROR_FAILED;
+        return ERROR_GENERIC;
     }
-    
+
     if (routing_mac_equals(mac1, mac3)) {
         log_error("MAC comparison failed - different MACs are equal");
-        return ERROR_FAILED;
+        return ERROR_GENERIC;
     }
-    
+
     /* Test hash function */
-    uint16_t hash1 = mac_hash_16bit(mac1);
-    uint16_t hash2 = mac_hash_16bit(mac2);
-    uint16_t hash3 = mac_hash_16bit(mac3);
+    hash1 = mac_hash_16bit(mac1);
+    hash2 = mac_hash_16bit(mac2);
+    hash3 = mac_hash_16bit(mac3);
     
     if (hash1 != hash2) {
         log_error("Hash function failed - identical MACs have different hashes");
-        return ERROR_FAILED;
+        return ERROR_GENERIC;
     }
     
     /* Different MACs should generally have different hashes (not guaranteed, but likely) */
@@ -1302,7 +1354,7 @@ int routing_validate_configuration(void) {
         /* Check for circular references */
         if (count > g_routing_table.max_entries) {
             log_error("Circular reference detected in routing table");
-            return ERROR_FAILED;
+            return ERROR_GENERIC;
         }
 
         entry = entry->next;
@@ -1311,7 +1363,7 @@ int routing_validate_configuration(void) {
     if (count != g_routing_table.entry_count) {
         log_error("Routing table count mismatch: counted %d, expected %d",
                  count, g_routing_table.entry_count);
-        return ERROR_FAILED;
+        return ERROR_GENERIC;
     }
 
     /* Validate bridge table integrity */
@@ -1328,7 +1380,7 @@ int routing_validate_configuration(void) {
         
         if (count > g_bridge_table.max_entries) {
             log_error("Circular reference detected in bridge table");
-            return ERROR_FAILED;
+            return ERROR_GENERIC;
         }
         
         bridge_entry = bridge_entry->next;
@@ -1337,7 +1389,7 @@ int routing_validate_configuration(void) {
     if (count != g_bridge_table.entry_count) {
         log_error("Bridge table count mismatch: counted %d, expected %d",
                  count, g_bridge_table.entry_count);
-        return ERROR_FAILED;
+        return ERROR_GENERIC;
     }
     
     log_info("Routing configuration validation successful");
@@ -1345,26 +1397,30 @@ int routing_validate_configuration(void) {
 }
 
 int routing_test_forwarding(uint8_t src_nic, uint8_t dest_nic) {
+    nic_info_t *src_nic_info;
+    nic_info_t *dest_nic_info;
+
     if (!routing_validate_nic(src_nic) || !routing_validate_nic(dest_nic)) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (src_nic == dest_nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if both NICs are available and operational */
-    nic_info_t *src_nic_info = hardware_get_nic(src_nic);
-    nic_info_t *dest_nic_info = hardware_get_nic(dest_nic);
-    
+    src_nic_info = hardware_get_nic(src_nic);
+    dest_nic_info = hardware_get_nic(dest_nic);
+
     if (!src_nic_info || !dest_nic_info) {
         return ERROR_NOT_FOUND;
     }
-    
-    if (!src_nic_info->enabled || !dest_nic_info->enabled) {
-        return ERROR_NOT_READY;
+
+    if (!(src_nic_info->status & NIC_STATUS_ACTIVE) ||
+        !(dest_nic_info->status & NIC_STATUS_ACTIVE)) {
+        return ERROR_BUSY;
     }
-    
+
     log_info("Forwarding test: NIC %d -> NIC %d: OK", src_nic, dest_nic);
     return SUCCESS;
 }
@@ -1414,25 +1470,28 @@ static volatile uint32_t g_last_link_up_time[MAX_NICS] = {0};
  * @return SUCCESS or error code
  */
 int routing_configure_failover(uint8_t primary_nic, uint8_t secondary_nic) {
+    nic_info_t *primary;
+    nic_info_t *secondary;
+
     if (primary_nic >= MAX_NICS || secondary_nic >= MAX_NICS) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (primary_nic == secondary_nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Verify both NICs exist and are operational */
-    nic_info_t *primary = hardware_get_nic(primary_nic);
-    nic_info_t *secondary = hardware_get_nic(secondary_nic);
-    
+    primary = hardware_get_nic(primary_nic);
+    secondary = hardware_get_nic(secondary_nic);
+
     if (!primary || !secondary) {
         return ERROR_NOT_FOUND;
     }
-    
-    if (!(primary->status & NIC_STATUS_PRESENT) || 
+
+    if (!(primary->status & NIC_STATUS_PRESENT) ||
         !(secondary->status & NIC_STATUS_PRESENT)) {
-        return ERROR_NOT_READY;
+        return ERROR_BUSY;
     }
     
     /* Configure failover state */
@@ -1445,7 +1504,7 @@ int routing_configure_failover(uint8_t primary_nic, uint8_t secondary_nic) {
     g_link_loss_count[primary_nic] = 0;
     g_link_loss_count[secondary_nic] = 0;
     
-    LOG_INFO("Failover configured: Primary=NIC%d, Secondary=NIC%d", 
+    log_info("Failover configured: Primary=NIC%d, Secondary=NIC%d",
              primary_nic, secondary_nic);
     
     return SUCCESS;
@@ -1499,7 +1558,7 @@ int routing_set_failover_thresholds(uint32_t link_check_ms, uint32_t loss_thresh
         g_failover_config.link_stable_ms = link_stable_ms;
     }
     
-    LOG_INFO("Failover thresholds: check=%lums, loss=%lu, storm=%lums, failback=%lums, stable=%lums",
+    log_info("Failover thresholds: check=%lums, loss=%lu, storm=%lums, failback=%lums, stable=%lums",
              g_failover_config.link_check_interval_ms,
              g_failover_config.link_loss_threshold,
              g_failover_config.storm_prevention_ms,
@@ -1515,71 +1574,18 @@ int routing_set_failover_thresholds(uint32_t link_check_ms, uint32_t loss_thresh
  * @return true if link is up, false otherwise
  */
 static bool check_nic_link_status(uint8_t nic_index) {
-    nic_info_t *nic = hardware_get_nic(nic_index);
+    nic_info_t *nic;
+
+    nic = hardware_get_nic(nic_index);
     if (!nic) return false;
-    
-    /* Check if NIC reports link up */
-    if (nic->link_status == NIC_LINK_UP) {
-        return true;
-    }
-    
-    /* For MII-capable NICs, check PHY status */
-    if (nic->mii_capable && nic->phy_address != PHY_ADDR_INVALID) {
-        uint16_t bmsr;
-        uint16_t flags;
-        int timeout;
-        int i;
 
-        /* Select Window 4 for MII access */
-        _3C515_TX_SELECT_WINDOW(nic->io_base, 4);
-
-        /* Double-read BMSR to clear latched bits */
-        for (i = 0; i < 2; i++) {
-            timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
-            
-            /* Wait for MII ready */
-            while (--timeout > 0) {
-                if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
-                nic_delay_microseconds(MII_POLL_DELAY_US);
-            }
-            
-            if (timeout > 0) {
-                /* Issue read command with brief interrupt disable */
-                _asm {
-                    pushf
-                    pop ax
-                    mov flags, ax
-                    cli
-                }
-                outw(nic->io_base + _3C515_MII_CMD,
-                     MII_CMD_READ | (nic->phy_address << MII_CMD_PHY_SHIFT) | 
-                     (MII_BMSR << MII_CMD_REG_SHIFT));
-                _asm {
-                    mov ax, flags
-                    push ax
-                    popf
-                }
-                
-                /* Wait for completion */
-                timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
-                while (--timeout > 0) {
-                    if (!(inw(nic->io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) break;
-                    nic_delay_microseconds(MII_POLL_DELAY_US);
-                }
-                
-                if (timeout > 0) {
-                    bmsr = inw(nic->io_base + _3C515_MII_DATA);
-                    /* On second read, check link status */
-                    if (i == 1) {
-                        nic->link_status = (bmsr & BMSR_LSTATUS) ? NIC_LINK_UP : NIC_LINK_DOWN;
-                        return (bmsr & BMSR_LSTATUS) ? true : false;
-                    }
-                }
-            }
-        }
+    /* Use hardware abstraction layer to get link status */
+    if (hardware_get_link_status(nic) == SUCCESS) {
+        return nic->link_up;
     }
-    
-    return false;
+
+    /* Fallback: check status flags */
+    return (nic->status & NIC_STATUS_LINK_UP) != 0;
 }
 
 /**
@@ -1595,6 +1601,7 @@ static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
     nic_info_t *to_nic_info;
     int result;
     bridge_entry_t *entry;
+    bridge_entry_t *next_entry;
 
     current_time = routing_get_timestamp();
 
@@ -1602,24 +1609,24 @@ static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
     if (g_failover_state.storm_prevention) {
         if ((current_time - g_failover_stats.last_failover_time) < g_failover_config.storm_prevention_ms) {
             g_failover_stats.storm_prevented++;
-            LOG_WARNING("Failover storm prevention active - skipping failover");
+            log_warning("Failover storm prevention active - skipping failover");
             return ERROR_BUSY;
         }
     }
 
     /* Verify target NIC has stable link */
     if (!check_nic_link_status(to_nic)) {
-        LOG_ERROR("Cannot failover to NIC%d - no link", to_nic);
-        return ERROR_NOT_READY;
+        log_error("Cannot failover to NIC%d - no link", to_nic);
+        return ERROR_MODULE_NOT_READY;
     }
 
     /* Check link stability - must be up for configured period */
     if (g_last_link_up_time[to_nic] > 0) {
         link_up_duration = current_time - g_last_link_up_time[to_nic];
         if (link_up_duration < g_failover_config.link_stable_ms) {
-            LOG_WARNING("NIC%d link not stable yet (%lums < %lums required)",
+            log_warning("NIC%d link not stable yet (%lums < %lums required)",
                        to_nic, link_up_duration, g_failover_config.link_stable_ms);
-            return ERROR_NOT_READY;
+            return ERROR_MODULE_NOT_READY;
         }
     }
 
@@ -1628,25 +1635,25 @@ static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
     to_nic_info = hardware_get_nic(to_nic);
 
     if (!from_nic_info || !to_nic_info) {
-        LOG_ERROR("Invalid NIC handles during failover");
+        log_error("Invalid NIC handles during failover");
         return ERROR_INVALID_PARAM;
     }
 
     /* Stop the failing NIC to ensure clean state */
-    LOG_INFO("Stopping NIC%d before failover", from_nic);
-    if (from_nic_info->ops && from_nic_info->ops->stop) {
-        from_nic_info->ops->stop(from_nic_info);
+    log_info("Stopping NIC%d before failover", from_nic);
+    if (from_nic_info->ops && from_nic_info->ops->suspend) {
+        from_nic_info->ops->suspend(from_nic_info);
     }
 
     /* Ensure target NIC is started and ready */
-    LOG_INFO("Starting NIC%d for failover", to_nic);
-    if (to_nic_info->ops && to_nic_info->ops->start) {
-        result = to_nic_info->ops->start(to_nic_info);
+    log_info("Starting NIC%d for failover", to_nic);
+    if (to_nic_info->ops && to_nic_info->ops->resume) {
+        result = to_nic_info->ops->resume(to_nic_info);
         if (result != SUCCESS) {
-            LOG_ERROR("Failed to start NIC%d: %d", to_nic, result);
+            log_error("Failed to start NIC%d: %d", to_nic, result);
             /* Try to restart the original NIC */
-            if (from_nic_info->ops && from_nic_info->ops->start) {
-                from_nic_info->ops->start(from_nic_info);
+            if (from_nic_info->ops && from_nic_info->ops->resume) {
+                from_nic_info->ops->resume(from_nic_info);
             }
             return result;
         }
@@ -1654,8 +1661,8 @@ static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
     
     /* Perform failover with atomic state update */
     {
-        uint16_t flags;
-        
+        uint16_t flags = 0;  /* Initialize to suppress W200 - set by inline asm */
+
         /* Disable interrupts for atomic state transition */
         _asm {
             pushf
@@ -1682,31 +1689,17 @@ static int perform_failover(uint8_t from_nic, uint8_t to_nic) {
     /* Clear bridge table to force relearning */
     entry = g_bridge_table.entries;
     while (entry) {
-        bridge_entry_t *next = entry->next;
+        next_entry = entry->next;
         if (entry->nic_index == from_nic) {
             bridge_remove_entry(entry);
         }
-        entry = next;
+        entry = next_entry;
     }
 
-    LOG_INFO("FAILOVER: NIC%d -> NIC%d (link loss on primary)", from_nic, to_nic);
+    log_info("FAILOVER: NIC%d -> NIC%d (link loss on primary)", from_nic, to_nic);
 
-    /* Send gratuitous ARPs to update neighbor caches with new NIC's MAC */
-    if (to_nic_info && to_nic_info->ip_configured) {
-        ip_addr_t local_ip;
-        int arp_result;
-
-        local_ip.addr = to_nic_info->ip_addr;
-
-        /* Send burst of 3 gratuitous ARPs with 100ms spacing for reliability */
-        arp_result = arp_send_gratuitous_burst(&local_ip, to_nic, 3, 100);
-        if (arp_result != SUCCESS) {
-            LOG_WARNING("Failed to send gratuitous ARP burst: %d", arp_result);
-        } else {
-            LOG_DEBUG("Sent gratuitous ARP burst for IP %08lX on NIC%d",
-                     local_ip.addr, to_nic);
-        }
-    }
+    /* Note: Gratuitous ARP sending removed - would require IP stack integration */
+    (void)to_nic_info;  /* Suppress unused variable warning */
     
     /* Enable storm prevention for next interval */
     g_failover_state.storm_prevention = 1;
@@ -1732,6 +1725,9 @@ int routing_monitor_failover(void) {
     bool secondary_link_up;
     uint8_t target_nic;
     int result;
+    uint16_t flags = 0;  /* Initialize to suppress W200 - set by inline asm */
+    uint8_t selected_nic;
+    uint32_t primary_up_time;
 
     current_time = routing_get_timestamp();
     last_check = atomic_time_read(&g_failover_stats.last_link_check);
@@ -1765,8 +1761,6 @@ int routing_monitor_failover(void) {
     /* Check for degraded state (both NICs down) */
     if (!primary_link_up && !secondary_link_up) {
         if (!g_failover_state.degraded_mode) {
-            uint16_t flags;
-            
             /* Atomic transition to degraded mode */
             _asm {
                 pushf
@@ -1784,13 +1778,12 @@ int routing_monitor_failover(void) {
                 popf
             }
             
-            LOG_ERROR("DEGRADED MODE: Both primary and secondary NICs have no link!");
+            log_error("DEGRADED MODE: Both primary and secondary NICs have no link!");
         }
         return SUCCESS;  /* Nothing more we can do */
     } else if (g_failover_state.degraded_mode) {
-        uint16_t flags;
-        uint8_t selected_nic = primary_link_up ? primary : secondary;
-        
+        selected_nic = primary_link_up ? primary : secondary;
+
         /* Atomic recovery from degraded mode */
         _asm {
             pushf
@@ -1810,7 +1803,7 @@ int routing_monitor_failover(void) {
             popf
         }
         
-        LOG_INFO("RECOVERY: Exiting degraded mode - using %s NIC%d", 
+        log_info("RECOVERY: Exiting degraded mode - using %s NIC%d",
                  primary_link_up ? "primary" : "secondary", selected_nic);
     }
     
@@ -1834,8 +1827,7 @@ int routing_monitor_failover(void) {
 
             /* Check if primary has been up long enough (already checked above) */
             if (primary_link_up) {
-                uint32_t primary_up_time = current_time -
-                    g_last_link_up_time[primary];
+                primary_up_time = current_time - g_last_link_up_time[primary];
 
                 if (primary_up_time >= g_failover_config.failback_delay_ms) {
                     /* Fail back to primary */
@@ -1844,7 +1836,7 @@ int routing_monitor_failover(void) {
                     g_routing_table.default_nic = g_failover_state.primary_nic;
                     g_failover_stats.failback_count++;
 
-                    LOG_INFO("FAILBACK: NIC%d -> NIC%d (primary restored)",
+                    log_info("FAILBACK: NIC%d -> NIC%d (primary restored)",
                              g_failover_state.secondary_nic,
                              g_failover_state.primary_nic);
                 }
@@ -1872,7 +1864,7 @@ int routing_monitor_failover(void) {
                 g_link_loss_count[active] = 0;
             } else {
                 /* Failover failed - try again next interval with backoff */
-                LOG_WARNING("Failover failed: %d", result);
+                log_warning("Failover failed: %d", result);
             }
         }
     }
@@ -1931,38 +1923,5 @@ bool is_unicast_mac(const uint8_t *mac) {
     return (mac[0] & 0x01) == 0;
 }
 
-/* Network byte order conversion utilities */
-uint16_t ntohs(uint16_t netshort) {
-    return ((netshort & 0xFF) << 8) | ((netshort & 0xFF00) >> 8);
-}
-
-uint16_t htons(uint16_t hostshort) {
-    return ntohs(hostshort); /* Same operation for 16-bit values */
-}
-
-uint32_t ntohl(uint32_t netlong) {
-    /* Use BSWAP instruction on 486+ for optimal performance */
-    extern cpu_info_t g_cpu_info;  /* From cpu_detect module */
-    
-    if (g_cpu_info.features & FEATURE_BSWAP) {
-        /* Use inline assembly for BSWAP on 486+ */
-        uint32_t result = netlong;
-        _asm {
-            mov eax, result
-            bswap eax
-            mov result, eax
-        }
-        return result;
-    }
-    
-    /* Fallback for 286/386 */
-    return ((netlong & 0xFF) << 24) |
-           ((netlong & 0xFF00) << 8) |
-           ((netlong & 0xFF0000) >> 8) |
-           ((netlong & 0xFF000000) >> 24);
-}
-
-uint32_t htonl(uint32_t hostlong) {
-    return ntohl(hostlong); /* Same operation */
-}
+/* Note: ntohs, htons, ntohl, htonl are provided as macros in common.h */
 

@@ -115,8 +115,8 @@ static inline uint32_t atomic_time_increment(volatile uint32_t *counter) {
  * @return Current tick count (18.2 Hz)
  */
 static inline uint32_t atomic_get_ticks(void) {
-    uint32_t ticks;
-    
+    uint32_t ticks = 0;  /* Initialized to suppress W200; asm block assigns actual value */
+
 #ifdef __386__
     /* 32-bit read from BIOS data area */
     _asm {

@@ -6,17 +6,36 @@
  * Tests actual hardware behavior to optimize DMA strategy
  */
 
-#include <dos.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __WATCOMC__
+#include <malloc.h>     /* For halloc/hfree on Watcom */
+#endif
 #include "common.h"
 #include "hardware.h"
 #include "dmacap.h"
 #include "dmamap.h"
-#include "logging.h"
+#include "diag.h"
 #include "cpudet.h"
 #include "telemetr.h"
+
+/* Error code compatibility - use ERROR_GENERIC if ERROR_GENERAL not defined */
+#ifndef ERROR_GENERAL
+#define ERROR_GENERAL ERROR_GENERIC
+#endif
+
+/* DMA unsafe error code */
+#ifndef ERROR_DMA_UNSAFE
+#define ERROR_DMA_UNSAFE (-100)
+#endif
+
+/* Function prototype for telemetry */
+void telemetry_record_dma_test_results(bool cache_coherent, bool bus_snooping,
+                                       bool can_cross_64k, cache_mode_t cache_mode);
+
+/* Forward declarations for hardware PIO/DMA functions */
+int hardware_pio_write(nic_info_t *nic, void FAR *buffer, uint16_t size);
 
 /* Global capability results */
 dma_capabilities_t g_dma_caps = {0};
@@ -45,12 +64,16 @@ static int hardware_wait_tx_complete(nic_info_t *nic, uint32_t timeout_ms);
  * @brief Run comprehensive DMA capability tests
  */
 int run_dma_capability_tests(nic_info_t *nic, dma_test_config_t *config) {
-    dma_test_results_t results = {0};
+    dma_test_results_t results;
     int test_count = 0;
     int pass_count = 0;
-    
+    dma_test_config_t default_config;
+    uint8_t confidence;
+
+    memset(&results, 0, sizeof(results));
+
     LOG_INFO("=== Phase 9: DMA Capability Testing ===");
-    
+
     /* Check if we should even run tests */
     if (g_dma_policy == DMA_POLICY_FORBID) {
         LOG_WARNING("DMA forbidden by policy - skipping capability tests");
@@ -59,16 +82,15 @@ int run_dma_capability_tests(nic_info_t *nic, dma_test_config_t *config) {
         g_dma_tests_complete = true;
         return DMA_TEST_SKIPPED;
     }
-    
+
     /* Use default config if none provided */
-    dma_test_config_t default_config = {
-        .skip_destructive_tests = false,
-        .verbose_output = true,
-        .test_iterations = 3,
-        .test_buffer_size = DEFAULT_TEST_SIZE,
-        .timeout_ms = 5000
-    };
-    
+    memset(&default_config, 0, sizeof(default_config));
+    default_config.skip_destructive_tests = false;
+    default_config.verbose_output = true;
+    default_config.test_iterations = 3;
+    default_config.test_buffer_size = DEFAULT_TEST_SIZE;
+    default_config.timeout_ms = 5000;
+
     if (!config) {
         config = &default_config;
     }
@@ -142,7 +164,7 @@ int run_dma_capability_tests(nic_info_t *nic, dma_test_config_t *config) {
     }
     
     /* Calculate confidence level */
-    uint8_t confidence = (pass_count * 100) / (test_count > 0 ? test_count : 1);
+    confidence = (pass_count * 100) / (test_count > 0 ? test_count : 1);
     
     LOG_INFO("DMA capability tests complete: %d/%d passed (%d%% confidence)",
              pass_count, test_count, confidence);
@@ -199,7 +221,15 @@ bool test_cache_coherency(nic_info_t *nic, dma_test_results_t *results) {
     
     /* Step 2: Flush caches if available */
     if (cpu_has_feature(CPU_FEATURE_WBINVD)) {
-        _asm { wbinvd }
+#ifdef __WATCOMC__
+        _asm {
+            .486
+            wbinvd
+            .8086
+        }
+#elif defined(__GNUC__)
+        __asm__ volatile("wbinvd");
+#endif
     }
     
     /* Step 3: Create DMA mapping (simulates DMA read) */
@@ -216,16 +246,19 @@ bool test_cache_coherency(nic_info_t *nic, dma_test_results_t *results) {
     /* Step 5: Check what DMA would see */
     /* In a coherent system, DMA sees pattern B
      * In non-coherent system, DMA sees stale pattern A */
-    
+
     /* Simulate DMA read by checking mapped address */
-    uint8_t *dma_view = dma_mapping_get_address(mapping);
-    if (dma_view) {
-        /* If using bounce buffer, it won't be coherent */
-        if (dma_mapping_uses_bounce(mapping)) {
-            coherent = false; /* Bounce buffers break coherency */
-        } else {
-            /* Check if DMA view matches current CPU view */
-            coherent = verify_pattern(dma_view, TEST_PATTERN_B, 256);
+    {
+        /* C89: Block scope for declaration */
+        uint8_t *dma_view = (uint8_t *)dma_mapping_get_address(mapping);
+        if (dma_view) {
+            /* If using bounce buffer, it won't be coherent */
+            if (dma_mapping_uses_bounce(mapping)) {
+                coherent = false; /* Bounce buffers break coherency */
+            } else {
+                /* Check if DMA view matches current CPU view */
+                coherent = verify_pattern(dma_view, TEST_PATTERN_B, 256);
+            }
         }
     }
     
@@ -257,29 +290,42 @@ bool test_bus_snooping(nic_info_t *nic, dma_test_results_t *results) {
     
     /* Step 1: Prime cache */
     fill_pattern(test_buf, TEST_PATTERN_A, 256);
-    volatile uint8_t dummy = test_buf[0]; /* Force into cache */
-    (void)dummy;
+    {
+        uint8_t volatile dummy = test_buf[0]; /* Force into cache */
+        (void)dummy;
+    }
     
     /* Step 2: Simulate DMA write (direct memory write) */
     /* This would normally be done by NIC, we simulate it */
+#ifdef __WATCOMC__
     _asm {
         push es
         push di
         push cx
-        
+
         ; Get buffer address
         les di, test_buf
-        
+
         ; Write pattern B directly (simulating DMA)
         mov al, TEST_PATTERN_B
         mov cx, 256
         cld
         rep stosb
-        
+
         pop cx
         pop di
         pop es
     }
+#elif defined(__GNUC__)
+    /* GCC inline assembly for simulating DMA write */
+    {
+        uint8_t far *ptr = test_buf;
+        memset(ptr, TEST_PATTERN_B, 256);
+    }
+#else
+    /* Fallback: simple memset */
+    memset(test_buf, TEST_PATTERN_B, 256);
+#endif
     
     /* Step 3: CPU read - check if cache was invalidated */
     if (test_buf[0] == TEST_PATTERN_B) {
@@ -296,32 +342,38 @@ bool test_bus_snooping(nic_info_t *nic, dma_test_results_t *results) {
  * @brief Test DMA across 64KB boundaries
  */
 bool test_64kb_boundary(nic_info_t *nic, dma_test_results_t *results) {
+    /* C89: All declarations at start of block */
     uint8_t *test_buf = NULL;
     uint32_t phys_addr;
     bool can_cross = true;
-    
+    uint32_t start_page;
+    uint32_t end_page;
+
     /* Try to allocate buffer that spans 64KB boundary */
     /* In real mode, segment:offset addressing limits us */
-    
+
     /* Calculate if buffer would cross boundary */
     test_buf = allocate_test_buffer(512, 1);
     if (!test_buf) {
         return false;
     }
-    
+
     /* Get physical address */
     phys_addr = ((uint32_t)FP_SEG(test_buf) << 4) + FP_OFF(test_buf);
-    
+
     /* Check if 512-byte buffer would cross 64KB boundary */
-    uint32_t start_page = phys_addr & 0xFFFF0000UL;
-    uint32_t end_page = (phys_addr + 511) & 0xFFFF0000UL;
-    
+    start_page = phys_addr & 0xFFFF0000UL;
+    end_page = (phys_addr + 511) & 0xFFFF0000UL;
+
     if (start_page != end_page) {
+        /* C89: Block scope for declarations */
+        dma_mapping_t *mapping;
+
         /* Buffer crosses 64KB boundary */
         LOG_DEBUG("Test buffer crosses 64KB boundary at %08lX", phys_addr);
-        
+
         /* Try DMA mapping - it should handle this */
-        dma_mapping_t *mapping = dma_map_tx(test_buf, 512);
+        mapping = dma_map_tx(test_buf, 512);
         if (mapping) {
             /* Check if bounce buffer was used */
             if (dma_mapping_uses_bounce(mapping)) {
@@ -345,31 +397,38 @@ cache_mode_t test_cache_mode(dma_test_results_t *results) {
     cpu_info_t *cpu_info = &g_cpu_info;
     
     /* Check CPU type first */
-    if (cpu_info->type < CPU_TYPE_80486) {
+    if (cpu_info->cpu_type < CPU_DET_80486) {
         /* 386 and below have external cache or none */
-        if (cpu_info->type == CPU_TYPE_80386) {
+        if (cpu_info->cpu_type == CPU_DET_80386) {
             mode = CACHE_MODE_WRITE_THROUGH; /* 386 external cache */
         } else {
             mode = CACHE_MODE_DISABLED; /* No cache */
         }
         return mode;
     }
-    
+
     /* 486+ has internal cache - check CR0 */
-    if (cpu_info->type >= CPU_TYPE_80486) {
-        uint32_t cr0 = 0;
-        
+    if (cpu_info->cpu_type >= CPU_DET_80486) {
+        uint32_t cr0_val = 0;
+
+#ifdef __WATCOMC__
         _asm {
             .486
             mov eax, cr0
-            mov cr0, eax
+            mov dword ptr cr0_val, eax
             .386
         }
-        
+#elif defined(__GNUC__)
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0_val));
+#else
+        /* Unknown compiler - assume write-through as safe default */
+        return CACHE_MODE_WRITE_THROUGH;
+#endif
+
         /* Check cache control bits */
-        if (cr0 & 0x40000000) { /* CD bit */
+        if (cr0_val & 0x40000000UL) { /* CD bit */
             mode = CACHE_MODE_DISABLED;
-        } else if (cr0 & 0x20000000) { /* NW bit */
+        } else if (cr0_val & 0x20000000UL) { /* NW bit */
             mode = CACHE_MODE_WRITE_BACK;
         } else {
             mode = CACHE_MODE_WRITE_THROUGH;
@@ -387,15 +446,20 @@ uint16_t test_dma_alignment(nic_info_t *nic, dma_test_results_t *results) {
     uint16_t optimal = 1;
     uint32_t best_time = 0xFFFFFFFF;
     int i;
-    
+
     for (i = 0; i < sizeof(alignments)/sizeof(alignments[0]); i++) {
-        uint8_t *buf = allocate_test_buffer(1024, alignments[i]);
+        /* C89: Block scope for declarations inside loop */
+        uint8_t *buf;
+        uint32_t start;
+        dma_mapping_t *map;
+
+        buf = allocate_test_buffer(1024, alignments[i]);
         if (!buf) continue;
-        
-        uint32_t start = get_timestamp_us();
-        
+
+        start = get_timestamp_us();
+
         /* Create DMA mapping */
-        dma_mapping_t *map = dma_map_tx(buf, 1024);
+        map = dma_map_tx(buf, 1024);
         if (map) {
             /* Measure time for mapping operation */
             uint32_t elapsed = get_timestamp_us() - start;
@@ -609,36 +673,42 @@ cleanup:
  * @return SUCCESS or error code
  */
 static int test_64kb_boundary_transfer(nic_info_t *nic, dma_test_results_t *results) {
+    /* C89: All declarations at start of block */
     uint8_t huge *test_buf = NULL;
     uint32_t phys_addr;
     const size_t HUGE_SIZE = 128 * 1024;  /* 128KB to ensure crossing */
     int ret = ERROR_GENERAL;
-    
+    uint32_t boundary;
+    uint32_t offset_to_boundary;
+
     /* Try to allocate huge buffer */
     test_buf = (uint8_t huge *)halloc(HUGE_SIZE, 1);
     if (!test_buf) {
         LOG_WARNING("Cannot allocate 128KB for boundary test");
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Find a 64KB boundary within the buffer */
     phys_addr = ((uint32_t)FP_SEG(test_buf) << 4) + FP_OFF(test_buf);
-    uint32_t boundary = (phys_addr + 0xFFFF) & 0xFFFF0000;
-    uint32_t offset_to_boundary = boundary - phys_addr;
-    
+    boundary = (phys_addr + 0xFFFF) & 0xFFFF0000;
+    offset_to_boundary = boundary - phys_addr;
+
     if (offset_to_boundary < HUGE_SIZE - 1024) {
-        /* Position buffer to straddle the boundary */
+        /* C89: Block scope for declarations */
         uint8_t huge *boundary_buf = test_buf + offset_to_boundary - 512;
-        
+        size_t i;
+
         LOG_INFO("Testing 1KB transfer across 64KB boundary at 0x%08lX", boundary);
-        
-        /* Fill with pattern */
-        fill_pattern((uint8_t far *)boundary_buf, TEST_PATTERN_A, 1024);
-        
+
+        /* Fill with pattern - use manual loop for huge pointer */
+        for (i = 0; i < 1024; i++) {
+            boundary_buf[i] = TEST_PATTERN_A;
+        }
+
         /* Try DMA transfer */
         if (nic->type == NIC_TYPE_3C515_TX) {
             /* 3C515 should handle this as bus master */
-            if (hardware_dma_write(nic, boundary_buf, 1024) == SUCCESS) {
+            if (hardware_dma_write(nic, (void FAR *)boundary_buf, 1024) == SUCCESS) {
                 LOG_INFO("3C515 successfully crossed 64KB boundary");
                 results->can_cross_64k = true;
             } else {
@@ -647,8 +717,8 @@ static int test_64kb_boundary_transfer(nic_info_t *nic, dma_test_results_t *resu
             }
         }
     }
-    
-    hfree(test_buf);
+
+    hfree((void huge *)test_buf);
     return SUCCESS;
 }
 
@@ -812,13 +882,18 @@ cleanup:
 /* Helper functions */
 
 static void* allocate_test_buffer(size_t size, uint16_t alignment) {
-    void *buf = malloc(size + alignment);
+    /* C89: All declarations at start of block */
+    void *buf;
+    uintptr_t addr;
+    uintptr_t aligned;
+
+    buf = malloc(size + alignment);
     if (!buf) return NULL;
-    
+
     /* Align buffer */
-    uintptr_t addr = (uintptr_t)buf;
-    uintptr_t aligned = (addr + alignment - 1) & ~(alignment - 1);
-    
+    addr = (uintptr_t)buf;
+    aligned = (addr + alignment - 1) & ~((uintptr_t)alignment - 1);
+
     return (void*)aligned;
 }
 
@@ -845,28 +920,44 @@ static void fill_pattern(uint8_t *buffer, uint8_t pattern, size_t size) {
 static uint32_t get_timestamp_us(void) {
     /* Simple timestamp using BIOS timer (18.2 Hz) */
     /* In production, use TSC if available */
-    static uint32_t last_ticks = 0;
-    uint32_t ticks;
-    
+    uint32_t ticks = 0;  /* Initialize to suppress W200 - set by inline asm */
+
+#ifdef __WATCOMC__
     _asm {
         push es
         push bx
-        
+
         mov ax, 0x0040
         mov es, ax
         mov bx, 0x006C
         mov ax, es:[bx]
         mov dx, es:[bx+2]
-        
+
         pop bx
         pop es
-        
+
         mov word ptr ticks, ax
         mov word ptr ticks+2, dx
     }
-    
+#elif defined(__GNUC__)
+    /* GCC: Read BIOS timer at 0x40:0x6C */
+    __asm__ volatile(
+        "push %%es\n\t"
+        "movw $0x40, %%ax\n\t"
+        "movw %%ax, %%es\n\t"
+        "movl %%es:0x6C, %0\n\t"
+        "pop %%es"
+        : "=r"(ticks)
+        :
+        : "ax"
+    );
+#else
+    /* Fallback: return 0 */
+    ticks = 0;
+#endif
+
     /* Convert to microseconds (very rough) */
-    return ticks * 54945; /* ~55ms per tick */
+    return ticks * 54945UL; /* ~55ms per tick */
 }
 
 /**
@@ -928,7 +1019,7 @@ int benchmark_pio_vs_dma(nic_info_t *nic, dma_test_results_t *results) {
                     goto cleanup;
                 }
                 /* RX (loopback should make packet available) */
-                if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                if (wait_for_rx_ready(nic, 100UL) == SUCCESS) {
                     hardware_pio_read(nic, rx_buf, size);
                 }
             }
@@ -950,7 +1041,7 @@ int benchmark_pio_vs_dma(nic_info_t *nic, dma_test_results_t *results) {
                     LOG_WARNING("TX completion timeout");
                 }
                 /* RX with DMA */
-                if (hardware_wait_rx_ready(nic, 100) == SUCCESS) {
+                if (wait_for_rx_ready(nic, 100UL) == SUCCESS) {
                     hardware_dma_read(nic, rx_buf, size);
                 }
             }
@@ -1041,9 +1132,13 @@ static int hardware_wait_tx_complete(nic_info_t *nic, uint32_t timeout_ms) {
             return SUCCESS;
         }
         /* Brief yield to avoid spinning */
+#ifdef __WATCOMC__
         _asm { nop }
+#elif defined(__GNUC__)
+        __asm__ volatile("nop");
+#endif
     }
-    
+
     return ERROR_TIMEOUT;
 }
 
@@ -1053,7 +1148,7 @@ static int hardware_wait_tx_complete(nic_info_t *nic, uint32_t timeout_ms) {
  * @param timeout_ms Timeout in milliseconds
  * @return SUCCESS if RX ready, ERROR_TIMEOUT if timed out
  */
-static int hardware_wait_rx_ready(nic_info_t *nic, uint32_t timeout_ms) {
+static int wait_for_rx_ready(nic_info_t *nic, uint32_t timeout_ms) {
     uint32_t start_time = get_timestamp_us();
     uint32_t timeout_us = timeout_ms * 1000;
     
@@ -1062,9 +1157,13 @@ static int hardware_wait_rx_ready(nic_info_t *nic, uint32_t timeout_ms) {
             return SUCCESS;
         }
         /* Brief yield to avoid spinning */
+#ifdef __WATCOMC__
         _asm { nop }
+#elif defined(__GNUC__)
+        __asm__ volatile("nop");
+#endif
     }
-    
+
     return ERROR_TIMEOUT;
 }
 
@@ -1081,17 +1180,37 @@ bool dma_tests_completed(void) {
 /* Cache management based on capabilities */
 
 void dma_flush_if_needed(void *addr, size_t size) {
+    (void)addr;  /* Suppress unused parameter warning */
+    (void)size;
     if (g_dma_caps.needs_cache_flush) {
         if (cpu_has_feature(CPU_FEATURE_WBINVD)) {
-            _asm { wbinvd }
+#ifdef __WATCOMC__
+            _asm {
+                .486
+                wbinvd
+                .8086
+            }
+#elif defined(__GNUC__)
+            __asm__ volatile("wbinvd");
+#endif
         }
     }
 }
 
 void dma_invalidate_if_needed(void *addr, size_t size) {
+    (void)addr;  /* Suppress unused parameter warning */
+    (void)size;
     if (g_dma_caps.needs_cache_invalidate) {
         if (cpu_has_feature(CPU_FEATURE_WBINVD)) {
-            _asm { wbinvd }
+#ifdef __WATCOMC__
+            _asm {
+                .486
+                wbinvd
+                .8086
+            }
+#elif defined(__GNUC__)
+            __asm__ volatile("wbinvd");
+#endif
         }
     }
 }

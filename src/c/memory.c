@@ -15,7 +15,12 @@
 #include "../../include/cpudet.h"
 #include "../../include/logging.h"
 #include "../../include/vds.h"
+#include "../../include/pltprob.h"
+#include "../../include/niccap.h"
+#include "../../include/main.h"
+#if defined(__TURBOC__) || defined(__WATCOMC__) || defined(_MSC_VER)
 #include <dos.h>
+#endif
 #include <string.h>
 #include <stdlib.h>
 
@@ -84,6 +89,7 @@ static void memory_copy_32bit(void *dest, const void *src, uint32_t size);
 static void memory_copy_16bit(void *dest, const void *src, uint32_t size);
 static void memory_set_32bit(void *ptr, uint8_t value, uint32_t size);
 static void memory_set_16bit(void *ptr, uint8_t value, uint32_t size);
+static void memory_cleanup_dma_pool(void);
 
 /* Enhanced stress testing functions */
 static int memory_stress_test_allocation_patterns(void);
@@ -98,9 +104,11 @@ static int memory_test_extreme_allocations(void);
 static void memory_simulate_low_memory_conditions(void);
 /**
  * @brief Initialize the three-tier memory management system
+ * @param config Configuration parameters (may be NULL)
  * @return 0 on success, negative on error
  */
-int memory_init(void) {
+int memory_init(const config_t *config) {
+    (void)config;  /* Currently unused, for future expansion */
     if (g_memory_system.initialized) {
         return 0;
     }
@@ -207,23 +215,25 @@ int memory_init_core(config_t *config) {
  * @return 0 on success, negative on error
  */
 /**
- * @brief Check if buffer crosses 64KB boundary
- * 
- * @param addr Buffer address
+ * @brief Check if buffer crosses 64KB boundary (address-based wrapper)
+ *
+ * Converts a far pointer to physical address and uses the inline
+ * crosses_64k_boundary() from vds.h for the actual check.
+ *
+ * @param addr Buffer address (far pointer)
  * @param size Buffer size
  * @return true if crosses boundary
  */
-static bool crosses_64k_boundary(void *addr, uint32_t size) {
+static bool buffer_crosses_64k_boundary(void far *addr, uint32_t size) {
     uint32_t linear = ((uint32_t)FP_SEG(addr) << 4) + FP_OFF(addr);
-    uint32_t start_64k = linear & 0xFFFF0000;
-    uint32_t end_64k = (linear + size - 1) & 0xFFFF0000;
-    return start_64k != end_64k;
+    /* Use the inline crosses_64k_boundary from vds.h */
+    return crosses_64k_boundary(linear, size);
 }
 
 /* DMA allocation tracking structure */
 typedef struct {
-    void *base_ptr;       /* Original allocation for freeing */
-    void *aligned_ptr;    /* Aligned pointer for use */
+    void far *base_ptr;       /* Original allocation for freeing */
+    void far *aligned_ptr;    /* Aligned pointer for use */
     uint32_t base_size;   /* Original allocation size */
     uint32_t usable_size; /* Usable size after alignment */
 } dma_alloc_info_t;
@@ -241,12 +251,14 @@ static dma_alloc_info_t g_dma_alloc_info = {0};
  * @param retry_count Number of allocation retries
  * @return Aligned buffer or NULL
  */
-static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment, 
+static void far * allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
                                             bool use_isa_dma, int retry_count) {
-    void *base_buffer;
-    void *aligned_buffer;
+    void far *base_buffer;
+    void far *aligned_buffer;
     uint32_t alloc_size;
     uint32_t linear_addr;
+    uint32_t aligned_addr;
+    uint32_t next_64k;
     int attempts = 0;
     
     /* GPT-5 Fix: Validate alignment is power-of-two */
@@ -270,7 +282,7 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
     
     while (attempts < retry_count) {
         /* Allocate base buffer */
-        base_buffer = memory_alloc(alloc_size, MEM_TYPE_DMA);
+        base_buffer = memory_alloc(alloc_size, MEM_TYPE_DMA_BUFFER, MEM_FLAG_DMA_CAPABLE);
         if (!base_buffer) {
             log_error("  Failed to allocate %lu bytes (attempt %d)", 
                      alloc_size, attempts + 1);
@@ -279,7 +291,7 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
         
         /* Calculate aligned pointer within allocation */
         linear_addr = ((uint32_t)FP_SEG(base_buffer) << 4) + FP_OFF(base_buffer);
-        uint32_t aligned_addr = (linear_addr + alignment - 1) & ~(alignment - 1);
+        aligned_addr = (linear_addr + alignment - 1) & ~(alignment - 1);
         
         /* GPT-5 Fix: Create aligned_buffer BEFORE using it */
         aligned_buffer = MK_FP(aligned_addr >> 4, aligned_addr & 0x0F);
@@ -289,15 +301,15 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
             /* Check 16MB boundary (ISA DMA limit - 24-bit address) */
             if (aligned_addr + size > 0x1000000) {
                 log_warning("  Buffer above 16MB boundary, retrying");
-                memory_free(base_buffer);
+                memory_free((void *)base_buffer);
                 attempts++;
                 continue;
             }
             
             /* Check 64KB boundary crossing */
-            if (crosses_64k_boundary(aligned_buffer, size)) {
+            if (buffer_crosses_64k_boundary(aligned_buffer, size)) {
                 /* Try to adjust within our allocation */
-                uint32_t next_64k = (aligned_addr & 0xFFFF0000) + 0x10000;
+                next_64k = (aligned_addr & 0xFFFF0000) + 0x10000;
                 if (next_64k - linear_addr + size <= alloc_size) {
                     /* We can fit after the boundary */
                     aligned_addr = next_64k;
@@ -305,7 +317,7 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
                     log_info("  Adjusted to avoid 64KB boundary");
                 } else {
                     log_warning("  Cannot avoid 64KB boundary, retrying");
-                    memory_free(base_buffer);
+                    memory_free((void *)base_buffer);
                     attempts++;
                     continue;
                 }
@@ -315,7 +327,7 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
         /* GPT-5 Fix: Verify final aligned_addr + size stays within allocation */
         if ((aligned_addr - linear_addr) + size > alloc_size) {
             log_error("  Alignment adjustment exceeds allocation size");
-            memory_free(base_buffer);
+            memory_free((void *)base_buffer);
             attempts++;
             continue;
         }
@@ -345,37 +357,38 @@ static void* allocate_constrained_dma_buffer(uint32_t size, uint32_t alignment,
 }
 
 int memory_init_dma(config_t *config) {
-    void *dma_buffer;
+    void far *dma_buffer;
     uint32_t dma_size;
-    
+    driver_state_t *state;
+    nic_info_t *nic;
+    bool use_isa_dma = false;
+    uint32_t alignment = 16;  /* Default cache line alignment */
+
     if (!g_memory_system.initialized) {
         log_error("Core memory not initialized");
         return -1;
     }
-    
+
     log_info("Initializing DMA memory buffers");
-    
-    /* Check DMA policy from earlier phases */
-    extern int g_dma_policy;  /* From dma_capability_test.c */
-    
+
+    /* g_dma_policy is declared in pltprob.h with proper type dma_policy_t */
+
     if (g_dma_policy == DMA_POLICY_FORBID) {
         log_info("  DMA disabled by policy - no DMA buffers allocated");
         return 0;
     }
-    
+
     /* Determine DMA buffer size based on configuration */
-    dma_size = (config && config->dma_buffer_size) ? 
-               config->dma_buffer_size : DMA_DEFAULT_BUFFER_SIZE;
-    
+    dma_size = (config && config->buffer_size) ?
+               config->buffer_size : DMA_BUFFER_SIZE;
+
     /* GPT-5: Determine if we're using ISA DMA based on hardware */
-    driver_state_t *state = get_driver_state();
-    bool use_isa_dma = false;
-    uint32_t alignment = 16;  /* Default cache line alignment */
-    
+    state = get_driver_state();
+
     /* Check if we need ISA DMA constraints */
-    if (state->bus_type == BUS_ISA || 
+    if (state->bus_type == BUS_ISA ||
         (state->bus_type == BUS_EISA && g_dma_policy != DMA_POLICY_FORBID)) {
-        nic_info_t *nic = hardware_get_primary_nic();
+        nic = hardware_get_primary_nic();
         if (nic && nic->capabilities & NIC_CAP_DMA_8237) {
             use_isa_dma = true;
             log_info("  Using ISA 8237 DMA - applying strict constraints");
@@ -412,12 +425,12 @@ int memory_init_dma(config_t *config) {
     
     /* If VDS is available, lock the buffer */
     if (vds_available()) {
-        vds_dma_descriptor_t desc;
+        vds_dds_t desc;
         int result = vds_lock_region(dma_buffer, dma_size, &desc);
         if (result == VDS_SUCCESS) {
-            log_info("  VDS locked buffer: phys=%08lX", desc.physical_addr);
+            log_info("  VDS locked buffer: phys=%08lX", desc.physical);
         } else {
-            log_warning("  VDS lock failed: %s", vds_error_string(result));
+            log_warning("  VDS lock failed: error code %d", result);
         }
     }
     
@@ -432,19 +445,19 @@ int memory_init_dma(config_t *config) {
 }
 
 /**
- * @brief Free DMA buffer allocated with constraints
- * 
+ * @brief Cleanup DMA pool allocated during init
+ *
  * Frees the base allocation, not the aligned pointer
  */
-void memory_free_dma(void) {
+static void memory_cleanup_dma_pool(void) {
     if (g_dma_alloc_info.base_ptr) {
         log_info("Freeing DMA buffer (base: %04X:%04X)",
                  FP_SEG(g_dma_alloc_info.base_ptr),
                  FP_OFF(g_dma_alloc_info.base_ptr));
-        memory_free(g_dma_alloc_info.base_ptr);
+        memory_free((void *)g_dma_alloc_info.base_ptr);
         memset(&g_dma_alloc_info, 0, sizeof(g_dma_alloc_info));
     }
-    
+
     /* Clear DMA pool */
     g_dma_pool.base = NULL;
     g_dma_pool.size = 0;
@@ -484,7 +497,10 @@ void memory_cleanup(void) {
             }
         }
     }
-    
+
+    /* Cleanup DMA pool */
+    memory_cleanup_dma_pool();
+
     /* Clear state */
     memset(&g_memory_system, 0, sizeof(g_memory_system));
     memset(&g_xms_tier, 0, sizeof(g_xms_tier));
@@ -532,21 +548,22 @@ static int memory_detect_umb(void) {
  */
 void* memory_alloc(uint32_t size, mem_type_t type, uint32_t flags) {
     void *ptr = NULL;
-    
+    uint32_t total_size;
+
     if (!g_memory_system.initialized) {
         memory_set_last_error(MEM_ERROR_INVALID_POINTER);
         return NULL;
     }
-    
+
     if (size == 0) {
         memory_set_last_error(MEM_ERROR_INVALID_SIZE);
         return NULL;
     }
-    
+
     log_debug("Allocating %lu bytes, type %d, flags 0x%lX", size, type, flags);
-    
+
     /* Adjust size for block header */
-    uint32_t total_size = size + sizeof(mem_block_t);
+    total_size = size + sizeof(mem_block_t);
     
     /* Apply allocation strategy based on size and type */
     switch (g_memory_system.allocation_strategy) {
@@ -640,88 +657,92 @@ void memory_free(void *ptr) {
 static void* memory_alloc_xms_tier(uint32_t size, uint32_t flags) {
     uint16_t handle;
     uint32_t linear_addr;
-    int size_kb = (size + 1023) / 1024; /* Round up to KB */
+    uint32_t aligned_addr;
+    uint32_t alignment;
+    uint32_t expected_alignment;
+    int size_kb;
     int i;
+    mem_block_t *block;
     extern cpu_info_t g_cpu_info;
-    
+
+    size_kb = (size + 1023) / 1024; /* Round up to KB */
+
     if (!g_memory_system.xms_available) {
         return NULL;
     }
-    
+
     /* For DMA buffers, ensure we allocate extra for alignment */
     if (flags & MEM_FLAG_DMA_CAPABLE) {
         /* Add padding for DMA alignment (4-byte minimum, 32-byte optimal) */
-        uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80486) ? 32 : 4;
+        alignment = (g_cpu_info.cpu_type >= CPU_DET_80486) ? 32 : 4;
         size_kb = ((size + alignment + 1023) / 1024);
     }
-    
+
     /* Find free handle slot */
     for (i = 0; i < XMS_MAX_HANDLES; i++) {
         if (!g_xms_tier.handle_used[i]) {
             break;
         }
     }
-    
+
     if (i >= XMS_MAX_HANDLES) {
         log_debug("No free XMS handle slots");
         return NULL;
     }
-    
+
     /* Allocate XMS block */
     if (xms_allocate(size_kb, &handle) != 0) {
         return NULL;
     }
-    
+
     /* Lock the block to get linear address */
     if (xms_lock(handle, &linear_addr) != 0) {
         xms_free(handle);
         return NULL;
     }
-    
+
     /* For DMA buffers, align the linear address properly */
-    uint32_t aligned_addr = linear_addr;
+    aligned_addr = linear_addr;
     if (flags & MEM_FLAG_DMA_CAPABLE) {
-        uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80486) ? 32 : 4;
+        alignment = (g_cpu_info.cpu_type >= CPU_DET_80486) ? 32 : 4;
         aligned_addr = ALIGN_UP(linear_addr + sizeof(mem_block_t), alignment);
-        
+
         /* Store original address in the header for freeing */
-        mem_block_t *block = (mem_block_t*)(aligned_addr - sizeof(mem_block_t));
+        block = (mem_block_t*)(aligned_addr - sizeof(mem_block_t));
         block->original_addr = linear_addr;
-    } else {
-        aligned_addr = linear_addr;
     }
-    
+
     /* Store handle information */
     g_xms_tier.handles[i] = handle;
     g_xms_tier.sizes[i] = size;
     g_xms_tier.handle_used[i] = true;
     g_xms_tier.total_allocated += size;
-    
+
     if (g_xms_tier.total_allocated > g_xms_tier.peak_allocated) {
         g_xms_tier.peak_allocated = g_xms_tier.total_allocated;
     }
-    
+
     /* Set up memory block header */
-    mem_block_t *block = (mem_block_t*)(aligned_addr - sizeof(mem_block_t));
+    block = (mem_block_t*)(aligned_addr - sizeof(mem_block_t));
     block->size = size - sizeof(mem_block_t);
     block->flags = flags | MEM_FLAG_DMA_CAPABLE;
     block->type = MEM_TYPE_PACKET_BUFFER;
     block->magic = MEM_MAGIC_ALLOCATED;
     block->next = NULL;
     block->prev = NULL;
-    
+
     /* For DMA buffers, verify alignment */
     if (flags & MEM_FLAG_DMA_CAPABLE) {
-        uint32_t expected_alignment = (g_cpu_info.type >= CPU_TYPE_80486) ? 32 : 4;
+        expected_alignment = (g_cpu_info.cpu_type >= CPU_DET_80486) ? 32 : 4;
         if (!IS_ALIGNED(aligned_addr, expected_alignment)) {
-            log_warning("DMA buffer alignment suboptimal: %08lX (expected %u-byte alignment)", 
+            log_warning("DMA buffer alignment suboptimal: %08lX (expected %u-byte alignment)",
                        aligned_addr, expected_alignment);
         }
     }
-    
-    log_debug("XMS allocation: handle %04X, %d KB at linear %08lX (aligned %08lX)", 
+
+    log_debug("XMS allocation: handle %04X, %d KB at linear %08lX (aligned %08lX)",
              handle, size_kb, linear_addr, aligned_addr);
-    
+
     return (void*)aligned_addr;
 }
 
@@ -733,49 +754,52 @@ static void* memory_alloc_xms_tier(uint32_t size, uint32_t flags) {
  */
 static void* memory_alloc_umb_tier(uint32_t size, uint32_t flags) {
     uint16_t segment;
-    uint16_t paragraphs = (size + 15) / 16; /* Round up to paragraphs */
+    uint16_t paragraphs;
     int i;
-    
+    mem_block_t *block;
+
+    paragraphs = (size + 15) / 16; /* Round up to paragraphs */
+
     if (!g_memory_system.umb_available) {
         return NULL;
     }
-    
+
     /* Find free segment slot */
     for (i = 0; i < 16; i++) {
         if (!g_umb_tier.segment_used[i]) {
             break;
         }
     }
-    
+
     if (i >= 16) {
         log_debug("No free UMB segment slots");
         return NULL;
     }
-    
+
     /* Allocate DOS memory in UMB area */
     if (memory_allocate_dos_memory(paragraphs, &segment) != 0) {
         return NULL;
     }
-    
+
     /* Check if we got UMB (segment > 0xA000) */
     if (segment < 0xA000) {
         memory_free_dos_memory(segment);
         return NULL;
     }
-    
+
     /* Store segment information */
     g_umb_tier.segments[i] = segment;
     g_umb_tier.sizes[i] = size;
     g_umb_tier.segment_used[i] = true;
     g_umb_tier.total_allocated += size;
     g_umb_tier.handle_count++;
-    
+
     if (g_umb_tier.total_allocated > g_umb_tier.peak_allocated) {
         g_umb_tier.peak_allocated = g_umb_tier.total_allocated;
     }
-    
+
     /* Set up memory block header */
-    mem_block_t *block = (mem_block_t*)MK_FP(segment, 0);
+    block = (mem_block_t*)MK_FP(segment, 0);
     block->size = size - sizeof(mem_block_t);
     block->flags = flags;
     block->type = MEM_TYPE_PACKET_BUFFER;
@@ -854,9 +878,12 @@ static void memory_free_xms_tier(void *ptr) {
  * @param ptr Pointer to memory
  */
 static void memory_free_umb_tier(void *ptr) {
-    mem_block_t *block = memory_get_block_header(ptr);
-    uint16_t segment = FP_SEG(block);
+    mem_block_t *block;
+    uint16_t segment;
     int i;
+
+    block = memory_get_block_header(ptr);
+    segment = FP_SEG(block);
     
     /* Find the segment for this memory */
     for (i = 0; i < 16; i++) {
@@ -1112,7 +1139,7 @@ void memory_copy_optimized(void *dest, const void *src, uint32_t size) {
     }
     
     /* Use CPU-specific optimizations based on Phase 1 detection */
-    if (g_cpu_info.type >= CPU_TYPE_80386 && cpu_supports_32bit()) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386 && (g_cpu_info.features & CPU_FEATURE_32BIT)) {
         /* 32-bit optimized copy for 386+ processors */
         memory_copy_32bit(dest, src, size);
     } else {
@@ -1213,7 +1240,7 @@ void memory_set_optimized(void *ptr, uint8_t value, uint32_t size) {
     }
     
     /* Use CPU-specific optimizations */
-    if (g_cpu_info.type >= CPU_TYPE_80386 && cpu_supports_32bit()) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386 && (g_cpu_info.features & CPU_FEATURE_32BIT)) {
         memory_set_32bit(ptr, value, size);
     } else {
         memory_set_16bit(ptr, value, size);
@@ -1311,9 +1338,13 @@ void* memory_alloc_aligned(uint32_t size, uint32_t alignment, mem_type_t type) {
     extern cpu_info_t g_cpu_info; /* From Phase 1 */
     void *ptr;
     uint32_t flags = MEM_FLAG_ALIGNED;
-    
+    uint32_t padded_size;
+    uint32_t addr;
+    uint32_t aligned_addr;
+    void **orig_ptr_storage;
+
     /* Adjust alignment based on CPU capabilities */
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         /* 386+ can benefit from 32-bit alignment */
         if (alignment < 4) {
             alignment = 4;
@@ -1324,28 +1355,28 @@ void* memory_alloc_aligned(uint32_t size, uint32_t alignment, mem_type_t type) {
             alignment = 2;
         }
     }
-    
+
     /* Allocate with padding for alignment */
-    uint32_t padded_size = size + alignment + sizeof(mem_block_t);
+    padded_size = size + alignment + sizeof(mem_block_t);
     ptr = memory_alloc(padded_size, type, flags);
-    
+
     if (!ptr) {
         return NULL;
     }
-    
+
     /* Calculate aligned address */
-    uint32_t addr = (uint32_t)ptr;
-    uint32_t aligned_addr = ALIGN_UP(addr, alignment);
-    
+    addr = (uint32_t)ptr;
+    aligned_addr = ALIGN_UP(addr, alignment);
+
     /* If already aligned, return as-is */
     if (addr == aligned_addr) {
         return ptr;
     }
-    
+
     /* Store original pointer in the bytes before aligned address for later freeing */
-    void **orig_ptr_storage = (void**)(aligned_addr - sizeof(void*));
+    orig_ptr_storage = (void**)(aligned_addr - sizeof(void*));
     *orig_ptr_storage = ptr;
-    
+
     /* Return properly aligned pointer */
     return (void*)aligned_addr;
 }
@@ -1356,21 +1387,23 @@ void* memory_alloc_aligned(uint32_t size, uint32_t alignment, mem_type_t type) {
  */
 void memory_free_aligned(void *ptr) {
     void *original_ptr;
-    
+    void **orig_ptr_storage;
+    uint32_t addr;
+
     if (!ptr) {
         return;
     }
-    
+
     /* Check if this looks like an aligned pointer */
-    uint32_t addr = (uint32_t)ptr;
+    addr = (uint32_t)ptr;
     if (!IS_ALIGNED(addr, 4) && !IS_ALIGNED(addr, 2)) {
         /* Not aligned, treat as regular pointer */
         memory_free(ptr);
         return;
     }
-    
+
     /* Retrieve original pointer stored before aligned address */
-    void **orig_ptr_storage = (void**)(addr - sizeof(void*));
+    orig_ptr_storage = (void**)(addr - sizeof(void*));
     original_ptr = *orig_ptr_storage;
     
     /* Validate that original pointer makes sense */
@@ -1391,11 +1424,12 @@ void memory_free_aligned(void *ptr) {
 void* memory_alloc_dma(uint32_t size) {
     extern cpu_info_t g_cpu_info;
     uint32_t flags = MEM_FLAG_DMA_CAPABLE | MEM_FLAG_ALIGNED;
+    uint32_t alignment;
     void *ptr;
-    
+
     /* DMA memory must be physically contiguous and properly aligned */
     /* For 3C515-TX: 4-byte minimum, 32-byte optimal for bus mastering */
-    
+
     /* Use XMS memory for DMA buffers (physically contiguous) */
     if (g_memory_system.xms_available) {
         ptr = memory_alloc_xms_tier(size + sizeof(mem_block_t), flags);
@@ -1404,20 +1438,20 @@ void* memory_alloc_dma(uint32_t size) {
             return ptr;
         }
     }
-    
+
     /* Fallback to conventional memory with alignment warning */
     ptr = memory_alloc(size, MEM_TYPE_PACKET_BUFFER, flags);
     if (ptr) {
         log_warning("DMA buffer allocated in conventional memory - may not be optimal");
-        
+
         /* Verify alignment for DMA operations */
-        uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80486) ? 32 : 4;
+        alignment = (g_cpu_info.cpu_type >= CPU_DET_80486) ? 32 : 4;
         if (!IS_ALIGNED((uint32_t)ptr, alignment)) {
-            log_error("DMA buffer not properly aligned: %p (need %u-byte alignment)", 
+            log_error("DMA buffer not properly aligned: %p (need %u-byte alignment)",
                      ptr, alignment);
         }
     }
-    
+
     return ptr;
 }
 
@@ -1444,28 +1478,29 @@ void memory_free_dma(void *ptr) {
 void* memory_alloc_cache_aligned(uint32_t size, uint32_t cache_line_size) {
     extern cpu_info_t g_cpu_info;
     uint32_t alignment;
-    
+    void *ptr;
+
     /* Validate cache line size */
     if (cache_line_size != 16 && cache_line_size != 32 && cache_line_size != 64) {
         log_error("Invalid cache line size: %u (must be 16, 32, or 64)", cache_line_size);
         return NULL;
     }
-    
+
     /* Choose alignment based on CPU type and cache line size */
-    if (g_cpu_info.type >= CPU_TYPE_PENTIUM) {
+    if (g_cpu_info.cpu_type >= CPU_DET_CPUID_CAPABLE) {
         alignment = cache_line_size;  /* Full cache line alignment for Pentium+ */
-    } else if (g_cpu_info.type >= CPU_TYPE_80486) {
+    } else if (g_cpu_info.cpu_type >= CPU_DET_80486) {
         alignment = 32;               /* 486 cache line size */
     } else {
         alignment = 4;                /* Basic alignment for older CPUs */
     }
-    
-    void *ptr = memory_alloc_aligned(size, alignment, MEM_TYPE_PACKET_BUFFER);
+
+    ptr = memory_alloc_aligned(size, alignment, MEM_TYPE_PACKET_BUFFER);
     if (ptr) {
-        log_debug("Allocated %lu byte cache-aligned buffer (%u-byte alignment) at %p", 
+        log_debug("Allocated %lu byte cache-aligned buffer (%u-byte alignment) at %p",
                  size, alignment, ptr);
     }
-    
+
     return ptr;
 }
 
@@ -1476,16 +1511,16 @@ void* memory_alloc_cache_aligned(uint32_t size, uint32_t cache_line_size) {
 int memory_init_cpu_optimized(void) {
     extern cpu_info_t g_cpu_info; /* From Phase 1 */
     
-    if (!g_cpu_info.type) {
+    if (!g_cpu_info.cpu_type) {
         log_warning("CPU not detected - using conservative memory operations");
         return -1;
     }
     
     log_info("Initializing CPU-optimized memory operations for %s",
-             cpu_type_to_string(g_cpu_info.type));
+             cpu_type_to_string(g_cpu_info.cpu_type));
     
     /* Log CPU-specific optimizations */
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         log_info("Enabling 32-bit memory operations for 386+ CPU");
         
         if (g_cpu_info.features & CPU_FEATURE_TSC) {
@@ -1493,7 +1528,7 @@ int memory_init_cpu_optimized(void) {
         }
     } else {
         log_info("Using 16-bit memory operations for %s",
-                 cpu_type_to_string(g_cpu_info.type));
+                 cpu_type_to_string(g_cpu_info.cpu_type));
     }
     
     /* Initialize DMA buffer pools if we have sufficient XMS memory */
@@ -1519,10 +1554,12 @@ int memory_init_cpu_optimized(void) {
  * @return 0 on success, negative on error
  */
 int memory_pool_init(mem_pool_t *pool, void *base, uint32_t size) {
+    mem_block_t *initial_block;
+
     if (!pool || !base || size < sizeof(mem_block_t)) {
         return -1;
     }
-    
+
     /* Initialize pool structure */
     pool->base = base;
     pool->size = size;
@@ -1533,19 +1570,19 @@ int memory_pool_init(mem_pool_t *pool, void *base, uint32_t size) {
     pool->alloc_count = 0;
     pool->free_count = 0;
     pool->initialized = true;
-    
+
     /* Create initial free block */
-    mem_block_t *initial_block = (mem_block_t*)base;
+    initial_block = (mem_block_t*)base;
     initial_block->size = size - sizeof(mem_block_t);
     initial_block->flags = 0;
     initial_block->type = MEM_TYPE_GENERAL;
     initial_block->magic = MEM_MAGIC_FREE;
     initial_block->next = NULL;
     initial_block->prev = NULL;
-    
+
     pool->free_list = initial_block;
     pool->block_count = 1;
-    
+
     return 0;
 }
 
@@ -1571,11 +1608,13 @@ void memory_pool_cleanup(mem_pool_t *pool) {
  */
 void* memory_pool_alloc(mem_pool_t *pool, uint32_t size, uint32_t flags) {
     mem_block_t *block, *new_block;
-    uint32_t total_size = size + sizeof(mem_block_t);
-    
+    uint32_t total_size;
+
     if (!pool || !pool->initialized || size == 0) {
         return NULL;
     }
+
+    total_size = size + sizeof(mem_block_t);
     
     /* Find suitable free block */
     for (block = pool->free_list; block; block = block->next) {
@@ -1626,53 +1665,56 @@ void* memory_pool_alloc(mem_pool_t *pool, uint32_t size, uint32_t flags) {
  */
 void memory_pool_free(mem_pool_t *pool, void *ptr) {
     mem_block_t *block;
-    
+    mem_block_t *next_block;
+    mem_block_t *prev_block;
+    mem_block_t *expected_next;
+
     if (!pool || !ptr) {
         return;
     }
-    
+
     block = (mem_block_t*)((uint8_t*)ptr - sizeof(mem_block_t));
-    
+
     if (block->magic != MEM_MAGIC_ALLOCATED) {
         return; /* Invalid block */
     }
-    
+
     /* Mark as free */
     block->magic = MEM_MAGIC_FREE;
-    
+
     /* Update pool statistics */
     pool->used -= block->size + sizeof(mem_block_t);
     pool->free += block->size + sizeof(mem_block_t);
     pool->free_count++;
-    
+
     /* Implement basic block coalescing to reduce fragmentation */
-    
+
     /* Try to coalesce with next block */
-    mem_block_t *next_block = (mem_block_t*)((uint8_t*)block + sizeof(mem_block_t) + block->size);
+    next_block = (mem_block_t*)((uint8_t*)block + sizeof(mem_block_t) + block->size);
     if ((uint32_t)next_block < (uint32_t)pool->base + pool->size &&
         next_block->magic == MEM_MAGIC_FREE) {
-        
+
         /* Coalesce with next block */
         block->size += sizeof(mem_block_t) + next_block->size;
-        
+
         /* Update linked list pointers */
         if (next_block->next) {
             next_block->next->prev = block;
         }
         block->next = next_block->next;
-        
+
         /* Clear coalesced block */
         next_block->magic = 0;
-        
+
         pool->block_count--;
     }
-    
+
     /* Try to coalesce with previous block */
     if (block->prev && block->prev->magic == MEM_MAGIC_FREE) {
-        mem_block_t *prev_block = block->prev;
-        
+        prev_block = block->prev;
+
         /* Check if blocks are adjacent */
-        mem_block_t *expected_next = (mem_block_t*)((uint8_t*)prev_block + sizeof(mem_block_t) + prev_block->size);
+        expected_next = (mem_block_t*)((uint8_t*)prev_block + sizeof(mem_block_t) + prev_block->size);
         if (expected_next == block) {
             /* Coalesce with previous block */
             prev_block->size += sizeof(mem_block_t) + block->size;
@@ -1907,17 +1949,22 @@ int memory_comprehensive_stress_test(void) {
 static int memory_stress_test_allocation_patterns(void) {
     void *ptrs[200];
     uint32_t sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
-    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+    int num_sizes;
     int allocated = 0;
     int pattern;
+    int reallocated;
     int i;
+    uint32_t size;
+    mem_block_t *block;
+
+    num_sizes = sizeof(sizes) / sizeof(sizes[0]);
 
     /* Test Pattern 1: Sequential increasing sizes */
     log_debug("Testing sequential increasing allocation pattern");
     for (pattern = 0; pattern < 3; pattern++) {
         for (i = 0; i < 50 && allocated < 200; i++) {
-            uint32_t size = sizes[i % num_sizes];
-            
+            size = sizes[i % num_sizes];
+
             switch (pattern) {
                 case 0: /* Normal allocation */
                     ptrs[allocated] = memory_alloc(size, MEM_TYPE_GENERAL, 0);
@@ -1929,7 +1976,7 @@ static int memory_stress_test_allocation_patterns(void) {
                     ptrs[allocated] = memory_alloc(size, MEM_TYPE_PACKET_BUFFER, MEM_FLAG_DMA_CAPABLE);
                     break;
             }
-            
+
             if (ptrs[allocated]) {
                 /* Fill with test pattern */
                 memset(ptrs[allocated], 0xAA + (i % 4), size);
@@ -1937,20 +1984,20 @@ static int memory_stress_test_allocation_patterns(void) {
             }
         }
     }
-    
+
     log_debug("Allocated %d blocks in pattern test", allocated);
 
     /* Verify all allocations are intact */
     for (i = 0; i < allocated; i++) {
         if (ptrs[i]) {
-            mem_block_t *block = memory_get_block_header(ptrs[i]);
+            block = memory_get_block_header(ptrs[i]);
             if (!memory_validate_block(block)) {
                 log_error("Block validation failed for allocation %d", i);
                 return -1;
             }
         }
     }
-    
+
     /* Free every other allocation to create fragmentation */
     for (i = 0; i < allocated; i += 2) {
         if (ptrs[i]) {
@@ -1958,17 +2005,16 @@ static int memory_stress_test_allocation_patterns(void) {
             ptrs[i] = NULL;
         }
     }
-    
+
     /* Try to reallocate in the gaps */
-    {
-        int reallocated = 0;
-        for (i = 0; i < allocated; i += 2) {
+    reallocated = 0;
+    for (i = 0; i < allocated; i += 2) {
         ptrs[i] = memory_alloc(sizes[(i/2) % num_sizes], MEM_TYPE_GENERAL, 0);
         if (ptrs[i]) {
             reallocated++;
         }
-        log_debug("Reallocated %d blocks after fragmentation", reallocated);
     }
+    log_debug("Reallocated %d blocks after fragmentation", reallocated);
 
     /* Free all remaining allocations */
     for (i = 0; i < allocated; i++) {
@@ -1987,8 +2033,10 @@ static int memory_stress_test_allocation_patterns(void) {
 static int memory_stress_test_fragmentation(void) {
     void *large_blocks[10];
     void *small_blocks[100];
+    void *medium_ptr;
     int large_count = 0;
     int small_count = 0;
+    int medium_allocated = 0;
     int i;
 
     log_debug("Testing memory fragmentation scenarios");
@@ -2000,7 +2048,7 @@ static int memory_stress_test_fragmentation(void) {
             large_count++;
         }
     }
-    
+
     /* Fill gaps with small blocks */
     for (i = 0; i < 100; i++) {
         small_blocks[i] = memory_alloc(64, MEM_TYPE_GENERAL, 0);
@@ -2008,9 +2056,9 @@ static int memory_stress_test_fragmentation(void) {
             small_count++;
         }
     }
-    
+
     log_debug("Allocated %d large blocks and %d small blocks", large_count, small_count);
-    
+
     /* Free every other large block to create large gaps */
     for (i = 1; i < 10; i += 2) {
         if (large_blocks[i]) {
@@ -2018,20 +2066,17 @@ static int memory_stress_test_fragmentation(void) {
             large_blocks[i] = NULL;
         }
     }
-    
+
     /* Try to allocate medium-sized blocks in the gaps */
-    {
-        int medium_allocated = 0;
-        for (i = 0; i < 5; i++) {
-            void *medium_ptr = memory_alloc(2048, MEM_TYPE_PACKET_BUFFER, 0);
-            if (medium_ptr) {
-                medium_allocated++;
-                memory_free(medium_ptr);  /* Free immediately to test coalescing */
-            }
+    for (i = 0; i < 5; i++) {
+        medium_ptr = memory_alloc(2048, MEM_TYPE_PACKET_BUFFER, 0);
+        if (medium_ptr) {
+            medium_allocated++;
+            memory_free(medium_ptr);  /* Free immediately to test coalescing */
         }
-        log_debug("Successfully allocated %d medium blocks in gaps", medium_allocated);
     }
-    
+    log_debug("Successfully allocated %d medium blocks in gaps", medium_allocated);
+
     /* Free all remaining allocations */
     for (i = 0; i < 10; i++) {
         if (large_blocks[i]) {
@@ -2044,7 +2089,7 @@ static int memory_stress_test_fragmentation(void) {
             memory_free(small_blocks[i]);
         }
     }
-    
+
     return 0;
 }
 
@@ -2053,20 +2098,26 @@ static int memory_stress_test_fragmentation(void) {
  * @return 0 on success, negative on error
  */
 static int memory_stress_test_leak_detection(void) {
-    uint32_t initial_allocations = g_mem_stats.total_allocations;
-    uint32_t initial_frees = g_mem_stats.total_frees;
-    uint32_t initial_used = g_mem_stats.used_memory;
+    uint32_t initial_allocations;
+    uint32_t initial_frees;
+    uint32_t initial_used;
+    uint32_t final_used;
+    uint32_t current_used;
+    void *ptrs[50];
+    int allocated;
     int cycle;
     int i;
+
+    initial_allocations = g_mem_stats.total_allocations;
+    initial_frees = g_mem_stats.total_frees;
+    initial_used = g_mem_stats.used_memory;
 
     log_debug("Testing leak detection - initial state: %lu allocs, %lu frees, %lu used",
              initial_allocations, initial_frees, initial_used);
 
     /* Perform many allocations and frees */
     for (cycle = 0; cycle < 5; cycle++) {
-        void *ptrs[50];
-        int allocated = 0;
-        uint32_t current_used;
+        allocated = 0;
 
         /* Allocate many blocks */
         for (i = 0; i < 50; i++) {
@@ -2091,7 +2142,7 @@ static int memory_stress_test_leak_detection(void) {
         } else {
             log_warning("Potential memory leak detected in cycle %d", cycle);
         }
-        
+
         /* Clean up remaining "leaked" blocks */
         for (i = allocated - 2; i < allocated; i++) {
             if (ptrs[i]) {
@@ -2099,17 +2150,15 @@ static int memory_stress_test_leak_detection(void) {
             }
         }
     }
-    
+
     /* Verify we're back to initial state (within tolerance) */
-    {
-        uint32_t final_used = g_mem_stats.used_memory;
-        if (final_used <= initial_used + 1024) {  /* 1KB tolerance */
-            log_debug("Leak detection test passed - memory usage returned to baseline");
-            return 0;
-        } else {
-            log_error("Potential memory leak: initial=%lu, final=%lu", initial_used, final_used);
-            return -1;
-        }
+    final_used = g_mem_stats.used_memory;
+    if (final_used <= initial_used + 1024) {  /* 1KB tolerance */
+        log_debug("Leak detection test passed - memory usage returned to baseline");
+        return 0;
+    } else {
+        log_error("Potential memory leak: initial=%lu, final=%lu", initial_used, final_used);
+        return -1;
     }
 }
 
@@ -2121,6 +2170,8 @@ static int memory_stress_test_boundary_conditions(void) {
     void *zero_ptr;
     void *large_ptr;
     void *test_ptr;
+    void *aligned_ptr;
+    uint8_t *data;
     int align;
     int i;
 
@@ -2137,7 +2188,6 @@ static int memory_stress_test_boundary_conditions(void) {
     /* Test 2: Maximum reasonable size allocation */
     large_ptr = memory_alloc(32768, MEM_TYPE_GENERAL, 0);
     if (large_ptr) {
-        uint8_t *data;
         /* Fill with pattern to ensure it's really allocated */
         memset(large_ptr, 0x55, 32768);
 
@@ -2150,10 +2200,10 @@ static int memory_stress_test_boundary_conditions(void) {
                 return -1;
             }
         }
-        
+
         memory_free(large_ptr);
     }
-    
+
     /* Test 3: NULL pointer free (should be safe) */
     memory_free(NULL);  /* Should not crash */
 
@@ -2164,10 +2214,9 @@ static int memory_stress_test_boundary_conditions(void) {
         /* Second free should be detected and handled gracefully */
         memory_free(test_ptr);
     }
-    
+
     /* Test 5: Alignment boundary testing */
     for (align = 1; align <= 16; align *= 2) {
-        void *aligned_ptr;
         aligned_ptr = memory_alloc_aligned(100, align, MEM_TYPE_GENERAL);
         if (aligned_ptr) {
             if (((uint32_t)aligned_ptr % align) != 0) {
@@ -2178,7 +2227,7 @@ static int memory_stress_test_boundary_conditions(void) {
             memory_free(aligned_ptr);
         }
     }
-    
+
     log_debug("Boundary conditions test completed successfully");
     return 0;
 }
@@ -2258,6 +2307,8 @@ static int memory_stress_test_concurrent_operations(void) {
  */
 static int memory_stress_test_tier_switching(void) {
     void *tier_ptrs[50];
+    uint8_t *data;
+    uint8_t expected;
     int allocated = 0;
     int i;
     uint32_t size;
@@ -2269,7 +2320,7 @@ static int memory_stress_test_tier_switching(void) {
     /* Force allocations to test different tiers */
     for (i = 0; i < 50; i++) {
         flags = 0;
-        
+
         /* Vary allocation parameters to trigger different tiers */
         if (i % 3 == 0) {
             size = 8192;  /* Large - should prefer XMS */
@@ -2284,34 +2335,32 @@ static int memory_stress_test_tier_switching(void) {
             type = MEM_TYPE_GENERAL;
             flags = 0;
         }
-        
+
         tier_ptrs[i] = memory_alloc(size, type, flags);
         if (tier_ptrs[i]) {
             allocated++;
-            
+
             /* Write test pattern to verify allocation is valid */
             memset(tier_ptrs[i], 0xCC + (i % 4), size > 256 ? 256 : size);
         }
     }
-    
+
     log_debug("Allocated %d blocks across memory tiers", allocated);
-    
+
     /* Verify all allocations by checking test patterns */
     for (i = 0; i < allocated; i++) {
         if (tier_ptrs[i]) {
-            uint8_t *data;
-            uint8_t expected;
             data = (uint8_t*)tier_ptrs[i];
             expected = 0xCC + (i % 4);
 
             if (data[0] != expected || data[10] != expected) {
-                log_error("Tier allocation %d corrupted (expected 0x%02X, got 0x%02X)", 
+                log_error("Tier allocation %d corrupted (expected 0x%02X, got 0x%02X)",
                          i, expected, data[0]);
                 return -1;
             }
         }
     }
-    
+
     /* Free all allocations */
     for (i = 0; i < 50; i++) {
         if (tier_ptrs[i]) {
@@ -2463,6 +2512,7 @@ static int memory_test_extreme_allocations(void) {
  */
 static void memory_simulate_low_memory_conditions(void) {
     void *exhaustion_ptrs[100];
+    void *small_ptr;
     int allocated = 0;
     int small_allocated;
     mem_error_t last_error;
@@ -2479,13 +2529,12 @@ static void memory_simulate_low_memory_conditions(void) {
             break;  /* Memory exhausted */
         }
     }
-    
+
     log_debug("Allocated %d large blocks before memory exhaustion", allocated);
-    
+
     /* Under low memory, try small allocations */
     small_allocated = 0;
     for (i = 0; i < 20; i++) {
-        void *small_ptr;
         small_ptr = memory_alloc(64, MEM_TYPE_GENERAL, 0);
         if (small_ptr) {
             small_allocated++;
@@ -2499,7 +2548,7 @@ static void memory_simulate_low_memory_conditions(void) {
     
     /* Check that error handling works correctly */
     last_error = memory_get_last_error();
-    if (last_error == MEM_ERROR_NO_MEMORY || last_error == MEM_ERROR_NONE) {
+    if (last_error == MEM_ERROR_OUT_OF_MEMORY || last_error == MEM_ERROR_NONE) {
         log_debug("Memory error handling working correctly");
     } else {
         log_warning("Unexpected memory error: %d", last_error);

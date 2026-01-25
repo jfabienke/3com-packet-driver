@@ -106,7 +106,8 @@ void __interrupt __far multiplex_handler(
             /* Get statistics */
             {
                 uint32_t total_calls, fallback_calls;
-                pci_shim_get_stats(&total_calls, &fallback_calls);
+                /* Stack vars are near pointers - explicit cast for clarity */
+                pci_shim_get_stats((uint32_t *)&total_calls, (uint32_t *)&fallback_calls);
                 
                 /* Return stats in registers */
                 ax = 0x0000;  /* Success */

@@ -10,6 +10,7 @@
  */
 
 #include <dos.h>
+#include <i86.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -18,6 +19,15 @@
 #include "vds.h"
 #include "logging.h"
 #include "common.h"
+
+/* Map uppercase LOG macros to lowercase functions */
+#define LOG_DEBUG    log_debug
+#define LOG_INFO     log_info
+#define LOG_WARNING  log_warning
+#define LOG_ERROR    log_error
+
+/* Forward declaration for VDS presence check */
+bool vds_present(void);
 
 /* DOS memory allocation strategies */
 #define DOS_ALLOC_FIRST_FIT    0x00
@@ -37,7 +47,8 @@
 
 /* DMA allocation entry */
 typedef struct {
-    void *virt_addr;            /* Virtual address */
+    void far *virt_addr;        /* Virtual address (far pointer for DOS) */
+    void far *alloc_base;       /* Original allocation base (for free) */
     uint32_t phys_addr;         /* Physical address */
     uint32_t size;              /* Allocation size */
     uint32_t alignment;         /* Required alignment */
@@ -109,14 +120,14 @@ static void detect_memory_manager(void) {
 
 /**
  * @brief Convert virtual address to physical address
- * 
+ *
  * Handles both real mode (identity mapping) and protected mode with
  * memory managers. FAILS SAFELY when paging enabled without VDS.
- * 
- * @param virt_addr Virtual address
+ *
+ * @param virt_addr Virtual address (far pointer)
  * @return Physical address, or 0xFFFFFFFF on error
  */
-static uint32_t virt_to_phys(void *virt_addr) {
+static uint32_t virt_to_phys(void far *virt_addr) {
     uint32_t phys_addr;
     uint16_t segment, offset;
     
@@ -137,9 +148,9 @@ static uint32_t virt_to_phys(void *virt_addr) {
         dds.size = 1;  /* Just need address translation */
         dds.offset = offset;
         dds.segment = segment;
-        
-        if (vds_lock_region(&dds) == VDS_SUCCESS) {
-            phys_addr = dds.physical_address;
+
+        if (vds_lock_region(virt_addr, 1, &dds) == VDS_SUCCESS) {
+            phys_addr = dds.physical;
             vds_unlock_region(&dds);
             return phys_addr;
         }
@@ -153,57 +164,63 @@ static uint32_t virt_to_phys(void *virt_addr) {
 
 /**
  * @brief Verify physical contiguity of memory region
- * 
+ *
  * When using VDS with paging, verifies that all pages in the region
  * are physically contiguous. Critical for DMA safety.
- * 
- * @param virt_addr Virtual address
+ *
+ * @param virt_addr Virtual address (far pointer)
  * @param size Size in bytes
  * @return true if physically contiguous, false otherwise
  */
-static bool verify_physical_contiguity(void *virt_addr, uint32_t size) {
-    uint32_t offset;
+static bool verify_physical_contiguity(void far *virt_addr, uint32_t size) {
+    uint32_t page_offset;
     uint32_t first_phys, expected_phys, actual_phys;
     vds_dds_t dds;
-    
+
     /* Only needed when paging is enabled with VDS */
     if (!mem_mgr_info.paging_enabled || !mem_mgr_info.vds_available) {
         return true;  /* Assume contiguous in real mode */
     }
-    
+
     /* Get physical address of first byte */
     memset(&dds, 0, sizeof(dds));
     dds.size = 1;
     dds.segment = FP_SEG(virt_addr);
     dds.offset = FP_OFF(virt_addr);
-    
-    if (vds_lock_region(&dds) != VDS_SUCCESS) {
+
+    if (vds_lock_region(virt_addr, 1, &dds) != VDS_SUCCESS) {
         return false;
     }
-    first_phys = dds.physical_address;
+    first_phys = dds.physical;
     vds_unlock_region(&dds);
-    
+
     /* Check each 4K page boundary */
-    for (offset = 4096; offset < size; offset += 4096) {
-        void *page_addr = (char*)virt_addr + offset;
-        
+    for (page_offset = 4096; page_offset < size; page_offset += 4096) {
+        /* Calculate far pointer for page using linear arithmetic */
+        uint16_t base_seg = FP_SEG(virt_addr);
+        uint16_t base_off = FP_OFF(virt_addr);
+        uint32_t linear = ((uint32_t)base_seg << 4) + base_off + page_offset;
+        uint16_t page_seg = (uint16_t)(linear >> 4);
+        uint16_t page_off = (uint16_t)(linear & 0x0F);
+        void far *page_addr = MK_FP(page_seg, page_off);
+
         dds.segment = FP_SEG(page_addr);
         dds.offset = FP_OFF(page_addr);
-        
-        if (vds_lock_region(&dds) != VDS_SUCCESS) {
+
+        if (vds_lock_region(page_addr, 1, &dds) != VDS_SUCCESS) {
             return false;
         }
-        actual_phys = dds.physical_address;
+        actual_phys = dds.physical;
         vds_unlock_region(&dds);
-        
-        expected_phys = first_phys + offset;
+
+        expected_phys = first_phys + page_offset;
         if (actual_phys != expected_phys) {
             LOG_WARNING("Physical discontinuity at offset %lu: expected 0x%08lX, got 0x%08lX",
-                       offset, expected_phys, actual_phys);
+                       page_offset, expected_phys, actual_phys);
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -233,11 +250,20 @@ static bool crosses_boundary(uint32_t phys_addr, uint32_t size, uint32_t boundar
  */
 dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t flags) {
     dma_alloc_t *alloc = NULL;
-    void *virt_addr = NULL;
+    void far *virt_addr = NULL;
+    void far *alloc_base = NULL;  /* Track original allocation for freeing */
     uint32_t phys_addr;
     uint32_t alloc_size;
     int i, attempts;
-    
+    uint8_t saved_strategy = 0;
+    uint16_t saved_umb_link = 0;
+    bool dos_state_changed = false;
+    union REGS regs;
+    uint32_t base, end;
+    uint16_t seg, off;
+    uint32_t linear, aligned_linear;
+    bool valid;
+
     /* Validate parameters */
     if (size == 0 || size > 65536) {
         LOG_ERROR("Invalid DMA allocation size: %lu", size);
@@ -273,16 +299,11 @@ dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t
     alloc_size = size + alignment + 4096;  /* Extra for boundary avoidance */
     
     /* CRITICAL: If paging enabled without VDS, MUST use conventional memory only */
-    uint8_t saved_strategy = 0;
-    uint16_t saved_umb_link = 0;
-    bool dos_state_changed = false;
-    
     if (mem_mgr_info.paging_enabled && !mem_mgr_info.vds_available) {
         LOG_WARNING("Paging without VDS - forcing conventional memory allocation");
         flags |= DMAMEM_BELOW_1M;  /* Force below 1MB */
-        
+
         /* Save and modify DOS allocation state for safety */
-        union REGS regs;
         
         /* 1. Get current allocation strategy */
         memset(&regs, 0, sizeof(regs));
@@ -320,7 +341,6 @@ dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t
         /* Allocate from DOS conventional memory */
         if (flags & DMAMEM_BELOW_1M) {
             /* Use DOS allocation for < 1MB requirement */
-            union REGS regs;
             memset(&regs, 0, sizeof(regs));
             regs.h.ah = 0x48;  /* Allocate memory */
             regs.x.bx = (alloc_size + 15) / 16;  /* Paragraphs */
@@ -328,45 +348,72 @@ dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t
             
             if (!regs.x.cflag) {
                 virt_addr = MK_FP(regs.x.ax, 0);
-                
+
                 /* Verify ENTIRE block is in conventional memory (< 640K) */
-                uint32_t base = ((uint32_t)regs.x.ax << 4);
-                uint32_t end = base + alloc_size - 1;
+                base = ((uint32_t)regs.x.ax << 4);
+                end = base + alloc_size - 1;
                 if (base >= 0xA0000 || end >= 0xA0000) {
+                    struct SREGS sregs;
                     LOG_WARNING("DOS allocation outside conventional memory (base=0x%05lX, end=0x%05lX)",
                                base, end);
                     /* Free it */
                     memset(&regs, 0, sizeof(regs));
+                    segread(&sregs);
                     regs.h.ah = 0x49;
-                    regs.x.es = FP_SEG(virt_addr);
-                    int86(0x21, &regs, &regs);
+                    sregs.es = FP_SEG(virt_addr);
+                    int86x(0x21, &regs, &regs, &sregs);
                     virt_addr = NULL;
                     continue;
                 }
             }
         } else {
-            /* Use C library allocation */
-            virt_addr = malloc(alloc_size);
+            /* Use C library allocation - returns near pointer, convert to far */
+            void *near_ptr = malloc(alloc_size);
+            if (near_ptr) {
+                virt_addr = (void far *)near_ptr;
+            } else {
+                virt_addr = NULL;
+            }
         }
-        
+
         if (!virt_addr) {
             continue;
         }
-        
-        /* Align the address */
-        uint32_t unaligned = (uint32_t)virt_addr;
-        uint32_t aligned = (unaligned + alignment - 1) & ~(alignment - 1);
-        virt_addr = (void*)aligned;
-        
+
+        /* Save original allocation base for later freeing */
+        alloc_base = virt_addr;
+
+        /* Align the address using far pointer arithmetic */
+        seg = FP_SEG(virt_addr);
+        off = FP_OFF(virt_addr);
+        linear = ((uint32_t)seg << 4) + off;
+        aligned_linear = (linear + alignment - 1) & ~(alignment - 1);
+        /* Normalize to minimize offset, maximize segment */
+        seg = (uint16_t)(aligned_linear >> 4);
+        off = (uint16_t)(aligned_linear & 0x0F);
+        virt_addr = MK_FP(seg, off);
+
         /* Get physical address */
         phys_addr = virt_to_phys(virt_addr);
         if (phys_addr == 0xFFFFFFFF) {
-            free(virt_addr);
+            /* Free the original allocation */
+            if (flags & DMAMEM_BELOW_1M) {
+                /* DOS memory - use INT 21h AH=49h */
+                struct SREGS sregs;
+                union REGS free_regs;
+                memset(&free_regs, 0, sizeof(free_regs));
+                segread(&sregs);
+                free_regs.h.ah = 0x49;
+                sregs.es = FP_SEG(alloc_base);
+                int86x(0x21, &free_regs, &free_regs, &sregs);
+            } else {
+                free((void *)alloc_base);
+            }
             continue;
         }
         
         /* Check constraints */
-        bool valid = true;
+        valid = true;
         
         /* Check memory range constraints */
         if ((flags & DMAMEM_BELOW_1M) && (phys_addr + size > 0x100000)) {
@@ -391,17 +438,18 @@ dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t
                 valid = false;
             }
         }
-        
+
         if (valid) {
             /* Success - fill allocation info */
             memset(alloc, 0, sizeof(*alloc));
             alloc->virt_addr = virt_addr;
+            alloc->alloc_base = alloc_base;  /* Store original for freeing */
             alloc->phys_addr = phys_addr;
             alloc->size = size;
             alloc->alignment = alignment;
             alloc->flags = flags;
             alloc->in_use = true;
-            
+
             /* Lock with VDS if available */
             if (mem_mgr_info.vds_available) {
                 vds_dds_t dds;
@@ -409,71 +457,84 @@ dma_alloc_info_t* dma_alloc_coherent(uint32_t size, uint32_t alignment, uint32_t
                 dds.size = size;
                 dds.offset = FP_OFF(virt_addr);
                 dds.segment = FP_SEG(virt_addr);
-                
-                if (vds_lock_region(&dds) == VDS_SUCCESS) {
+
+                if (vds_lock_region(virt_addr, size, &dds) == VDS_SUCCESS) {
                     alloc->locked = true;
-                    alloc->vds_handle = dds.region_id;
-                    alloc->phys_addr = dds.physical_address;  /* Use VDS result */
+                    alloc->vds_handle = dds.buffer_id;
+                    alloc->phys_addr = dds.physical;  /* Use VDS result */
                 }
             }
-            
-            /* Zero the memory */
-            memset(virt_addr, 0, size);
+
+            /* Zero the memory using far memory function */
+            _fmemset(virt_addr, 0, size);
             
             LOG_INFO("DMA allocation successful: virt=%p, phys=0x%08lX, size=%lu, align=%lu",
                     virt_addr, phys_addr, size, alignment);
             
             /* Restore DOS allocation state if we changed it */
             if (dos_state_changed) {
-                union REGS regs;
-                
+                union REGS restore_regs;
+
                 /* Restore allocation strategy */
-                memset(&regs, 0, sizeof(regs));
-                regs.x.ax = 0x5801;
-                regs.x.bx = saved_strategy;
-                int86(0x21, &regs, &regs);
-                
+                memset(&restore_regs, 0, sizeof(restore_regs));
+                restore_regs.x.ax = 0x5801;
+                restore_regs.x.bx = saved_strategy;
+                int86(0x21, &restore_regs, &restore_regs);
+
                 /* Restore UMB link state */
-                memset(&regs, 0, sizeof(regs));
-                regs.x.ax = 0x5803;
-                regs.x.bx = saved_umb_link;
-                int86(0x21, &regs, &regs);
+                memset(&restore_regs, 0, sizeof(restore_regs));
+                restore_regs.x.ax = 0x5803;
+                restore_regs.x.bx = saved_umb_link;
+                int86(0x21, &restore_regs, &restore_regs);
             }
             
             /* Return public info structure */
-            static dma_alloc_info_t info;
-            info.virt_addr = virt_addr;
-            info.phys_addr = phys_addr;
-            info.size = size;
-            info.alignment = alignment;
-            info.flags = flags;
-            
-            return &info;
+            {
+                static dma_alloc_info_t info;
+                info.virt_addr = virt_addr;
+                info.phys_addr = phys_addr;
+                info.size = size;
+                info.alignment = alignment;
+                info.flags = flags;
+
+                return &info;
+            }
         }
         
-        /* Constraints not met, free and retry */
-        free(virt_addr);
+        /* Constraints not met, free original allocation and retry */
+        if (flags & DMAMEM_BELOW_1M) {
+            /* DOS memory - use INT 21h AH=49h */
+            struct SREGS sregs;
+            union REGS free_regs;
+            memset(&free_regs, 0, sizeof(free_regs));
+            segread(&sregs);
+            free_regs.h.ah = 0x49;
+            sregs.es = FP_SEG(alloc_base);
+            int86x(0x21, &free_regs, &free_regs, &sregs);
+        } else {
+            free((void *)alloc_base);
+        }
     }
     
     LOG_ERROR("Failed to allocate DMA-safe memory after %d attempts", attempts);
     
     /* Restore DOS allocation state if we changed it */
     if (dos_state_changed) {
-        union REGS regs;
-        
+        union REGS cleanup_regs;
+
         /* Restore allocation strategy */
-        memset(&regs, 0, sizeof(regs));
-        regs.x.ax = 0x5801;
-        regs.x.bx = saved_strategy;
-        int86(0x21, &regs, &regs);
-        
+        memset(&cleanup_regs, 0, sizeof(cleanup_regs));
+        cleanup_regs.x.ax = 0x5801;
+        cleanup_regs.x.bx = saved_strategy;
+        int86(0x21, &cleanup_regs, &cleanup_regs);
+
         /* Restore UMB link state */
-        memset(&regs, 0, sizeof(regs));
-        regs.x.ax = 0x5803;
-        regs.x.bx = saved_umb_link;
-        int86(0x21, &regs, &regs);
+        memset(&cleanup_regs, 0, sizeof(cleanup_regs));
+        cleanup_regs.x.ax = 0x5803;
+        cleanup_regs.x.bx = saved_umb_link;
+        int86(0x21, &cleanup_regs, &cleanup_regs);
     }
-    
+
     return NULL;
 }
 
@@ -498,20 +559,22 @@ void dma_free_coherent(dma_alloc_info_t *info) {
             if (dma_allocs[i].locked && mem_mgr_info.vds_available) {
                 vds_dds_t dds;
                 memset(&dds, 0, sizeof(dds));
-                dds.region_id = dma_allocs[i].vds_handle;
+                dds.buffer_id = (uint16_t)dma_allocs[i].vds_handle;
                 vds_unlock_region(&dds);
             }
-            
-            /* Free memory */
+
+            /* Free memory using original allocation base */
             if (dma_allocs[i].flags & DMAMEM_BELOW_1M) {
                 /* DOS memory - use INT 21h AH=49h */
                 union REGS regs;
+                struct SREGS sregs;
                 memset(&regs, 0, sizeof(regs));
+                segread(&sregs);
                 regs.h.ah = 0x49;
-                regs.x.es = FP_SEG(dma_allocs[i].virt_addr);
-                int86(0x21, &regs, &regs);
+                sregs.es = FP_SEG(dma_allocs[i].alloc_base);
+                int86x(0x21, &regs, &regs, &sregs);
             } else {
-                free(dma_allocs[i].virt_addr);
+                free((void *)dma_allocs[i].alloc_base);
             }
             
             /* Clear allocation entry */
@@ -596,10 +659,10 @@ bool dma_addr_valid(uint32_t phys_addr, uint32_t dma_mask) {
 #define BOUNCE_BUFFER_SIZE      2048    /* Buffer size (max Ethernet frame + overhead) */
 
 typedef struct {
-    void *buffer;               /* Bounce buffer address */
+    void far *buffer;           /* Bounce buffer address (far ptr for DMA) */
     uint32_t phys_addr;        /* Physical address */
     bool in_use;               /* Buffer in use */
-    void *original_addr;       /* Original buffer address */
+    void far *original_addr;   /* Original buffer address (far ptr) */
     uint32_t size;             /* Data size */
     bool tx_direction;         /* true for TX, false for RX */
 } bounce_buffer_t;
@@ -646,18 +709,20 @@ static bool init_bounce_pool(void) {
     bounce_pool_initialized = true;
     
     /* Count successful allocations */
-    int allocated = 0;
-    for (i = 0; i < BOUNCE_BUFFER_COUNT; i++) {
-        if (bounce_buffers[i].buffer) allocated++;
+    {
+        int allocated = 0;
+        for (i = 0; i < BOUNCE_BUFFER_COUNT; i++) {
+            if (bounce_buffers[i].buffer) allocated++;
+        }
+
+        if (allocated == 0) {
+            LOG_ERROR("No bounce buffers allocated - will fail on incompatible memory");
+            return false;
+        }
+
+        LOG_INFO("Bounce buffer pool initialized with %d/%d buffers",
+                allocated, BOUNCE_BUFFER_COUNT);
     }
-    
-    if (allocated == 0) {
-        LOG_ERROR("No bounce buffers allocated - will fail on incompatible memory");
-        return false;
-    }
-    
-    LOG_INFO("Bounce buffer pool initialized with %d/%d buffers", 
-            allocated, BOUNCE_BUFFER_COUNT);
     return true;
 }
 
@@ -691,7 +756,7 @@ uint32_t dma_alloc_bounce_buffer(void *original_addr, uint32_t size, bool tx_dir
             
             /* For TX, copy data to bounce buffer */
             if (tx_direction && original_addr) {
-                memcpy(bounce_buffers[i].buffer, original_addr, size);
+                _fmemcpy(bounce_buffers[i].buffer, original_addr, size);
                 LOG_DEBUG("Copied %lu bytes to bounce buffer %d for TX", size, i);
             }
             
@@ -722,11 +787,11 @@ bool dma_free_bounce_buffer(uint32_t phys_addr) {
             bounce_buffers[i].phys_addr == phys_addr) {
             
             /* For RX, copy data back to original buffer */
-            if (!bounce_buffers[i].tx_direction && 
+            if (!bounce_buffers[i].tx_direction &&
                 bounce_buffers[i].original_addr) {
-                memcpy(bounce_buffers[i].original_addr, 
-                       bounce_buffers[i].buffer, 
-                       bounce_buffers[i].size);
+                _fmemcpy(bounce_buffers[i].original_addr,
+                         bounce_buffers[i].buffer,
+                         bounce_buffers[i].size);
                 LOG_DEBUG("Copied %lu bytes from bounce buffer %d after RX", 
                          bounce_buffers[i].size, i);
             }

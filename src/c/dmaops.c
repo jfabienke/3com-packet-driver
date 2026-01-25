@@ -7,16 +7,20 @@
  */
 
 #include <dos.h>
+#include <i86.h>
 #include <string.h>
 #include "../../include/common.h"
 #include "../../include/hardware.h"
 #include "../../include/vds.h"
-#include "../../include/cachecoh.h"
+/* Note: Only include cacheche.h (enhanced) - it supersedes cachecoh.h
+ * and including both causes redefinition errors for cache_tier_t values */
+#include "../../include/cacheche.h"
 #include "../../include/cpudet.h"
-#include "../../include/logging.h"
+#include "../../include/diag.h"
+#include "../../include/dmaops.h"
 
-/* DMA operation context */
-typedef struct {
+/* DMA operation context - struct definition for dma_operation_t from dmaops.h */
+struct dma_operation {
     void far *buffer;
     uint32_t size;
     uint32_t physical_addr;
@@ -25,19 +29,32 @@ typedef struct {
     bool needs_cache_flush;
     bool needs_cache_invalidate;
     bool in_isr_context;
-} dma_operation_t;
+};
 
 /* Global state for ISR context detection */
 static volatile uint16_t g_isr_nesting_level = 0;
 static volatile bool g_deferred_cache_ops_pending = false;
 
+/* Forward declaration for deferred cache operations processing */
+void dma_process_deferred_cache_ops(void);
+
 /* Deferred operation queue for ISR context */
 #define MAX_DEFERRED_OPS 16
-static struct {
-    enum { CACHE_OP_FLUSH, CACHE_OP_INVALIDATE, CACHE_OP_WBINVD } type;
+
+/* C89: enum must be named and declared separately */
+typedef enum cache_op_type {
+    CACHE_OP_FLUSH,
+    CACHE_OP_INVALIDATE,
+    CACHE_OP_WBINVD
+} cache_op_type_t;
+
+typedef struct deferred_cache_op {
+    cache_op_type_t type;
     void far *addr;
     uint32_t size;
-} g_deferred_ops[MAX_DEFERRED_OPS];
+} deferred_cache_op_t;
+
+static deferred_cache_op_t g_deferred_ops[MAX_DEFERRED_OPS];
 static volatile uint8_t g_deferred_ops_head = 0;
 static volatile uint8_t g_deferred_ops_tail = 0;
 
@@ -82,7 +99,7 @@ bool dma_in_isr_context(void) {
 /**
  * @brief Queue a cache operation for deferred execution
  */
-static void queue_deferred_cache_op(int type, void far *addr, uint32_t size) {
+static void queue_deferred_cache_op(cache_op_type_t type, void far *addr, uint32_t size) {
     uint8_t next_head;
     
     _disable();
@@ -105,28 +122,42 @@ static void queue_deferred_cache_op(int type, void far *addr, uint32_t size) {
  * @brief Process deferred cache operations (called outside ISR)
  */
 void dma_process_deferred_cache_ops(void) {
+    /* C89: All declarations must be at the beginning of the block */
+    cache_op_type_t type;
+    void far *addr;
+    uint32_t size;
+
     while (g_deferred_ops_tail != g_deferred_ops_head) {
-        int type = g_deferred_ops[g_deferred_ops_tail].type;
-        void far *addr = g_deferred_ops[g_deferred_ops_tail].addr;
-        uint32_t size = g_deferred_ops[g_deferred_ops_tail].size;
-        
+        type = g_deferred_ops[g_deferred_ops_tail].type;
+        addr = g_deferred_ops[g_deferred_ops_tail].addr;
+        size = g_deferred_ops[g_deferred_ops_tail].size;
+
         g_deferred_ops_tail = (g_deferred_ops_tail + 1) & (MAX_DEFERRED_OPS - 1);
-        
+
         switch (type) {
             case CACHE_OP_FLUSH:
-                cache_flush_range(addr, size);
+                /* Cast far pointer to near - cache ops work on linear address */
+                cache_flush_range((void *)addr, size);
                 break;
             case CACHE_OP_INVALIDATE:
-                cache_invalidate_range(addr, size);
+                /* Cast far pointer to near - cache ops work on linear address */
+                cache_invalidate_range((void *)addr, size);
                 break;
             case CACHE_OP_WBINVD:
-                if (cpu_has_feature(CPU_FEATURE_WBINVD)) {
-                    _asm { wbinvd }
+                {
+                    extern cpu_info_t g_cpu_info;
+                    if (g_cpu_info.features & CPU_FEATURE_WBINVD) {
+#ifdef __WATCOMC__
+                        _asm { db 0x0F, 0x09 }  /* WBINVD opcode */
+#else
+                        __asm__ __volatile__ ("wbinvd");
+#endif
+                    }
                 }
                 break;
         }
     }
-    
+
     g_deferred_cache_ops_pending = false;
 }
 
@@ -191,8 +222,8 @@ int dma_prepare_tx(nic_info_t *nic, void far *buffer, uint32_t size, dma_operati
             queue_deferred_cache_op(CACHE_OP_FLUSH, buffer, size);
             LOG_DEBUG("DMA TX: Deferred cache flush for ISR context");
         } else {
-            /* Safe to flush now */
-            cache_flush_range(buffer, size);
+            /* Safe to flush now - cast far pointer to near */
+            cache_flush_range((void *)buffer, size);
             LOG_DEBUG("DMA TX: Cache flushed for write-back mode");
         }
     }
@@ -261,8 +292,8 @@ int dma_prepare_rx(nic_info_t *nic, void far *buffer, uint32_t size, dma_operati
             queue_deferred_cache_op(CACHE_OP_INVALIDATE, buffer, size);
             LOG_DEBUG("DMA RX: Deferred cache invalidate for ISR context");
         } else {
-            /* Safe to invalidate now */
-            cache_invalidate_range(buffer, size);
+            /* Safe to invalidate now - cast far pointer to near */
+            cache_invalidate_range((void *)buffer, size);
             LOG_DEBUG("DMA RX: Cache invalidated for coherency");
         }
     }
@@ -356,3 +387,4 @@ const char* dma_get_nic_coherency_strategy(nic_info_t *nic) {
             return "Unknown NIC, assume non-coherent DMA";
     }
 }
+

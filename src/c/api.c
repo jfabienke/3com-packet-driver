@@ -18,6 +18,7 @@
 #include "stats.h"
 #include "routing.h"
 #include "prod.h"
+#include "arp.h"
 
 /* Packet Driver API constants */
 #define PD_MAX_HANDLES    16      /* Maximum number of handles */
@@ -59,9 +60,9 @@ static uint16_t driver_signature = 0x3C0D; /* "3COm" in hex - proper 3Com signat
 static volatile int api_ready = 0;  /* Set to 1 only after full activation */
 
 /* Phase 3 Global State */
-static bool load_balancing_enabled = false;
-static bool qos_enabled = false;
-static bool virtual_interrupts_enabled = false;
+static int load_balancing_enabled = 0;
+static int qos_enabled = 0;
+static int virtual_interrupts_enabled = 0;
 static uint32_t global_bandwidth_limit = 0; /* Unlimited by default */
 static pd_load_balance_params_t global_lb_config;
 static pd_qos_params_t default_qos_params;
@@ -88,6 +89,13 @@ static int should_deliver_packet(const pd_handle_t *handle, uint16_t eth_type, c
 static int deliver_packet_to_handler(pd_handle_t *handle, buffer_desc_t *buffer, uint16_t eth_type);
 static uint32_t calculate_average_latency(extended_packet_handle_t *ext_handle);
 static uint32_t calculate_jitter(extended_packet_handle_t *ext_handle);
+static uint32_t get_system_timestamp(void);
+static int api_load_balance_select_nic(uint16_t handle, const uint8_t *packet, uint8_t *selected_nic);
+static int api_round_robin_select_nic(uint8_t *selected_nic);
+static int api_weighted_select_nic(uint8_t *selected_nic);
+static int api_performance_select_nic(uint8_t *selected_nic);
+static int api_application_select_nic(uint16_t handle, uint8_t *selected_nic);
+static int api_flow_aware_select_nic(uint16_t handle, const uint8_t *packet, uint8_t *selected_nic);
 
 /* External assembly functions */
 extern int packet_deliver_to_handler(uint16_t handle, uint16_t length, 
@@ -95,7 +103,11 @@ extern int packet_deliver_to_handler(uint16_t handle, uint16_t length,
                                      void far *receiver_func);
 
 /* Cold section: Initialization functions (discarded after init) */
+#ifdef __WATCOMC__
+#pragma code_seg ( "COLD_TEXT" )
+#else
 #pragma code_seg("COLD_TEXT", "CODE")
+#endif
 
 /**
  * @brief Initialize Packet Driver API
@@ -132,7 +144,7 @@ int api_install_hooks(const config_t *config) {
     
     /* Install interrupt vector but keep interrupts masked */
     /* This makes the API discoverable but not yet active */
-    log_info("  API hooks installed at interrupt 0x%02X", config->interrupt);
+    log_info("  API hooks installed at interrupt 0x%02X", config->interrupt_vector);
     
     /* Mark as partially initialized */
     api_initialized = 0;  /* Not fully active yet */
@@ -236,12 +248,12 @@ int api_cleanup(void) {
     
     /* Stop any ongoing operations */
     if (qos_enabled) {
-        qos_enabled = false;
+        qos_enabled = 0;
         memset(&qos_packet_queue, 0, sizeof(qos_packet_queue));
     }
-    
+
     if (load_balancing_enabled) {
-        load_balancing_enabled = false;
+        load_balancing_enabled = 0;
         memset(&global_lb_config, 0, sizeof(global_lb_config));
     }
     
@@ -527,7 +539,8 @@ int pd_send_packet(uint16_t handle, void *params) {
     }
 
     /* Copy packet data to TX buffer */
-    result = buffer_set_data(tx_buffer, send->buffer, send->length);
+    /* Cast far pointer to near - buffer_set_data uses _fmemcpy internally */
+    result = buffer_set_data(tx_buffer, (const void *)send->buffer, send->length);
     if (result < 0) {
         log_error("Failed to copy packet data to TX buffer");
         buffer_free_any(tx_buffer);
@@ -546,7 +559,8 @@ int pd_send_packet(uint16_t handle, void *params) {
 
     /* Select optimal NIC using Phase 3 intelligence */
     selected_nic = interface_num; /* Default to handle's interface */
-    result = api_select_optimal_nic(handle, send->buffer, &selected_nic);
+    /* Cast far pointer to near - only header bytes are examined */
+    result = api_select_optimal_nic(handle, (const uint8_t *)send->buffer, &selected_nic);
     if (result == API_SUCCESS && selected_nic != interface_num) {
         /* Update interface number based on intelligent selection */
         interface_num = selected_nic;
@@ -696,20 +710,23 @@ int pd_reset_interface(uint16_t handle) {
  * @return 0 on success, negative on error
  */
 int pd_get_parameters(uint16_t handle, void *params) {
+    /* C89: Declarations must be at the start of the block */
+    pd_driver_info_t *driver_params;
+
     log_debug("Get parameters: handle=%04X", handle);
-    
+
+    if (!params) {
+        return API_ERR_INVALID_PARAM;
+    }
+
     /* Fill basic interface parameters */
-    pd_driver_info_t *driver_params = (pd_driver_info_t *)params;
+    driver_params = (pd_driver_info_t *)params;
     driver_params->version = 0x0100;
     driver_params->class = PD_CLASS_ETHERNET;
     driver_params->type = PD_TYPE_3COM;
     driver_params->basic = 1;
     driver_params->extended = extended_api_initialized ? 1 : 0;
     driver_params->high_performance = 0;
-    
-    if (!params) {
-        return API_ERR_INVALID_PARAM;
-    }
     
     /* Validate handle */
     if (!pd_validate_handle(handle)) {
@@ -772,10 +789,17 @@ int pd_get_rcv_mode(uint16_t handle, void *params) {
     int i;
     int interface_num = 0;
     nic_info_t *nic;
-    uint8_t mode;
-    int result;
 
     log_debug("Get receive mode: handle=%04X", handle);
+
+    if (!params) {
+        return API_ERR_INVALID_PARAM;
+    }
+
+    /* Validate handle */
+    if (!pd_validate_handle(handle)) {
+        return API_ERR_BAD_HANDLE;
+    }
 
     /* Get current receive mode from hardware */
     for (i = 0; i < PD_MAX_HANDLES; i++) {
@@ -786,24 +810,14 @@ int pd_get_rcv_mode(uint16_t handle, void *params) {
     }
 
     nic = hardware_get_nic(interface_num);
-    if (nic && nic->ops && nic->ops->get_receive_mode) {
-        result = nic->ops->get_receive_mode(nic, &mode);
-        if (result == 0) {
-            *(uint16_t *)params = mode;
-        }
-        return result;
+    if (nic) {
+        /* Return the cached receive mode from NIC info structure */
+        *(uint16_t *)params = nic->receive_mode;
+        return 0;
     }
-    
-    if (!params) {
-        return API_ERR_INVALID_PARAM;
-    }
-    
-    /* Validate handle */
-    if (!pd_validate_handle(handle)) {
-        return API_ERR_BAD_HANDLE;
-    }
-    
-    return 0;
+
+    /* NIC not available */
+    return API_ERR_NO_INTERFACE;
 }
 
 /**
@@ -900,10 +914,18 @@ int pd_validate_handle(uint16_t handle) {
 }
 
 /* Restore default code segment before hot section */
+#ifdef __WATCOMC__
+#pragma code_seg ( )
+#else
 #pragma code_seg()
+#endif
 
 /* Hot section: Performance-critical runtime functions */
+#ifdef __WATCOMC__
+#pragma code_seg ( "_TEXT" )
+#else
 #pragma code_seg("_TEXT", "CODE")
+#endif
 
 /**
  * @brief Process received packet and deliver to registered handlers
@@ -1043,10 +1065,18 @@ static int deliver_packet_to_handler(pd_handle_t *handle, buffer_desc_t *buffer,
 }
 
 /* Restore default code segment after hot section */
+#ifdef __WATCOMC__
+#pragma code_seg ( )
+#else
 #pragma code_seg()
+#endif
 
 /* Cold section: Continue with initialization functions */
+#ifdef __WATCOMC__
+#pragma code_seg ( "COLD_TEXT" )
+#else
 #pragma code_seg("COLD_TEXT", "CODE")
+#endif
 
 /* Phase 3 Group 3B Extended API Function Implementations */
 
@@ -1113,9 +1143,9 @@ int api_cleanup_extended_handles(void) {
     }
     
     /* Clear global state */
-    load_balancing_enabled = false;
-    qos_enabled = false;
-    virtual_interrupts_enabled = false;
+    load_balancing_enabled = 0;
+    qos_enabled = 0;
+    virtual_interrupts_enabled = 0;
     memset(&global_lb_config, 0, sizeof(global_lb_config));
     memset(&default_qos_params, 0, sizeof(default_qos_params));
     memset(&qos_packet_queue, 0, sizeof(qos_packet_queue));
@@ -1340,8 +1370,8 @@ int pd_set_load_balance(uint16_t handle, void *params) {
     memcpy(&global_lb_config, lb_params, sizeof(pd_load_balance_params_t));
     
     ext_handle->flags |= HANDLE_FLAG_LOAD_BALANCE;
-    load_balancing_enabled = true;
-    
+    load_balancing_enabled = 1;
+
     log_info("Load balancing enabled for handle %04X (mode=%d)", handle, lb_params->mode);
     return API_SUCCESS;
 }
@@ -1374,8 +1404,8 @@ int pd_get_nic_status(uint16_t handle, void *params) {
     }
     
     /* Fill NIC status */
-    status->status = nic->status;
-    status->link_speed = nic->link_speed;
+    status->status = (uint8_t)nic->status;
+    status->link_speed = (uint16_t)nic->speed;
     status->utilization = nic_utilization[status->nic_index];
     status->error_count = nic_error_counts[status->nic_index];
     status->last_error_time = hardware_get_last_error_time(status->nic_index); /* Error timestamp tracking */
@@ -1446,9 +1476,9 @@ int pd_set_qos_params(uint16_t handle, void *params) {
     ext_handle->priority = (qos_params->priority_class + 1) * 32; /* Map 0-7 to 32-256 */
     ext_handle->flags |= HANDLE_FLAG_QOS_ENABLED;
     
-    qos_enabled = true;
-    
-    log_info("QoS enabled for handle %04X (class=%d, priority=%d)", 
+    qos_enabled = 1;
+
+    log_info("QoS enabled for handle %04X (class=%d, priority=%d)",
              handle, qos_params->priority_class, ext_handle->priority);
     return API_SUCCESS;
 }
@@ -1463,17 +1493,17 @@ int pd_get_flow_stats(uint16_t handle, void *params) {
     pd_flow_stats_t *flow_stats = (pd_flow_stats_t *)params;
     extended_packet_handle_t *ext_handle;
     int result;
-    
+    int i;
+
     if (!params) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     log_debug("Get flow stats: handle=%04X", handle);
-    
+
     /* Get extended handle */
     result = api_get_extended_handle(handle, &ext_handle);
     if (result != API_SUCCESS) {
-        int i;
         /* Return basic stats for non-extended handles */
         for (i = 0; i < PD_MAX_HANDLES; i++) {
             if (handles[i].handle == handle) {
@@ -1661,35 +1691,34 @@ int api_select_optimal_nic(uint16_t handle, const uint8_t *packet, uint8_t *sele
     extended_packet_handle_t *ext_handle;
     uint8_t dest_nic;
     int result;
-    
+    packet_buffer_t routing_packet;
+    route_decision_t decision;
+
     if (!packet || !selected_nic) {
         return API_ERR_INVALID_PARAM;
     }
-    
+
     *selected_nic = 0; /* Default to first NIC */
-    
+
     /* Get extended handle if available */
     result = api_get_extended_handle(handle, &ext_handle);
     if (result == API_SUCCESS) {
         /* Check NIC preference */
-        if ((ext_handle->flags & HANDLE_FLAG_NIC_PREFERENCE) && 
+        if ((ext_handle->flags & HANDLE_FLAG_NIC_PREFERENCE) &&
             ext_handle->preferred_nic != 0xFF &&
             routing_validate_nic(ext_handle->preferred_nic)) {
             *selected_nic = ext_handle->preferred_nic;
             return API_SUCCESS;
         }
-        
+
         /* Check load balancing configuration */
         if ((ext_handle->flags & HANDLE_FLAG_LOAD_BALANCE) && load_balancing_enabled) {
             return api_load_balance_select_nic(handle, packet, selected_nic);
         }
     }
-    
+
     /* Use Group 3A routing system for intelligent selection */
     if (routing_is_enabled() && packet) {
-        packet_buffer_t routing_packet;
-        route_decision_t decision;
-
         routing_packet.data = (uint8_t *)packet;
         routing_packet.length = 60; /* Minimum Ethernet frame size for analysis */
 
@@ -1762,6 +1791,8 @@ int api_check_bandwidth_limit(uint16_t handle, uint32_t packet_size) {
 int api_handle_nic_failure(uint8_t failed_nic) {
     int handles_affected = 0;
     int i;
+    uint8_t alternate_nic;
+    int result;
 
     if (!routing_validate_nic(failed_nic)) {
         return API_ERR_INVALID_PARAM;
@@ -1782,9 +1813,6 @@ int api_handle_nic_failure(uint8_t failed_nic) {
                 extended_handles[i].interface_num == failed_nic) {
 
                 /* Switch to alternate NIC */
-                uint8_t alternate_nic;
-                int result;
-
                 result = api_select_optimal_nic(extended_handles[i].handle_id, NULL, &alternate_nic);
                 if (result == API_SUCCESS && alternate_nic != failed_nic) {
                     extended_handles[i].interface_num = alternate_nic;
@@ -1811,9 +1839,10 @@ int api_handle_nic_failure(uint8_t failed_nic) {
  * @return 0 on success, negative on error
  */
 int api_coordinate_recovery_with_routing(uint8_t failed_nic) {
+    int i;
+
     /* Update routing system about the failure */
     if (routing_is_enabled()) {
-        int i;
         /* Remove routes that depend on the failed NIC */
         /* This would integrate with Group 3A routing functions */
         log_info("Coordinating with routing system for NIC %d failure", failed_nic);
@@ -1967,6 +1996,9 @@ static int api_flow_aware_select_nic(uint16_t handle, const uint8_t *packet, uin
     bridge_entry_t *bridge_entry;
     int result;
 
+    /* Unused parameter - for future flow-to-handle association */
+    (void)handle;
+
     if (!packet || !selected_nic) {
         return API_ERR_INVALID_PARAM;
     }
@@ -2034,21 +2066,21 @@ static uint32_t calculate_jitter(extended_packet_handle_t *ext_handle) {
 
 static uint32_t get_system_timestamp(void) {
     /* Use INT 1Ah to get system timer ticks (18.2 Hz) */
-    uint32_t ticks;
-    
-    __asm__ __volatile__(
-        "xor %%eax, %%eax\n\t"        /* AH = 0 (read system clock) */
-        "int $0x1A\n\t"               /* BIOS timer interrupt */
-        "shl $16, %%ecx\n\t"          /* Shift CX to upper 16 bits */
-        "or %%edx, %%ecx"             /* Combine CX:DX into single 32-bit value */
-        : "=c" (ticks)                /* Output: ticks in ECX */
-        :                             /* No input */
-        : "eax", "edx"                /* Clobbered registers */
-    );
-    
-    return ticks;
+    /* Returns tick count in CX:DX format, combine to 32-bit value */
+    union REGS regs;
+
+    memset(&regs, 0, sizeof(regs));
+    regs.h.ah = 0;  /* Read system clock - function 00h */
+    int86(0x1A, &regs, &regs);
+
+    /* CX contains high 16 bits, DX contains low 16 bits */
+    return ((uint32_t)regs.x.cx << 16) | regs.x.dx;
 }
 
 /* Restore default code segment */
+#ifdef __WATCOMC__
+#pragma code_seg ( )
+#else
 #pragma code_seg()
+#endif
 

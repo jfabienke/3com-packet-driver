@@ -12,6 +12,7 @@
 #include <dos.h>
 #include <stdio.h>
 #include <string.h>
+#include <malloc.h>  /* For _ffree on Watcom */
 #include "../../include/main.h"
 #include "../../include/hardware.h"
 #include "../../include/memory.h"
@@ -20,24 +21,11 @@
 #include "../../include/vds.h"
 #include "../../include/config.h"
 
-/* Unwind phase tracking */
-typedef enum {
-    UNWIND_PHASE_NONE = 0,
-    UNWIND_PHASE_LOGGING,
-    UNWIND_PHASE_CPU_DETECT,
-    UNWIND_PHASE_PLATFORM_PROBE,
-    UNWIND_PHASE_CONFIG,
-    UNWIND_PHASE_CHIPSET,
-    UNWIND_PHASE_VDS,
-    UNWIND_PHASE_MEMORY_CORE,
-    UNWIND_PHASE_HARDWARE,
-    UNWIND_PHASE_MEMORY_DMA,
-    UNWIND_PHASE_TSR,
-    UNWIND_PHASE_API_HOOKS,
-    UNWIND_PHASE_INTERRUPTS,
-    UNWIND_PHASE_API_ACTIVE,
-    UNWIND_PHASE_COMPLETE
-} unwind_phase_t;
+/* Forward declarations for VDS manager cleanup */
+extern void vds_manager_cleanup(void);
+
+/* Include the header for the canonical unwind_phase_t definition */
+#include "../../include/unwind.h"
 
 /* Global unwind state */
 static struct {
@@ -67,6 +55,7 @@ static void unwind_config(void);
 static void unwind_chipset(void);
 static void unwind_vds(void);
 static void unwind_memory_core(void);
+static void unwind_packet_ops(void);
 static void unwind_hardware(void);
 static void unwind_memory_dma(void);
 static void unwind_tsr(void);
@@ -94,6 +83,7 @@ static const unwind_entry_t unwind_table[] = {
     { UNWIND_PHASE_TSR,            "TSR Relocation",    unwind_tsr },
     { UNWIND_PHASE_MEMORY_DMA,     "DMA Memory",        unwind_memory_dma },
     { UNWIND_PHASE_HARDWARE,       "Hardware Init",     unwind_hardware },
+    { UNWIND_PHASE_PACKET_OPS,     "Packet Operations", unwind_packet_ops },
     { UNWIND_PHASE_MEMORY_CORE,    "Core Memory",       unwind_memory_core },
     { UNWIND_PHASE_VDS,            "VDS Support",       unwind_vds },
     { UNWIND_PHASE_CHIPSET,        "Chipset Detect",    unwind_chipset },
@@ -109,17 +99,17 @@ static const unwind_entry_t unwind_table[] = {
  */
 static void save_interrupt_vectors(void) {
     int i;
-    void far *vector;
-    
+    void (INTERRUPT FAR *vector)(void);
+
     if (g_unwind_state.vectors_saved) {
         return;
     }
-    
+
     for (i = 0; i < 256; i++) {
-        _dos_getvect(i, &vector);
+        vector = _dos_getvect(i);
         g_unwind_state.saved_vectors[i] = FP_SEG(vector);
     }
-    
+
     g_unwind_state.vectors_saved = true;
 }
 
@@ -128,23 +118,23 @@ static void save_interrupt_vectors(void) {
  */
 static void restore_interrupt_vectors(void) {
     int i;
-    void far *vector;
-    
+    void (INTERRUPT FAR *vector)(void);
+
     if (!g_unwind_state.vectors_saved) {
         return;
     }
-    
-    _asm cli;  /* Disable interrupts during restoration */
-    
+
+    _disable();  /* Disable interrupts during restoration */
+
     for (i = 0; i < 256; i++) {
         if (g_unwind_state.saved_vectors[i] != 0) {
-            vector = MK_FP(g_unwind_state.saved_vectors[i], 0);
+            vector = (void (INTERRUPT FAR *)(void))MK_FP(g_unwind_state.saved_vectors[i], 0);
             _dos_setvect(i, vector);
         }
     }
-    
-    _asm sti;  /* Re-enable interrupts */
-    
+
+    _enable();  /* Re-enable interrupts */
+
     g_unwind_state.vectors_saved = false;
 }
 
@@ -152,16 +142,17 @@ static void restore_interrupt_vectors(void) {
  * @brief Save PIC masks for restoration
  */
 static void save_pic_masks(void) {
-    uint8_t mask1, mask2;
-    
+    uint8_t mask1 = 0;  /* Initialize to suppress W200 - set by inline asm */
+    uint8_t mask2 = 0;  /* Initialize to suppress W200 - set by inline asm */
+
     if (g_unwind_state.pic_mask_saved) {
         return;
     }
-    
+
     _asm {
-        in al, 0x21        ; Read master PIC mask
+        in al, 0x21
         mov mask1, al
-        in al, 0xA1        ; Read slave PIC mask
+        in al, 0xA1
         mov mask2, al
     }
     
@@ -184,9 +175,9 @@ static void restore_pic_masks(void) {
     
     _asm {
         mov al, mask1
-        out 0x21, al       ; Restore master PIC mask
+        out 0x21, al
         mov al, mask2
-        out 0xA1, al       ; Restore slave PIC mask
+        out 0xA1, al
     }
     
     g_unwind_state.pic_mask_saved = false;
@@ -221,12 +212,17 @@ static void unwind_chipset(void) {
 
 static void unwind_vds(void) {
     log_info("Unwinding: VDS support");
-    vds_cleanup();  /* Unlocks all regions and releases buffers */
+    vds_manager_cleanup();  /* Unlocks all regions and releases buffers */
 }
 
 static void unwind_memory_core(void) {
     log_info("Unwinding: Core memory");
     memory_cleanup();  /* Frees all pools and XMS/UMB */
+}
+
+static void unwind_packet_ops(void) {
+    log_info("Unwinding: Packet operations");
+    /* Packet operations cleanup - buffer pools and queue cleanup */
 }
 
 static void unwind_hardware(void) {
@@ -264,15 +260,16 @@ static void unwind_tsr(void) {
 }
 
 static void unwind_api_hooks(void) {
-    log_info("Unwinding: API hooks");
-    
     /* GPT-5: Clear API ready flag BEFORE unhooking */
     extern volatile int api_ready;
+
+    log_info("Unwinding: API hooks");
+
     api_ready = 0;
-    
+
     /* Restore original interrupt vectors */
     restore_interrupt_vectors();
-    
+
     /* Cleanup API resources */
     api_cleanup();
 }
@@ -288,12 +285,13 @@ static void unwind_interrupts(void) {
 }
 
 static void unwind_api_active(void) {
-    log_info("Unwinding: API activation");
-    
     /* GPT-5: Clear API ready flag */
     extern volatile int api_ready;
+
+    log_info("Unwinding: API activation");
+
     api_ready = 0;
-    
+
     /* API deactivation handled by api_cleanup() */
 }
 

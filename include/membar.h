@@ -9,6 +9,7 @@
 #ifndef _MEMORY_BARRIERS_H_
 #define _MEMORY_BARRIERS_H_
 
+#include "portabl.h"
 #include <stdint.h>
 
 /* Static variables for barrier operations */
@@ -22,9 +23,9 @@ static volatile uint8_t __memory_barrier_dummy = 0;
  * Uses compiler-specific pragmas where available, volatile access fallback.
  */
 #ifdef __WATCOMC__
-    /* Open Watcom - use pragma */
-    #pragma aux __compiler_barrier_func = "" modify [memory];
-    static void __compiler_barrier_func(void) {}
+    /* Open Watcom - use volatile memory access as compiler barrier */
+    /* Note: Watcom doesn't support 'memory' clobber like GCC - use volatile access */
+    static void __compiler_barrier_func(void) { (void)__compiler_barrier_dummy; }
     #define COMPILER_BARRIER() __compiler_barrier_func()
 #elif defined(__GNUC__)
     /* GCC/Clang */
@@ -117,7 +118,7 @@ static volatile uint8_t __memory_barrier_dummy = 0;
 #endif
 
 static inline irq_flags_t irq_save(void) {
-    irq_flags_t flags;
+    irq_flags_t flags = 0;  /* Initialized to suppress W200; asm block assigns actual value */
     COMPILER_BARRIER();
 #ifdef __386__
     _asm {

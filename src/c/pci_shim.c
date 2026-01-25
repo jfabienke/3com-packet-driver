@@ -10,11 +10,20 @@
  */
 
 #include <dos.h>
+#include <conio.h>
+#include <string.h>
+
+/* C89 compatibility - include portability header for types */
+#include "portabl.h"
+
+/* Try standard headers for non-Watcom compilers */
+#ifndef __WATCOMC__
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
+#endif
+
 #include "pci_bios.h"
-#include "logging.h"
+#include "diag.h"
 
 /* PCI Configuration Mechanism #1 ports (primary, universal) */
 #define PCI_MECH1_CONFIG_ADDR   0xCF8   /* Configuration address */
@@ -94,6 +103,9 @@ static bool test_bios_behavior(void) {
     uint8_t bus = 0, dev = 0, func = 0;
     bool found_device = false;
     bool has_issues = false;
+    /* C89: All declarations must be at block start */
+    uint8_t vid_low, vid_high;
+    uint16_t vid_word;
     
     /* Find a PCI device to test with */
     for (dev = 0; dev < 32 && !found_device; dev++) {
@@ -113,9 +125,9 @@ static bool test_bios_behavior(void) {
     }
     
     /* Test 1: Compare byte vs word reads */
-    uint8_t vid_low = pci_read_config_byte(bus, dev, func, PCI_VENDOR_ID);
-    uint8_t vid_high = pci_read_config_byte(bus, dev, func, PCI_VENDOR_ID + 1);
-    uint16_t vid_word = pci_read_config_word(bus, dev, func, PCI_VENDOR_ID);
+    vid_low = pci_read_config_byte(bus, dev, func, PCI_VENDOR_ID);
+    vid_high = pci_read_config_byte(bus, dev, func, PCI_VENDOR_ID + 1);
+    vid_word = pci_read_config_word(bus, dev, func, PCI_VENDOR_ID);
     
     if (vid_word != ((vid_high << 8) | vid_low)) {
         LOG_WARNING("BIOS word read inconsistent with byte reads");
@@ -153,9 +165,10 @@ static bool detect_broken_bios(void) {
         bios_area = MK_FP(0xF000, offset);
         
         /* Look for common vendor strings */
-        if (memcmp(bios_area, "Award", 5) == 0 ||
-            memcmp(bios_area, "Phoenix", 7) == 0 ||
-            memcmp(bios_area, "AMI", 3) == 0) {
+        /* Use _fmemcmp for far pointer comparison to avoid W112 truncation */
+        if (_fmemcmp(bios_area, "Award", 5) == 0 ||
+            _fmemcmp(bios_area, "Phoenix", 7) == 0 ||
+            _fmemcmp(bios_area, "AMI", 3) == 0) {
             
             /* Found vendor string, copy it */
             for (i = 0; i < 63 && bios_area[i] >= 0x20 && bios_area[i] < 0x7F; i++) {
@@ -170,7 +183,9 @@ static bool detect_broken_bios(void) {
     bios_area = MK_FP(0xF000, 0xFFF5);
     if (bios_area[2] == '/' && bios_area[5] == '/') {
         /* Looks like a date MM/DD/YY */
-        int year = (bios_area[6] - '0') * 10 + (bios_area[7] - '0');
+        /* C89: Declaration moved to block start */
+        int year;
+        year = (bios_area[6] - '0') * 10 + (bios_area[7] - '0');
         if (year < 96) {  /* Pre-1996 */
             LOG_WARNING("Pre-1996 BIOS detected (19%02d), enabling compatibility mode", year);
             shim_state.broken_functions = BROKEN_READ_WORD | BROKEN_WRITE_WORD;
@@ -196,26 +211,16 @@ static bool detect_broken_bios(void) {
     return (shim_state.broken_functions != 0);
 }
 
-/* Assembly helper for 32-bit I/O in real mode (386+) */
-static void outportd_asm(uint16_t port, uint32_t value) {
-    __asm {
-        mov dx, port
-        mov eax, value
-        db 0x66  /* Operand size prefix for 32-bit */
-        out dx, eax
-    }
-}
+/* 32-bit I/O operations for PCI configuration.
+ * Use the external assembly implementation from pci_io.asm which properly
+ * handles 32-bit I/O in 16-bit real mode using .386 instructions.
+ * The assembly module returns 32-bit values in DX:AX per Watcom calling convention.
+ */
+#include "pci_io.h"
 
-static uint32_t inportd_asm(uint16_t port) {
-    uint32_t value;
-    __asm {
-        mov dx, port
-        db 0x66  /* Operand size prefix for 32-bit */
-        in eax, dx
-        mov value, eax
-    }
-    return value;
-}
+/* Alias inportd/outportd from pci_io module to local names for clarity */
+#define inportd_asm  inportd
+#define outportd_asm outportd
 
 /**
  * @brief Detect available PCI configuration mechanisms
@@ -224,25 +229,39 @@ static uint8_t detect_pci_mechanism(void) {
     uint32_t save_cf8;
     uint8_t save_cfa, save_cf8_byte;
     uint8_t mechanism = 0;
+    uint8_t bios_mechs;
     union REGS regs;
     struct SREGS sregs;
-    
+
     /* First check BIOS for supported mechanisms */
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
     regs.h.ah = 0xB1;
     regs.h.al = 0x01;  /* Installation check */
     int86x(0x1A, &regs, &regs, &sregs);
-    
-    if (regs.x.cflag == 0 && regs.x.edx == 0x20494350) {
-        /* BIOS reports supported mechanisms in AL */
-        uint8_t bios_mechs = regs.h.al;
+
+#ifdef __WATCOMC__
+    /* Watcom 16-bit mode: union REGS only has 16-bit dx, not 32-bit edx.
+     * Check low 16-bits of EDX for 'CI' (0x4350) - 'PCI ' = 0x20494350 */
+    if (regs.x.cflag == 0 && regs.x.dx == 0x4350) {
+        bios_mechs = regs.h.al;
         LOG_DEBUG("BIOS reports mechanisms: 0x%02X", bios_mechs);
-        
+
         /* Bit 0 = Mechanism #1, Bit 1 = Mechanism #2 */
         if (bios_mechs & 0x01) mechanism |= 0x01;
         if (bios_mechs & 0x02) mechanism |= 0x02;
     }
+#else
+    /* Non-Watcom: use full 32-bit edx field */
+    if (regs.x.cflag == 0 && regs.x.edx == 0x20494350) {
+        bios_mechs = regs.h.al;
+        LOG_DEBUG("BIOS reports mechanisms: 0x%02X", bios_mechs);
+
+        /* Bit 0 = Mechanism #1, Bit 1 = Mechanism #2 */
+        if (bios_mechs & 0x01) mechanism |= 0x01;
+        if (bios_mechs & 0x02) mechanism |= 0x02;
+    }
+#endif
     
     /* Independently verify Mechanism #1 (preferred) */
     save_cf8 = inportd_asm(0xCF8);
@@ -283,7 +302,6 @@ static bool mech1_read_config(uint8_t bus, uint8_t dev, uint8_t func,
                               uint8_t offset, uint32_t *value, uint8_t size) {
     uint32_t address;
     uint32_t data;
-    uint8_t aligned_offset;
     
     /* Build configuration address */
     address = PCI_MECH1_ENABLE |
@@ -370,12 +388,12 @@ static bool mech2_read_config(uint8_t bus, uint8_t dev, uint8_t func,
             *value = inportb(port | (offset & 0x03));
             break;
         case 2:
-            *value = inport(port | (offset & 0x02));
+            *value = inportw(port | (offset & 0x02));
             break;
         case 4:
             /* Mechanism #2 doesn't support 32-bit, read as two words */
-            *value = inport(port);
-            *value |= ((uint32_t)inport(port + 2)) << 16;
+            *value = inportw(port);
+            *value |= ((uint32_t)inportw(port + 2)) << 16;
             break;
     }
     
@@ -488,12 +506,12 @@ static bool mech2_write_config(uint8_t bus, uint8_t dev, uint8_t func,
             outportb(port | (offset & 0x03), value & 0xFF);
             break;
         case 2:
-            outport(port | (offset & 0x02), value & 0xFFFF);
+            outportw(port | (offset & 0x02), value & 0xFFFF);
             break;
         case 4:
             /* Write as two words */
-            outport(port, value & 0xFFFF);
-            outport(port + 2, (value >> 16) & 0xFFFF);
+            outportw(port, value & 0xFFFF);
+            outportw(port + 2, (value >> 16) & 0xFFFF);
             break;
     }
     
@@ -516,12 +534,14 @@ void __interrupt __far pci_shim_handler(
     unsigned bp, unsigned di, unsigned si, unsigned ds,
     unsigned es, unsigned dx, unsigned cx, unsigned bx,
     unsigned ax, unsigned ip, unsigned cs, unsigned flags) {
-    
+
     uint8_t ah_val = (ax >> 8) & 0xFF;
     uint8_t al_val = ax & 0xFF;
     uint8_t bus, dev, func, offset;
-    uint32_t value;
-    bool handled = false;
+    /* Use static to ensure near pointer address in data segment,
+     * avoiding W112 far-to-near pointer truncation when passing to
+     * mech1_read_config/mech2_read_config which expect near pointers */
+    static uint32_t value;
     
     /* Only intercept PCI BIOS config read/write calls */
     if (ah_val != 0xB1 || al_val < 0x08 || al_val > 0x0D) {
@@ -540,13 +560,16 @@ void __interrupt __far pci_shim_handler(
     
     /* Check if this function is known broken */
     if (shim_state.broken_functions != 0) {
-        uint16_t func_mask = 1 << (al_val & 0x0F);
-        
+        /* C89: Declarations must be at start of block */
+        uint16_t func_mask;
+        bool success;
+
+        func_mask = 1 << (al_val & 0x0F);
+        success = false;
+
         if (shim_state.broken_functions & func_mask) {
             /* This function is broken, handle via our mechanism */
             shim_state.fallback_calls++;
-            
-            bool success = false;
             
             /* Choose mechanism based on what's available */
             if (shim_state.mechanism == 1) {
