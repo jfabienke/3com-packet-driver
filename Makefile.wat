@@ -2,7 +2,12 @@
 # Use: wmake -f Makefile.wat [target]
 # Requires Open Watcom C/C++ and NASM
 #
-# Last Updated: 2026-01-25 17:55 UTC
+# Last Updated: 2026-01-28 07:15 UTC
+# Phase 6: Split NIC drivers (*_rt.c/*_init.c) for expanded 6-overlay structure
+#
+# OVERLAY SYSTEM: This build now uses Watcom's static overlay system to
+# reduce TSR memory footprint. The 3cpd.lnk linker directive file defines
+# overlay sections for init-only code that is discarded after driver loads.
 
 # --- Watcom Configuration ---
 # Set WATCOM if not already defined (macOS ARM64 default path)
@@ -38,9 +43,13 @@ WATCOM_H = $(WATCOM)/h
 # Memory model: -ml (large) allows code and data to exceed 64KB limits
 # Required because: code=254KB (190KB over), data=276KB (212KB over)
 # Note: This creates far pointers for all code/data - larger executable
-CFLAGS_DEBUG   = -zq -ml -s -0 -zp1 -i=$(INCDIR)/ -i=$(WATCOM_H)/ -fr=$(BUILDDIR)/ -wcd=201 -d2
-CFLAGS_RELEASE = -zq -ml -s -os -ot -zp1 -i=$(INCDIR)/ -i=$(WATCOM_H)/ -fr=$(BUILDDIR)/ -wcd=201 -d0
-CFLAGS_PRODUCTION = -zq -ml -s -os -zp1 -i=$(INCDIR)/ -i=$(WATCOM_H)/ -d0 &
+# -of: Generates overlay-safe function prologue/epilogue code (required for overlays)
+# -zc: Put string literals in code segment (reduces CONST segment size significantly)
+# -zdf: DS floats (DS != DGROUP) - allows far data outside DGROUP
+# -dINIT_DIAG: Enable init diagnostics (debug only, adds ~8KB to DGROUP)
+CFLAGS_DEBUG   = -zq -ml -s -0 -zp1 -of -zc -zdf -i=$(INCDIR)/ -i=$(WATCOM_H)/ -fr=$(BUILDDIR)/ -wcd=201 -d2 -dINIT_DIAG
+CFLAGS_RELEASE = -zq -ml -s -os -ot -zp1 -of -zc -zdf -i=$(INCDIR)/ -i=$(WATCOM_H)/ -fr=$(BUILDDIR)/ -wcd=201 -d0
+CFLAGS_PRODUCTION = -zq -ml -s -os -zp1 -zc -zdf -i=$(INCDIR)/ -i=$(WATCOM_H)/ -d0 &
                     -oe=100 -ol+ -ox -wcd=201 -we &
                     -dPRODUCTION -dNO_LOGGING -dNO_STATS -dNDEBUG
 
@@ -49,16 +58,23 @@ AFLAGS_DEBUG   = -f obj -i$(INCDIR)/ -g
 AFLAGS_RELEASE = -f obj -i$(INCDIR)/
 
 # --- Linker Flags ---
-# Library path for medium model C runtime
+# Library path for large model C runtime
 WATCOM_LIB = $(WATCOM)/lib286/dos
 
-# Link against clibl.lib (medium model C library) for stdlib functions
+# Link against clibl.lib (large model C library) for stdlib functions
+# Overlay builds use @3cpd.lnk directive file which contains full link specification
 LFLAGS_DEBUG   = system dos library $(WATCOM_LIB)/clibl.lib &
                  option map=$(BUILDDIR)/3cpd.map, caseexact, quiet, stack=1024
 LFLAGS_RELEASE = system dos library $(WATCOM_LIB)/clibl.lib &
                  option map=$(BUILDDIR)/3cpd.map, caseexact, quiet, stack=1024
 LFLAGS_PRODUCTION = system dos library $(WATCOM_LIB)/clibl.lib &
                     option map=$(BUILDDIR)/3cpd.map, caseexact, quiet, stack=1024
+
+# Overlay-enabled link flags - uses linker directive file for overlay structure
+LFLAGS_OVERLAY = @3cpd.lnk
+
+# Non-overlay with FAR_DATA outside DGROUP
+LFLAGS_NOOVL = @3cpd-noovl.lnk
 
 # --- Default flags (release) ---
 CFLAGS = $(CFLAGS_RELEASE)
@@ -87,13 +103,25 @@ HOT_ASM_OBJS = $(BUILDDIR)/pktapi.obj &
                $(BUILDDIR)/tsrcom.obj &
                $(BUILDDIR)/tsrwrap.obj &
                $(BUILDDIR)/pci_io.obj &
-               $(BUILDDIR)/pciisr.obj
+               $(BUILDDIR)/pciisr.obj &
+               $(BUILDDIR)/linkasm.obj &
+               $(BUILDDIR)/hwpkt.obj &
+               $(BUILDDIR)/hwcfg.obj &
+               $(BUILDDIR)/hwcoord.obj &
+               $(BUILDDIR)/hwinit.obj &
+               $(BUILDDIR)/hweep.obj &
+               $(BUILDDIR)/hwdma.obj &
+               $(BUILDDIR)/cacheops.obj
 
 # --- Main loader ---
 LOADER_OBJ = $(BUILDDIR)/tsrldr.obj
 
 # --- HOT SECTION - Resident C Objects ---
-# Note: pktops is in HOT_ASM_OBJS (assembly implementation preferred)
+# Note: pktops.asm is in HOT_ASM_OBJS (assembly for fast packet copy)
+#       pktops_c.obj provides C functions called by pktops.asm
+# init_main.obj: Overlay orchestrator (must be resident to call overlay stages)
+# xms_core.obj: XMS memory manager (must be resident for buffer access)
+# Split driver *_rt.obj: Runtime functions (ROOT segment, always resident)
 HOT_C_OBJS = $(BUILDDIR)/api.obj &
              $(BUILDDIR)/routing.obj &
              $(BUILDDIR)/pci_shim.obj &
@@ -106,7 +134,14 @@ HOT_C_OBJS = $(BUILDDIR)/api.obj &
              $(BUILDDIR)/rtcfg.obj &
              $(BUILDDIR)/irqmit.obj &
              $(BUILDDIR)/rxbatch.obj &
-             $(BUILDDIR)/txlazy.obj
+             $(BUILDDIR)/txlazy.obj &
+             $(BUILDDIR)/init_main.obj &
+             $(BUILDDIR)/xms_core.obj &
+             $(BUILDDIR)/pktops_c.obj &
+             $(BUILDDIR)/linkstubs.obj &
+             $(BUILDDIR)/hardware_rt.obj &
+             $(BUILDDIR)/3c509b_rt.obj &
+             $(BUILDDIR)/3c515_rt.obj
 
 # --- COLD SECTION - Initialization Assembly Objects ---
 COLD_ASM_OBJS = $(BUILDDIR)/cpudet.obj &
@@ -114,9 +149,12 @@ COLD_ASM_OBJS = $(BUILDDIR)/cpudet.obj &
                 $(BUILDDIR)/promisc.obj &
                 $(BUILDDIR)/smcpat.obj &
                 $(BUILDDIR)/safestub.obj &
-                $(BUILDDIR)/quiesce.obj
+                $(BUILDDIR)/quiesce.obj &
+                $(BUILDDIR)/hwdet.obj &
+                $(BUILDDIR)/hwbus.obj
 
 # --- COLD SECTION - Initialization C Objects ---
+# Split driver *_init.obj: Init functions (OVL_NIC_INIT overlay, discarded after init)
 COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj &
                    $(BUILDDIR)/init.obj &
                    $(BUILDDIR)/config.obj &
@@ -135,9 +173,11 @@ COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj &
                    $(BUILDDIR)/arp.obj &
                    $(BUILDDIR)/nic_init.obj &
                    $(BUILDDIR)/hardware.obj &
-                   $(BUILDDIR)/hwstubs.obj &
+                   $(BUILDDIR)/hardware_init.obj &
                    $(BUILDDIR)/3c515.obj &
+                   $(BUILDDIR)/3c515_init.obj &
                    $(BUILDDIR)/3c509b.obj &
+                   $(BUILDDIR)/3c509b_init.obj &
                    $(BUILDDIR)/entval.obj &
                    $(BUILDDIR)/pltprob.obj &
                    $(BUILDDIR)/dmacap.obj &
@@ -206,6 +246,13 @@ production: .SYMBOLIC $(BUILDDIR)
     @set PRODUCTION=1
     @%make $(TARGET)
     @echo Production build complete: $(TARGET)
+
+overlay: .SYMBOLIC $(BUILDDIR) $(ALL_OBJS)
+    @echo Building with OVERLAY system for reduced TSR footprint...
+    @echo Using linker directives from 3cpd.lnk
+    $(LINK) $(LFLAGS_OVERLAY)
+    @echo Overlay build complete: $(TARGET)
+    @echo Check build/3cpd.map for overlay section layout
 
 # --- CPU Configuration Targets ---
 
@@ -346,9 +393,33 @@ $(BUILDDIR)/hardware.obj: $(CDIR)/hardware.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-$(BUILDDIR)/hwstubs.obj: $(CDIR)/hwstubs.c
-    @echo Compiling: $[@
-    $(CC) $(CFLAGS) $[@ -fo=$@
+# Split driver objects - Phase 6 expanded overlay structure
+# *_rt.obj: Runtime functions (ROOT segment - always resident)
+# *_init.obj: Init functions (OVL_NIC_INIT overlay - discarded after init)
+
+$(BUILDDIR)/hardware_rt.obj: $(CDIR)/hardware_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/hardware_init.obj: $(CDIR)/hardware_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+$(BUILDDIR)/3c509b_rt.obj: $(CDIR)/3c509b_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/3c509b_init.obj: $(CDIR)/3c509b_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+$(BUILDDIR)/3c515_rt.obj: $(CDIR)/3c515_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/3c515_init.obj: $(CDIR)/3c515_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
 $(BUILDDIR)/memory.obj: $(CDIR)/memory.c
     @echo Compiling: $[@
@@ -566,6 +637,19 @@ $(BUILDDIR)/cachemgt.obj: $(CDIR)/cachemgt.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
+# Init orchestrator and XMS core (ROOT segment - always resident)
+$(BUILDDIR)/init_main.obj: $(CDIR)/init_main.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/xms_core.obj: $(CDIR)/xms_core.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/linkstubs.obj: $(CDIR)/linkstubs.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
 # Loader C files
 $(BUILDDIR)/loader_cpudet.obj: $(SRCDIR)/loader/cpu_detect.c
     @echo 'Compiling loader:' $[@
@@ -678,6 +762,69 @@ $(BUILDDIR)/quiesce.obj: $(ASMDIR)/quiesce.asm
     @echo Assembling: $[@
     $(ASM) $(AFLAGS) $[@ -o $@
 
+$(BUILDDIR)/linkasm.obj: $(ASMDIR)/linkasm.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwpkt.obj: $(ASMDIR)/hwpkt.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwcfg.obj: $(ASMDIR)/hwcfg.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwcoord.obj: $(ASMDIR)/hwcoord.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/cacheops.obj: $(ASMDIR)/cacheops.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwinit.obj: $(ASMDIR)/hwinit.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hweep.obj: $(ASMDIR)/hweep.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwdma.obj: $(ASMDIR)/hwdma.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwdet.obj: $(ASMDIR)/hwdet.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/hwbus.obj: $(ASMDIR)/hwbus.asm
+    @echo Assembling: $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+# pktops_c.obj - C packet operations called by pktops.asm (legacy full build)
+$(BUILDDIR)/pktops_c.obj: $(CDIR)/pktops.c
+    @echo 'Compiling HOT:' $[@
+    $(CC) $(CFLAGS) $[@ -fo=$@
+
+# Split packet operations - Phase 6 expanded overlay structure
+$(BUILDDIR)/pktops_rt.obj: $(CDIR)/pktops_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/pktops_init.obj: $(CDIR)/pktops_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split DMA mapping - Phase 6 expanded overlay structure
+$(BUILDDIR)/dmamap_rt.obj: $(CDIR)/dmamap_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/dmamap_init.obj: $(CDIR)/dmamap_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
 # --- Clean Target ---
 
 clean: .SYMBOLIC
@@ -701,6 +848,7 @@ info: .SYMBOLIC
     @echo   wmake                - Release build (default)
     @echo   wmake debug          - Debug build with symbols
     @echo   wmake production     - Size-optimized production build
+    @echo   wmake overlay        - Build with overlay system (reduced TSR footprint)
     @echo   wmake config-8086    - Build for 8086/8088 (3C509B PIO only)
     @echo   wmake config-286     - Build for 80286
     @echo   wmake config-386     - Build for 80386
@@ -711,3 +859,8 @@ info: .SYMBOLIC
     @echo   wmake pci-utils      - Build PCI utilities
     @echo   wmake clean          - Clean build artifacts
     @echo   wmake info           - Show this information
+    @echo.
+    @echo Overlay Build:
+    @echo   The 'overlay' target uses Watcom static overlays to reduce
+    @echo   TSR memory footprint. Init-only code is loaded into a shared
+    @echo   overlay area and freed after driver initialization completes.
