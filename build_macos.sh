@@ -3,7 +3,7 @@
 # build_macos.sh - Build 3Com Packet Driver on macOS with Open Watcom + NASM
 #
 # Part of 3Com DOS Packet Driver Project
-# Last Updated: 2026-02-01 12:45:00 CET
+# Last Updated: 2026-02-01 14:50:00 CET
 # Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
 # Phase 6: Replaced 15 *_rt.c files with consolidated rt_stubs.c
 #
@@ -107,6 +107,7 @@ HOT_ASM_OBJS=(
     pktapi nicirq hwsmc pcmisr flowrt dirpio
     pktops pktcopy tsrcom tsrwrap pci_io pciisr
     linkasm hwpkt hwcfg hwcoord hwinit hweep hwdma cacheops
+    rt_stubs
 )
 
 # HOT SECTION - C (resident after init, ROOT segment)
@@ -115,7 +116,7 @@ HOT_C_OBJS=(
     api routing pci_shim pcimux dmamap dmabnd
     hwchksm dos_idle irq_bind rtcfg irqmit rxbatch txlazy
     init_main xms_core pktops_c linkstubs
-    rt_stubs dos_io
+    dos_io
 )
 
 # JIT Module ASM Objects (Phase 7 - linked into EXE, hot sections copied at init)
@@ -136,7 +137,7 @@ JIT_C_OBJS=(
 # COLD SECTION - Assembly (discarded after init)
 COLD_ASM_OBJS=(
     cpudet pnp promisc smcpat safestub quiesce
-    hwdet hwbus
+    hwdet hwbus pcipwr
 )
 
 # COLD SECTION - C (discarded after init)
@@ -151,6 +152,7 @@ COLD_C_OBJS=(
     api_init dmabnd_init dmamap_init pci_shim_init pcimux_init
     hwchksm_init irqmit_init rxbatch_init txlazy_init
     xms_core_init pktops_init logging_init
+    pcirst smcpat_c
 )
 
 # Debug-only objects
