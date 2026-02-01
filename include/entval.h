@@ -21,15 +21,23 @@
 #define MIN_ALT_VECTOR          0xC0
 #define MAX_ALT_VECTOR          0xCF
 
-/* Error codes */
+/* Error codes - C89 compatible (use #defines for actual values) */
+#define ENTRY_SUCCESS_VAL                  0
+#define ENTRY_ERR_ALREADY_INSTALLED_VAL   (-1)
+#define ENTRY_ERR_VECTOR_IN_USE_VAL       (-2)
+#define ENTRY_ERR_INVALID_VECTOR_VAL      (-3)
+#define ENTRY_ERR_DOS_VERSION_VAL         (-4)
+#define ENTRY_ERR_MEMORY_INSUFFICIENT_VAL (-5)
+#define ENTRY_ERR_CONFLICT_VAL            (-6)
+
 typedef enum {
-    ENTRY_SUCCESS = 0,
-    ENTRY_ERR_ALREADY_INSTALLED = -1,
-    ENTRY_ERR_VECTOR_IN_USE = -2,
-    ENTRY_ERR_INVALID_VECTOR = -3,
-    ENTRY_ERR_DOS_VERSION = -4,
-    ENTRY_ERR_MEMORY_INSUFFICIENT = -5,
-    ENTRY_ERR_CONFLICT = -6
+    ENTRY_SUCCESS,                    /* 0 */
+    ENTRY_ERR_ALREADY_INSTALLED,      /* -1 via define */
+    ENTRY_ERR_VECTOR_IN_USE,          /* -2 via define */
+    ENTRY_ERR_INVALID_VECTOR,         /* -3 via define */
+    ENTRY_ERR_DOS_VERSION,            /* -4 via define */
+    ENTRY_ERR_MEMORY_INSUFFICIENT,    /* -5 via define */
+    ENTRY_ERR_CONFLICT                /* -6 via define */
 } entry_error_t;
 
 /* Entry validation results */
@@ -70,14 +78,17 @@ typedef struct {
 int entry_validate(int argc, char *argv[], entry_validation_t *result);
 
 /**
- * @brief Parse command line arguments
- * 
+ * @brief Parse command line arguments for entry validation
+ *
+ * Note: This is distinct from main.h's parse_command_line() which takes config_t*.
+ * This version is for early validation before full config is available.
+ *
  * @param argc Argument count
  * @param argv Argument array
  * @param args Output parsed arguments
  * @return ENTRY_SUCCESS or error code
  */
-int parse_command_line(int argc, char *argv[], cmdline_args_t *args);
+int entry_parse_command_line(int argc, char *argv[], cmdline_args_t *args);
 
 /**
  * @brief Check if packet driver already installed

@@ -13,9 +13,13 @@
 #ifndef DMA_BOUNDARY_H
 #define DMA_BOUNDARY_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
+#include <stddef.h>    /* size_t */
+
+/* DOS-specific includes - only for DOS compilers */
+#if defined(__TURBOC__) || defined(__BORLANDC__) || defined(__WATCOMC__) || (defined(_MSC_VER) && _MSC_VER <= 1200)
 #include <dos.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -89,24 +93,26 @@ typedef struct {
 } bounce_pool_t;
 
 /* Core boundary checking functions - GPT-5 Enhanced */
-bool dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result);
-bool dma_check_64kb_boundary_enhanced(uint32_t phys_addr, size_t len);
-bool dma_check_16mb_limit_enhanced(uint32_t phys_addr, size_t len);
-bool dma_check_alignment_enhanced(uint32_t phys_addr, uint16_t required_alignment);
+/* Note: Return int instead of bool for C89 compatibility with mixed stdbool.h usage */
+int dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result);
+int dma_check_64kb_boundary_enhanced(uint32_t phys_addr, size_t len);
+int dma_check_16mb_limit_enhanced(uint32_t phys_addr, size_t len);
+int dma_check_alignment_enhanced(uint32_t phys_addr, uint16_t required_alignment);
 
 /* Physical address calculation with EMM386/QEMM awareness */
 uint32_t virt_to_phys_safe(void *virt_addr, memory_region_t *region_type);
-bool is_dma_safe_memory_region(void *buffer, size_t len);
+int is_dma_safe_memory_region(void *buffer, size_t len);
 memory_region_t detect_memory_region(void *buffer);
 
 /* GPT-5 Critical: Physical memory contiguity and page locking */
-bool verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *result);
-bool lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle);
+/* Note: Return int instead of bool for C89 compatibility with mixed stdbool.h usage */
+int verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *result);
+int lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle);
 void unlock_pages_for_dma(uint16_t lock_handle);
-bool detect_v86_paging_mode(void);
-bool dpmi_services_available(void);
+int detect_v86_paging_mode(void);
+int dpmi_services_available(void);
 uint32_t translate_linear_to_physical(uint32_t linear_addr);
-bool is_safe_for_direct_dma(void *buffer, size_t len);
+int is_safe_for_direct_dma(void *buffer, size_t len);
 
 /* Bounce buffer pool management - GPT-5 Separate TX/RX */
 int dma_init_bounce_pools(void);
@@ -139,7 +145,7 @@ typedef struct {
 /* Scatter-gather operations */
 dma_sg_descriptor_t* dma_create_sg_descriptor(void *buffer, size_t len, uint16_t max_segments);
 void dma_free_sg_descriptor(dma_sg_descriptor_t *desc);
-bool dma_split_at_64k_boundary(void *buffer, size_t len, dma_sg_descriptor_t *desc);
+int dma_split_at_64k_boundary(void *buffer, size_t len, dma_sg_descriptor_t *desc);
 
 /* Statistics and debugging */
 typedef struct {
@@ -160,13 +166,13 @@ void dma_get_boundary_stats(dma_boundary_stats_t *stats);
 void dma_print_boundary_stats(void);
 void dma_reset_boundary_stats(void);
 
-/* Inline helper functions */
+/* C89 helper functions (static, not inline) */
 
 /**
  * @brief Fast 64KB boundary check without full structure
  * GPT-5 recommendation for performance-critical paths
  */
-static inline bool dma_crosses_64k_fast(uint32_t phys_addr, size_t len) {
+static bool dma_crosses_64k_fast(uint32_t phys_addr, size_t len) {
     return ((phys_addr & 0xFFFFUL) + len) > 0x10000UL;
 }
 
@@ -174,14 +180,14 @@ static inline bool dma_crosses_64k_fast(uint32_t phys_addr, size_t len) {
  * @brief Fast 16MB limit check
  * GPT-5 recommendation for ISA DMA validation
  */
-static inline bool dma_exceeds_16m_fast(uint32_t phys_addr, size_t len) {
+static bool dma_exceeds_16m_fast(uint32_t phys_addr, size_t len) {
     return (phys_addr >= DMA_16MB_LIMIT) || ((phys_addr + len) > DMA_16MB_LIMIT);
 }
 
 /**
  * @brief Check if buffer needs bounce for ISA DMA
  */
-static inline bool dma_needs_bounce_isa(uint32_t phys_addr, size_t len) {
+static bool dma_needs_bounce_isa(uint32_t phys_addr, size_t len) {
     return dma_crosses_64k_fast(phys_addr, len) || dma_exceeds_16m_fast(phys_addr, len);
 }
 
@@ -189,7 +195,7 @@ static inline bool dma_needs_bounce_isa(uint32_t phys_addr, size_t len) {
  * @brief Safe physical address calculation
  * Handles segment:offset to linear conversion with overflow check
  */
-static inline uint32_t seg_off_to_phys(uint16_t segment, uint16_t offset) {
+static uint32_t seg_off_to_phys(uint16_t segment, uint16_t offset) {
     uint32_t linear = ((uint32_t)segment << 4) + offset;
     /* Check for wraparound in 16-bit segment arithmetic */
     if (linear < ((uint32_t)segment << 4)) {
@@ -201,7 +207,7 @@ static inline uint32_t seg_off_to_phys(uint16_t segment, uint16_t offset) {
 /**
  * @brief Convert far pointer to physical address
  */
-static inline uint32_t far_ptr_to_phys(void far *ptr) {
+static uint32_t far_ptr_to_phys(void far *ptr) {
     return seg_off_to_phys(FP_SEG(ptr), FP_OFF(ptr));
 }
 

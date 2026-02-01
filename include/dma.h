@@ -46,11 +46,11 @@ extern "C" {
 
 /* DMA memory types for DOS environment */
 typedef enum {
-    DMA_MEMORY_CONVENTIONAL = 0,    /* Conventional memory (below 640KB) */
-    DMA_MEMORY_XMS,                 /* Extended memory (XMS) */
-    DMA_MEMORY_EMS,                 /* Expanded memory (EMS) - not typically used for DMA */
-    DMA_MEMORY_LOCKED_CONVENTIONAL, /* Locked conventional memory */
-    DMA_MEMORY_DEVICE_COHERENT      /* Device-coherent memory */
+    DMA_MEMORY_CONVENTIONAL,        /* 0: Conventional memory (below 640KB) */
+    DMA_MEMORY_XMS,                 /* 1: Extended memory (XMS) */
+    DMA_MEMORY_EMS,                 /* 2: Expanded memory (EMS) - not typically used for DMA */
+    DMA_MEMORY_LOCKED_CONVENTIONAL, /* 3: Locked conventional memory */
+    DMA_MEMORY_DEVICE_COHERENT      /* 4: Device-coherent memory */
 } dma_memory_type_t;
 
 /* Fragment descriptor for software scatter-gather implementation */
@@ -468,18 +468,18 @@ void dma_dump_status(uint8_t nic_index);
 /* === Error Handling === */
 
 typedef enum {
-    DMA_ERROR_NONE = 0,
-    DMA_ERROR_INVALID_PARAM,
-    DMA_ERROR_OUT_OF_MEMORY,
-    DMA_ERROR_MAPPING_FAILED,
-    DMA_ERROR_XMS_UNAVAILABLE,
-    DMA_ERROR_ALIGNMENT_ERROR,
-    DMA_ERROR_TRANSFER_TIMEOUT,
-    DMA_ERROR_HARDWARE_ERROR,
-    DMA_ERROR_COHERENCY_VIOLATION,
-    DMA_ERROR_FRAGMENT_TOO_LARGE,
-    DMA_ERROR_TOO_MANY_FRAGMENTS,
-    DMA_ERROR_UNSUPPORTED_OPERATION
+    DMA_ERROR_NONE,                  /* 0 */
+    DMA_ERROR_INVALID_PARAM,         /* 1 */
+    DMA_ERROR_OUT_OF_MEMORY,         /* 2 */
+    DMA_ERROR_MAPPING_FAILED,        /* 3 */
+    DMA_ERROR_XMS_UNAVAILABLE,       /* 4 */
+    DMA_ERROR_ALIGNMENT_ERROR,       /* 5 */
+    DMA_ERROR_TRANSFER_TIMEOUT,      /* 6 */
+    DMA_ERROR_HARDWARE_ERROR,        /* 7 */
+    DMA_ERROR_COHERENCY_VIOLATION,   /* 8 */
+    DMA_ERROR_FRAGMENT_TOO_LARGE,    /* 9 */
+    DMA_ERROR_TOO_MANY_FRAGMENTS,    /* 10 */
+    DMA_ERROR_UNSUPPORTED_OPERATION  /* 11 */
 } dma_error_t;
 
 /**

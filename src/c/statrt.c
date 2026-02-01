@@ -30,12 +30,14 @@ static uint32_t static_routing_get_timestamp(void);
 
 /* Static routing initialization and cleanup */
 int static_routing_init(void) {
+    int result;
+
     if (g_static_routing_initialized) {
         return SUCCESS;
     }
-    
+
     /* Initialize routing table */
-    int result = static_routing_table_init(&g_static_routing_table, 128, 32);
+    result = static_routing_table_init(&g_static_routing_table, 128, 32);
     if (result != SUCCESS) {
         return result;
     }
@@ -109,24 +111,29 @@ int static_routing_table_init(static_routing_table_t *table, uint16_t max_routes
 }
 
 void static_routing_table_cleanup(static_routing_table_t *table) {
+    static_route_t *route;
+    static_route_t *route_next;
+    subnet_info_t *subnet;
+    subnet_info_t *subnet_next;
+
     if (!table || !table->initialized) {
         return;
     }
-    
+
     /* Free all routes */
-    static_route_t *route = table->routes;
+    route = table->routes;
     while (route) {
-        static_route_t *next = route->next;
+        route_next = route->next;
         memory_free(route);
-        route = next;
+        route = route_next;
     }
-    
+
     /* Free all subnets */
-    subnet_info_t *subnet = table->subnets;
+    subnet = table->subnets;
     while (subnet) {
-        subnet_info_t *next = subnet->next;
+        subnet_next = subnet->next;
         memory_free(subnet);
-        subnet = next;
+        subnet = subnet_next;
     }
     
     table->routes = NULL;
@@ -139,16 +146,20 @@ void static_routing_table_cleanup(static_routing_table_t *table) {
 /* Route management */
 int static_route_add(const ip_addr_t *dest_network, const ip_addr_t *netmask,
                     const ip_addr_t *gateway, uint8_t nic_index, uint8_t metric) {
+    static_route_t *existing;
+    static_route_t *route;
+    static_route_t **current;
+
     if (!dest_network || !netmask || !static_routing_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (g_static_routing_table.route_count >= g_static_routing_table.max_routes) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Check if route already exists */
-    static_route_t *existing = static_route_find_exact(dest_network, netmask);
+    existing = static_route_find_exact(dest_network, netmask);
     if (existing) {
         /* Update existing route */
         if (gateway) {
@@ -164,14 +175,14 @@ int static_route_add(const ip_addr_t *dest_network, const ip_addr_t *netmask,
         existing->age = static_routing_get_timestamp();
         return SUCCESS;
     }
-    
+
     /* Create new route */
-    static_route_t *route = (static_route_t*)memory_alloc(sizeof(static_route_t),
-                                                        MEM_TYPE_DRIVER_DATA, 0);
+    route = (static_route_t*)memory_alloc(sizeof(static_route_t),
+                                          MEM_TYPE_DRIVER_DATA, 0);
     if (!route) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Initialize route */
     ip_addr_copy(&route->dest_network, dest_network);
     ip_addr_copy(&route->netmask, netmask);
@@ -179,16 +190,16 @@ int static_route_add(const ip_addr_t *dest_network, const ip_addr_t *netmask,
     route->metric = metric;
     route->flags = STATIC_ROUTE_FLAG_UP;
     route->age = static_routing_get_timestamp();
-    
+
     if (gateway && !ip_addr_is_zero(gateway)) {
         ip_addr_copy(&route->gateway, gateway);
         route->flags |= STATIC_ROUTE_FLAG_GATEWAY;
     } else {
         ip_addr_set(&route->gateway, 0, 0, 0, 0);
     }
-    
+
     /* Add to route list (sorted by metric - lower is better) */
-    static_route_t **current = &g_static_routing_table.routes;
+    current = &g_static_routing_table.routes;
     while (*current && (*current)->metric <= metric) {
         current = &(*current)->next;
     }
@@ -203,16 +214,19 @@ int static_route_add(const ip_addr_t *dest_network, const ip_addr_t *netmask,
 }
 
 int static_route_delete(const ip_addr_t *dest_network, const ip_addr_t *netmask) {
+    static_route_t **current;
+    static_route_t *to_delete;
+
     if (!dest_network || !netmask) {
         return ERROR_INVALID_PARAM;
     }
-    
-    static_route_t **current = &g_static_routing_table.routes;
+
+    current = &g_static_routing_table.routes;
     while (*current) {
         if (ip_addr_equals(&(*current)->dest_network, dest_network) &&
             ip_addr_equals(&(*current)->netmask, netmask)) {
-            
-            static_route_t *to_delete = *current;
+
+            to_delete = *current;
             *current = (*current)->next;
             memory_free(to_delete);
             g_static_routing_table.route_count--;
@@ -226,13 +240,15 @@ int static_route_delete(const ip_addr_t *dest_network, const ip_addr_t *netmask)
 }
 
 static_route_t* static_route_lookup(const ip_addr_t *dest_ip) {
+    static_route_t *best_match;
+
     if (!dest_ip || !static_routing_is_enabled()) {
         return NULL;
     }
-    
+
     g_static_routing_stats.route_lookups++;
-    
-    static_route_t *best_match = static_route_find_best_match(dest_ip);
+
+    best_match = static_route_find_best_match(dest_ip);
     
     if (best_match) {
         g_static_routing_stats.route_hits++;
@@ -244,11 +260,13 @@ static_route_t* static_route_lookup(const ip_addr_t *dest_ip) {
 }
 
 static_route_t* static_route_find_exact(const ip_addr_t *dest_network, const ip_addr_t *netmask) {
+    static_route_t *route;
+
     if (!dest_network || !netmask) {
         return NULL;
     }
-    
-    static_route_t *route = g_static_routing_table.routes;
+
+    route = g_static_routing_table.routes;
     while (route) {
         if (ip_addr_equals(&route->dest_network, dest_network) &&
             ip_addr_equals(&route->netmask, netmask)) {
@@ -269,16 +287,18 @@ void static_route_clear_all(void) {
 
 /* Subnet management */
 int static_subnet_add(const ip_addr_t *network, const ip_addr_t *netmask, uint8_t nic_index) {
+    subnet_info_t *subnet;
+
     if (!network || !netmask || nic_index >= MAX_NICS) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (g_static_routing_table.subnet_count >= g_static_routing_table.max_subnets) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Create new subnet info */
-    subnet_info_t *subnet = (subnet_info_t*)memory_alloc(sizeof(subnet_info_t),
+    subnet = (subnet_info_t*)memory_alloc(sizeof(subnet_info_t),
                                                        MEM_TYPE_DRIVER_DATA, 0);
     if (!subnet) {
         return ERROR_NO_MEMORY;
@@ -308,7 +328,9 @@ subnet_info_t* static_subnet_lookup(const ip_addr_t *ip) {
 }
 
 subnet_info_t* static_subnet_find_by_nic(uint8_t nic_index) {
-    subnet_info_t *subnet = g_static_routing_table.subnets;
+    subnet_info_t *subnet;
+
+    subnet = g_static_routing_table.subnets;
     while (subnet) {
         if (subnet->nic_index == nic_index && (subnet->flags & SUBNET_FLAG_ACTIVE)) {
             return subnet;
@@ -342,14 +364,17 @@ int arp_table_init(arp_table_t *table, uint16_t max_entries) {
 }
 
 void arp_table_cleanup(arp_table_t *table) {
+    arp_entry_t *entry;
+    arp_entry_t *next;
+
     if (!table) {
         return;
     }
-    
+
     /* Free all ARP entries */
-    arp_entry_t *entry = table->entries;
+    entry = table->entries;
     while (entry) {
-        arp_entry_t *next = entry->next;
+        next = entry->next;
         memory_free(entry);
         entry = next;
     }
@@ -359,12 +384,18 @@ void arp_table_cleanup(arp_table_t *table) {
 }
 
 int arp_entry_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index) {
+    arp_entry_t *existing;
+    arp_entry_t *oldest;
+    arp_entry_t *current;
+    uint32_t oldest_timestamp;
+    arp_entry_t *entry;
+
     if (!ip || !mac) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if entry already exists */
-    arp_entry_t *existing = arp_entry_lookup(ip);
+    existing = arp_entry_lookup(ip);
     if (existing) {
         /* Update existing entry */
         memory_copy(existing->mac, mac, ETH_ALEN);
@@ -377,10 +408,10 @@ int arp_entry_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index) {
     /* Check table capacity */
     if (g_arp_table.entry_count >= g_arp_table.max_entries) {
         /* Remove oldest entry to make room (LRU eviction) */
-        arp_entry_t *oldest = NULL;
-        arp_entry_t *current = g_arp_table.entries;
-        uint32_t oldest_timestamp = 0xFFFFFFFF;
-        
+        oldest = NULL;
+        current = g_arp_table.entries;
+        oldest_timestamp = 0xFFFFFFFF;
+
         /* Find oldest entry that's not permanent */
         while (current) {
             if (!(current->flags & ARP_FLAG_PERMANENT) && current->timestamp < oldest_timestamp) {
@@ -398,14 +429,14 @@ int arp_entry_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index) {
             return ERROR_NO_MEMORY;
         }
     }
-    
+
     /* Create new entry */
-    arp_entry_t *entry = (arp_entry_t*)memory_alloc(sizeof(arp_entry_t),
+    entry = (arp_entry_t*)memory_alloc(sizeof(arp_entry_t),
                                                   MEM_TYPE_DRIVER_DATA, 0);
     if (!entry) {
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Initialize entry */
     ip_addr_copy(&entry->ip, ip);
     memory_copy(entry->mac, mac, ETH_ALEN);
@@ -422,11 +453,13 @@ int arp_entry_add(const ip_addr_t *ip, const uint8_t *mac, uint8_t nic_index) {
 }
 
 arp_entry_t* arp_entry_lookup(const ip_addr_t *ip) {
+    arp_entry_t *entry;
+
     if (!ip) {
         return NULL;
     }
-    
-    arp_entry_t *entry = g_arp_table.entries;
+
+    entry = g_arp_table.entries;
     while (entry) {
         if (ip_addr_equals(&entry->ip, ip)) {
             return entry;
@@ -466,18 +499,21 @@ int static_routing_get_default_gateway(ip_addr_t *gateway, uint8_t *nic_index) {
 
 /* Routing decisions for IP packets */
 uint8_t static_routing_get_output_nic(const ip_addr_t *dest_ip) {
+    subnet_info_t *local_subnet;
+    static_route_t *route;
+
     if (!dest_ip || !static_routing_is_enabled()) {
         return 0; /* Default to first NIC */
     }
-    
+
     /* Check if destination is in a local subnet */
-    subnet_info_t *local_subnet = static_subnet_lookup(dest_ip);
+    local_subnet = static_subnet_lookup(dest_ip);
     if (local_subnet) {
         return local_subnet->nic_index;
     }
-    
+
     /* Look for static route */
-    static_route_t *route = static_route_lookup(dest_ip);
+    route = static_route_lookup(dest_ip);
     if (route) {
         g_static_routing_stats.packets_routed++;
         return route->dest_nic;
@@ -494,21 +530,24 @@ uint8_t static_routing_get_output_nic(const ip_addr_t *dest_ip) {
 }
 
 int static_routing_get_next_hop(const ip_addr_t *dest_ip, ip_addr_t *next_hop, uint8_t *nic_index) {
+    subnet_info_t *local_subnet;
+    static_route_t *route;
+
     if (!dest_ip || !next_hop || !nic_index) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if destination is in local subnet */
-    subnet_info_t *local_subnet = static_subnet_lookup(dest_ip);
+    local_subnet = static_subnet_lookup(dest_ip);
     if (local_subnet) {
         /* Direct delivery - next hop is the destination itself */
         ip_addr_copy(next_hop, dest_ip);
         *nic_index = local_subnet->nic_index;
         return SUCCESS;
     }
-    
+
     /* Look for static route */
-    static_route_t *route = static_route_lookup(dest_ip);
+    route = static_route_lookup(dest_ip);
     if (route) {
         if (route->flags & STATIC_ROUTE_FLAG_GATEWAY) {
             ip_addr_copy(next_hop, &route->gateway);
@@ -604,21 +643,25 @@ void subnet_apply_mask(ip_addr_t *result, const ip_addr_t *ip, const ip_addr_t *
 }
 
 bool subnet_contains_ip(const ip_addr_t *network, const ip_addr_t *mask, const ip_addr_t *ip) {
+    ip_addr_t masked_ip;
+
     if (!network || !mask || !ip) {
         return false;
     }
-    
-    ip_addr_t masked_ip;
+
     subnet_apply_mask(&masked_ip, ip, mask);
     
     return ip_addr_equals(network, &masked_ip);
 }
 
 uint8_t subnet_mask_to_prefix_len(const ip_addr_t *mask) {
+    uint32_t mask_val;
+    uint8_t prefix_len;
+
     if (!mask) return 0;
-    
-    uint32_t mask_val = ip_addr_to_uint32(mask);
-    uint8_t prefix_len = 0;
+
+    mask_val = ip_addr_to_uint32(mask);
+    prefix_len = 0;
     
     while (mask_val & 0x80000000) {
         prefix_len++;
@@ -629,11 +672,13 @@ uint8_t subnet_mask_to_prefix_len(const ip_addr_t *mask) {
 }
 
 void subnet_prefix_len_to_mask(ip_addr_t *mask, uint8_t prefix_len) {
+    uint32_t mask_val;
+
     if (!mask) return;
-    
+
     if (prefix_len > 32) prefix_len = 32;
-    
-    uint32_t mask_val = 0;
+
+    mask_val = 0;
     if (prefix_len > 0) {
         mask_val = ~((1UL << (32 - prefix_len)) - 1);
     }
@@ -657,25 +702,28 @@ void static_routing_clear_stats(void) {
 
 /* Integration with main routing system */
 route_decision_t static_routing_decide(const packet_buffer_t *packet, uint8_t src_nic, uint8_t *dest_nic) {
+    const uint8_t *ip_data;
+    ip_header_t ip_header;
+    uint8_t output_nic;
+
     if (!packet || !packet->data || !dest_nic || !static_routing_is_enabled()) {
         return ROUTE_DECISION_DROP;
     }
-    
+
     /* Parse IP header from packet - already implemented below */
     if (packet->length < ETH_HLEN + sizeof(ip_header_t)) {
         return ROUTE_DECISION_DROP;
     }
-    
+
     /* Skip Ethernet header to get to IP header */
-    const uint8_t *ip_data = packet->data + ETH_HLEN;
-    ip_header_t ip_header;
+    ip_data = packet->data + ETH_HLEN;
     
     if (!static_routing_parse_ip_header(ip_data, packet->length - ETH_HLEN, &ip_header)) {
         return ROUTE_DECISION_DROP;
     }
-    
+
     /* Get output NIC for destination IP */
-    uint8_t output_nic = static_routing_get_output_nic(&ip_header.dest_ip);
+    output_nic = static_routing_get_output_nic(&ip_header.dest_ip);
     
     /* Avoid routing back to source NIC */
     if (output_nic == src_nic) {
@@ -706,23 +754,26 @@ bool static_routing_parse_ip_header(const uint8_t *packet, uint16_t length, ip_h
 }
 
 int static_routing_validate_ip_header(const ip_header_t *header) {
+    uint8_t ihl;
+    uint16_t calculated_checksum;
+
     if (!header) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check version (should be 4) */
     if ((header->version_ihl >> 4) != 4) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check header length */
-    uint8_t ihl = (header->version_ihl & 0x0F) * 4;
+    ihl = (header->version_ihl & 0x0F) * 4;
     if (ihl < sizeof(ip_header_t)) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Verify IP header checksum */
-    uint16_t calculated_checksum = static_routing_calculate_ip_checksum(header);
+    calculated_checksum = static_routing_calculate_ip_checksum(header);
     if (calculated_checksum != header->checksum) {
         return ERROR_INVALID_PARAM; /* Checksum mismatch */
     }
@@ -732,14 +783,19 @@ int static_routing_validate_ip_header(const ip_header_t *header) {
 
 /* Private helper function implementations */
 static static_route_t* static_route_find_best_match(const ip_addr_t *dest_ip) {
+    static_route_t *best_match;
+    uint8_t best_prefix_len;
+    static_route_t *route;
+    uint8_t prefix_len;
+
     if (!dest_ip) {
         return NULL;
     }
-    
-    static_route_t *best_match = NULL;
-    uint8_t best_prefix_len = 0;
-    
-    static_route_t *route = g_static_routing_table.routes;
+
+    best_match = NULL;
+    best_prefix_len = 0;
+
+    route = g_static_routing_table.routes;
     while (route) {
         if (!(route->flags & STATIC_ROUTE_FLAG_UP)) {
             route = route->next;
@@ -748,8 +804,8 @@ static static_route_t* static_route_find_best_match(const ip_addr_t *dest_ip) {
         
         /* Check if destination IP is in this route's network */
         if (subnet_contains_ip(&route->dest_network, &route->netmask, dest_ip)) {
-            uint8_t prefix_len = subnet_mask_to_prefix_len(&route->netmask);
-            
+            prefix_len = subnet_mask_to_prefix_len(&route->netmask);
+
             /* Longest prefix match */
             if (prefix_len > best_prefix_len) {
                 best_match = route;
@@ -764,11 +820,13 @@ static static_route_t* static_route_find_best_match(const ip_addr_t *dest_ip) {
 }
 
 static subnet_info_t* static_subnet_find_containing(const ip_addr_t *ip) {
+    subnet_info_t *subnet;
+
     if (!ip) {
         return NULL;
     }
-    
-    subnet_info_t *subnet = g_static_routing_table.subnets;
+
+    subnet = g_static_routing_table.subnets;
     while (subnet) {
         if ((subnet->flags & SUBNET_FLAG_ACTIVE) && 
             static_subnet_contains_ip(subnet, ip)) {
@@ -786,16 +844,19 @@ static uint32_t static_routing_get_timestamp(void) {
 
 /* Enhanced static routing functions */
 int static_subnet_delete(const ip_addr_t *network, const ip_addr_t *netmask) {
+    subnet_info_t **current;
+    subnet_info_t *to_delete;
+
     if (!network || !netmask) {
         return ERROR_INVALID_PARAM;
     }
-    
-    subnet_info_t **current = &g_static_routing_table.subnets;
+
+    current = &g_static_routing_table.subnets;
     while (*current) {
         if (ip_addr_equals(&(*current)->network, network) &&
             ip_addr_equals(&(*current)->netmask, netmask)) {
-            
-            subnet_info_t *to_delete = *current;
+
+            to_delete = *current;
             *current = (*current)->next;
             memory_free(to_delete);
             g_static_routing_table.subnet_count--;
@@ -808,14 +869,17 @@ int static_subnet_delete(const ip_addr_t *network, const ip_addr_t *netmask) {
 }
 
 int arp_entry_delete(const ip_addr_t *ip) {
+    arp_entry_t **current;
+    arp_entry_t *to_delete;
+
     if (!ip) {
         return ERROR_INVALID_PARAM;
     }
-    
-    arp_entry_t **current = &g_arp_table.entries;
+
+    current = &g_arp_table.entries;
     while (*current) {
         if (ip_addr_equals(&(*current)->ip, ip)) {
-            arp_entry_t *to_delete = *current;
+            to_delete = *current;
             *current = (*current)->next;
             memory_free(to_delete);
             g_arp_table.entry_count--;
@@ -828,16 +892,21 @@ int arp_entry_delete(const ip_addr_t *ip) {
 }
 
 void arp_table_age_entries(void) {
+    uint32_t current_time;
+    uint32_t aged_count;
+    arp_entry_t **current;
+    arp_entry_t *entry;
+
     if (!g_static_routing_initialized) {
         return;
     }
-    
-    uint32_t current_time = static_routing_get_timestamp();
-    uint32_t aged_count = 0;
-    
-    arp_entry_t **current = &g_arp_table.entries;
+
+    current_time = static_routing_get_timestamp();
+    aged_count = 0;
+
+    current = &g_arp_table.entries;
     while (*current) {
-        arp_entry_t *entry = *current;
+        entry = *current;
         
         /* Skip permanent entries */
         if (entry->flags & ARP_FLAG_PERMANENT) {
@@ -874,12 +943,15 @@ int static_routing_delete_default_gateway(void) {
 }
 
 bool static_routing_is_local_ip(const ip_addr_t *ip) {
+    subnet_info_t *subnet;
+    ip_addr_t local_ip;
+
     if (!ip) {
         return false;
     }
-    
+
     /* Check if IP matches any of our configured subnet network addresses */
-    subnet_info_t *subnet = g_static_routing_table.subnets;
+    subnet = g_static_routing_table.subnets;
     while (subnet) {
         if (subnet->flags & SUBNET_FLAG_ACTIVE) {
             /* Check if this IP is the network address of this subnet */
@@ -889,7 +961,7 @@ bool static_routing_is_local_ip(const ip_addr_t *ip) {
             
             /* Check if this IP is within our subnet range */
             /* For now, we consider the network address + 1 as local */
-            ip_addr_t local_ip = subnet->network;
+            local_ip = subnet->network;
             if (local_ip.addr[3] < 255) {
                 local_ip.addr[3]++;
                 if (ip_addr_equals(&local_ip, ip)) {
@@ -905,22 +977,23 @@ bool static_routing_is_local_ip(const ip_addr_t *ip) {
 
 int static_routing_process_ip_packet(const uint8_t *packet, uint16_t length,
                                     uint8_t src_nic, uint8_t *dest_nic) {
+    ip_header_t ip_header;
+    uint8_t output_nic;
+
     if (!packet || !dest_nic || !static_routing_is_enabled()) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Parse IP header */
     if (length < sizeof(ip_header_t)) {
         return ERROR_INVALID_PARAM;
     }
-    
-    ip_header_t ip_header;
     if (!static_routing_parse_ip_header(packet, length, &ip_header)) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Get output NIC for destination IP */
-    uint8_t output_nic = static_routing_get_output_nic(&ip_header.dest_ip);
+    output_nic = static_routing_get_output_nic(&ip_header.dest_ip);
     
     /* Avoid routing back to source NIC */
     if (output_nic == src_nic) {
@@ -934,12 +1007,14 @@ int static_routing_process_ip_packet(const uint8_t *packet, uint16_t length,
 }
 
 int static_routing_resolve_mac(const ip_addr_t *ip, uint8_t *mac, uint8_t *nic_index) {
+    arp_entry_t *arp_entry;
+
     if (!ip || !mac || !nic_index) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Look up in ARP table */
-    arp_entry_t *arp_entry = arp_entry_lookup(ip);
+    arp_entry = arp_entry_lookup(ip);
     if (arp_entry && (arp_entry->flags & ARP_FLAG_COMPLETE)) {
         memory_copy(mac, arp_entry->mac, ETH_ALEN);
         *nic_index = arp_entry->nic_index;
@@ -951,14 +1026,16 @@ int static_routing_resolve_mac(const ip_addr_t *ip, uint8_t *mac, uint8_t *nic_i
 }
 
 void static_routing_print_table(void) {
+    static_route_t *route;
+
     if (!static_routing_is_enabled()) {
         return;
     }
-    
+
     log_info("=== Static Routing Table ===");
     log_info("Routes: %d/%d", g_static_routing_table.route_count, g_static_routing_table.max_routes);
-    
-    static_route_t *route = g_static_routing_table.routes;
+
+    route = g_static_routing_table.routes;
     while (route) {
         log_info("Route: %d.%d.%d.%d/%d.%d.%d.%d -> NIC %d (metric %d)",
                 route->dest_network.addr[0], route->dest_network.addr[1],
@@ -988,14 +1065,16 @@ void static_routing_print_table(void) {
 }
 
 void static_routing_print_subnets(void) {
+    subnet_info_t *subnet;
+
     if (!static_routing_is_enabled()) {
         return;
     }
-    
+
     log_info("=== Configured Subnets ===");
     log_info("Subnets: %d/%d", g_static_routing_table.subnet_count, g_static_routing_table.max_subnets);
-    
-    subnet_info_t *subnet = g_static_routing_table.subnets;
+
+    subnet = g_static_routing_table.subnets;
     while (subnet) {
         log_info("Subnet: %d.%d.%d.%d/%d on NIC %d (flags: 0x%04X)",
                 subnet->network.addr[0], subnet->network.addr[1],
@@ -1006,14 +1085,16 @@ void static_routing_print_subnets(void) {
 }
 
 void static_routing_print_arp_table(void) {
+    arp_entry_t *entry;
+
     if (!g_static_routing_initialized) {
         return;
     }
-    
+
     log_info("=== ARP Table ===");
     log_info("Entries: %d/%d", g_arp_table.entry_count, g_arp_table.max_entries);
-    
-    arp_entry_t *entry = g_arp_table.entries;
+
+    entry = g_arp_table.entries;
     while (entry) {
         log_info("ARP: %d.%d.%d.%d -> %02X:%02X:%02X:%02X:%02X:%02X (NIC %d, flags: 0x%04X)",
                 entry->ip.addr[0], entry->ip.addr[1], entry->ip.addr[2], entry->ip.addr[3],
@@ -1052,15 +1133,19 @@ const char* static_route_flags_to_string(uint32_t flags) {
 }
 
 uint16_t static_routing_calculate_ip_checksum(const ip_header_t *header) {
+    const uint16_t *data;
+    uint32_t sum;
+    uint8_t header_len;
+    int i;
+
     if (!header) {
         return 0;
     }
-    
+
     /* Calculate standard Internet checksum over IP header */
-    const uint16_t *data = (const uint16_t*)header;
-    uint32_t sum = 0;
-    uint8_t header_len = (header->version_ihl & 0x0F) * 4;
-    int i;
+    data = (const uint16_t*)header;
+    sum = 0;
+    header_len = (header->version_ihl & 0x0F) * 4;
 
     /* Sum all 16-bit words in header (excluding checksum field) */
     for (i = 0; i < header_len / 2; i++) {
@@ -1080,18 +1165,22 @@ uint16_t static_routing_calculate_ip_checksum(const ip_header_t *header) {
 }
 
 bool subnet_is_valid_mask(const ip_addr_t *mask) {
+    uint32_t mask_val;
+    uint32_t inverted;
+    uint32_t test;
+
     if (!mask) {
         return false;
     }
-    
+
     /* Convert to 32-bit value */
-    uint32_t mask_val = ip_addr_to_uint32(mask);
-    
+    mask_val = ip_addr_to_uint32(mask);
+
     /* Check if mask has contiguous 1 bits followed by contiguous 0 bits */
-    uint32_t inverted = ~mask_val;
-    
+    inverted = ~mask_val;
+
     /* Add 1 to inverted mask - should be power of 2 if valid */
-    uint32_t test = inverted + 1;
+    test = inverted + 1;
     
     /* Check if result is power of 2 (has only one bit set) */
     return (test != 0) && ((test & (test - 1)) == 0);

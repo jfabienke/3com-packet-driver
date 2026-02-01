@@ -17,8 +17,8 @@
 /* Define this to confirm DMA safety is integrated */
 #define DMA_SAFETY_INTEGRATED 1
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
+#include <stddef.h>    /* size_t */
 #include "dmabnd.h"
 #include "cacheche.h"
 
@@ -38,15 +38,15 @@ typedef struct dma_mapping dma_mapping_t;
 #define DMA_MAP_VDS_ZEROCOPY    0x20    /* Use VDS zero-copy with page locking */
 
 /* DMA mapping results */
-typedef enum {
-    DMA_MAP_SUCCESS = 0,
-    DMA_MAP_ERROR_INVALID_PARAM = -1,
-    DMA_MAP_ERROR_NO_MEMORY = -2,
-    DMA_MAP_ERROR_NO_BOUNCE = -3,
-    DMA_MAP_ERROR_BOUNDARY = -4,
-    DMA_MAP_ERROR_CACHE = -5,
-    DMA_MAP_ERROR_NOT_MAPPED = -6
-} dma_map_result_t;
+/* Note: Values are sequential from 0, -1, -2, etc. for C89 compatibility */
+#define DMA_MAP_SUCCESS              0
+#define DMA_MAP_ERROR_INVALID_PARAM -1
+#define DMA_MAP_ERROR_NO_MEMORY     -2
+#define DMA_MAP_ERROR_NO_BOUNCE     -3
+#define DMA_MAP_ERROR_BOUNDARY      -4
+#define DMA_MAP_ERROR_CACHE         -5
+#define DMA_MAP_ERROR_NOT_MAPPED    -6
+typedef int dma_map_result_t;
 
 /* DMA mapping statistics */
 typedef struct {
@@ -83,9 +83,9 @@ void dma_unmap_buffer(dma_mapping_t *mapping);
 void* dma_mapping_get_address(const dma_mapping_t *mapping);
 uint32_t dma_mapping_get_phys_addr(const dma_mapping_t *mapping);
 size_t dma_mapping_get_length(const dma_mapping_t *mapping);
-bool dma_mapping_uses_bounce(const dma_mapping_t *mapping);
-bool dma_mapping_is_coherent(const dma_mapping_t *mapping);
-bool dma_mapping_uses_vds(const dma_mapping_t *mapping);
+int dma_mapping_uses_bounce(const dma_mapping_t *mapping);
+int dma_mapping_is_coherent(const dma_mapping_t *mapping);
+int dma_mapping_uses_vds(const dma_mapping_t *mapping);
 
 /* Synchronization functions */
 int dma_mapping_sync_for_device(dma_mapping_t *mapping);
@@ -115,7 +115,7 @@ void dma_mapping_print_stats(void);
 void dma_mapping_reset_stats(void);
 
 /* Validation and testing */
-bool dma_mapping_validate(const dma_mapping_t *mapping);
+int dma_mapping_validate(const dma_mapping_t *mapping);
 int dma_mapping_test_coherency(void *buffer, size_t len);
 
 /* Helper macros for common operations */
@@ -176,7 +176,7 @@ const char* dma_map_result_to_string(dma_map_result_t result);
 void dma_mapping_log_error(dma_map_result_t result, const char *operation);
 
 /* Advanced features */
-int dma_mapping_set_cache_policy(dma_mapping_t *mapping, bool coherent);
+int dma_mapping_set_cache_policy(dma_mapping_t *mapping, int coherent);
 int dma_mapping_prefault(dma_mapping_t *mapping);
 int dma_mapping_pin_pages(dma_mapping_t *mapping);
 
@@ -191,8 +191,8 @@ dma_mapping_t* dma_map_from_sg_descriptor(dma_sg_descriptor_t *sg_desc, dma_sync
 int dma_mapping_to_sg_list(const dma_mapping_t *mapping, dma_sg_descriptor_t **sg_desc);
 
 /* Performance optimization */
-void dma_mapping_enable_fast_path(bool enable);
-bool dma_mapping_is_fast_path_enabled(void);
+void dma_mapping_enable_fast_path(int enable);
+int dma_mapping_is_fast_path_enabled(void);
 uint32_t dma_mapping_get_cache_hit_rate(void);
 
 #ifdef __cplusplus

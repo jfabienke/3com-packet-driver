@@ -20,11 +20,11 @@ extern "C" {
 
 /* Memory manager types */
 typedef enum {
-    MEMORY_MANAGER_NONE = 0,
-    MEMORY_MANAGER_HIMEM = 1,
-    MEMORY_MANAGER_EMM386 = 2,
-    MEMORY_MANAGER_QEMM = 3,
-    MEMORY_MANAGER_UNKNOWN = 4
+    MEMORY_MANAGER_NONE,            /* 0: No memory manager */
+    MEMORY_MANAGER_HIMEM,           /* 1: HIMEM.SYS */
+    MEMORY_MANAGER_EMM386,          /* 2: EMM386 */
+    MEMORY_MANAGER_QEMM,            /* 3: QEMM */
+    MEMORY_MANAGER_UNKNOWN          /* 4: Unknown memory manager */
 } memory_manager_type_t;
 
 /* UMB allocation information */

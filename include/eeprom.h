@@ -25,8 +25,9 @@ extern "C" {
 #endif
 
 #include "common.h"
-#include "3c515.h"
-#include "3c509b.h"
+/* Note: Do NOT include 3c515.h or 3c509b.h here - circular dependency.
+ * Those headers include eeprom.h to get eeprom_config_t.
+ * The NIC-specific register definitions are included directly in eeprom.c. */
 
 /* EEPROM Constants */
 #define EEPROM_MAX_SIZE             0x40    /* Maximum EEPROM size (64 words) */
@@ -93,14 +94,17 @@ extern "C" {
 
 /**
  * @brief EEPROM configuration data for both NIC types
+ * Note: Also defined in nicctx.h - use guard to prevent redefinition
  */
+#ifndef EEPROM_CONFIG_T_DEFINED
+#define EEPROM_CONFIG_T_DEFINED
 typedef struct {
     /* Common fields */
     uint8_t  mac_address[6];        /* Ethernet MAC address */
     uint16_t device_id;             /* Device/Product ID */
     uint16_t vendor_id;             /* Vendor ID (should be 0x6d50 for 3Com) */
     uint16_t revision;              /* Hardware revision */
-    
+
     /* Configuration */
     uint16_t config_word;           /* Configuration word from EEPROM */
     uint8_t  media_type;            /* Default media type */
@@ -108,26 +112,27 @@ typedef struct {
     bool     auto_select;           /* Auto-select media capability */
     bool     full_duplex_cap;       /* Full duplex capability */
     bool     speed_100mbps_cap;     /* 100Mbps capability */
-    
+
     /* Hardware-specific */
     uint16_t io_base_config;        /* I/O base address configuration */
     uint8_t  irq_config;            /* IRQ configuration */
     uint16_t capabilities;          /* Hardware capabilities mask */
-    
+
     /* Manufacturing data */
     uint16_t mfg_date;              /* Manufacturing date */
     uint16_t mfg_data;              /* Manufacturing data */
-    
+
     /* Validation */
     uint16_t checksum_calculated;   /* Calculated checksum */
     uint16_t checksum_stored;       /* Stored checksum from EEPROM */
     bool     checksum_valid;        /* Checksum validation result */
-    
+
     /* Status */
     bool     data_valid;            /* Overall data validity */
     int      last_error;            /* Last error code */
     uint32_t read_attempts;         /* Number of read attempts */
 } eeprom_config_t;
+#endif /* EEPROM_CONFIG_T_DEFINED */
 
 /**
  * @brief EEPROM read status information

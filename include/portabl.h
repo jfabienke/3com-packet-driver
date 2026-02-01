@@ -37,6 +37,7 @@
     #define PASCAL __pascal
     #define INTERRUPT __interrupt
     #define INLINE  /* Not supported in C mode */
+    #define inline  /* C89 doesn't support inline keyword */
     #define HAS_FARMEM 1
     
 #elif defined(_MSC_VER)
@@ -74,6 +75,13 @@
     #define INTERRUPT
     #define INLINE
     #define HAS_FARMEM 0
+    /* Also define lowercase versions for code using `far`, `near`, etc. */
+    #define far
+    #define near
+    #define huge
+    #define __far
+    #define __near
+    #define __huge
 #endif
 
 /* Standard integer types for DOS compilers that lack stdint.h */
@@ -88,21 +96,32 @@
 
 /* Additional types for DOS compatibility */
 #ifndef _SSIZE_T_DEFINED
+    #if !defined(__APPLE__) && !defined(__linux__)
     typedef int                 ssize_t;
+    #endif
     #define _SSIZE_T_DEFINED
 #endif
 
 #ifndef _UINTPTR_T_DEFINED
+    #if !defined(__APPLE__) && !defined(__linux__)
     typedef unsigned int        uintptr_t;
+    #endif
     #define _UINTPTR_T_DEFINED
 #endif
 
 /* Boolean type for DOS C89 compatibility */
 #ifndef __cplusplus
     #ifndef _BOOL_T_DEFINED
-        typedef int bool;
-        #define true 1
-        #define false 0
+        /* Use #define instead of typedef to avoid conflicts with stdbool.h */
+        #ifndef bool
+            #define bool int
+        #endif
+        #ifndef true
+            #define true 1
+        #endif
+        #ifndef false
+            #define false 0
+        #endif
         #define _BOOL_T_DEFINED
     #endif
 #endif
@@ -164,20 +183,15 @@
     }
     
 #else
-    /* Fallback for unknown compilers - basic implementation */
-    #include <dos.h>
+    /* Fallback for unknown compilers - stub implementation for non-DOS builds */
     static unsigned short save_flags_cli(void) {
-        /* Save current state - this is approximate */
-        unsigned short f = 0;
-        disable();  /* or _disable() depending on compiler */
-        return f;
+        /* Stub for non-DOS builds - no interrupt control needed */
+        return 0;
     }
-    
+
     static void restore_flags(unsigned short f) {
-        /* Basic restoration - doesn't preserve original IF state */
-        if (f == 0) {
-            enable();  /* or _enable() depending on compiler */
-        }
+        /* Stub for non-DOS builds */
+        (void)f;  /* Suppress unused parameter warning */
     }
 #endif
 
@@ -237,30 +251,30 @@
     #define FARMEMCMP(s1,s2,n) memcmp(s1,s2,n)
 #endif
 
-/* Make far pointer from segment:offset */
-#ifdef COMPILER_BORLAND
-    #define MK_FP(seg,off) MK_FP(seg,off)
-#elif defined(COMPILER_WATCOM)
-    #define MK_FP(seg,off) MK_FP(seg,off)
-#elif defined(COMPILER_MSC)
-    #define MK_FP(seg,off) ((void FAR *)(((unsigned long)(seg) << 16) | (off)))
-#else
-    #define MK_FP(seg,off) ((void *)(((unsigned long)(seg) << 16) | (off)))
+/* Far pointer macros - only define if not already provided by system headers.
+ * Borland and Watcom provide these via dos.h/i86.h, so don't redefine. */
+#ifndef MK_FP
+    #if defined(COMPILER_MSC)
+        #define MK_FP(seg,off) ((void FAR *)(((unsigned long)(seg) << 16) | (off)))
+    #elif !defined(COMPILER_BORLAND) && !defined(COMPILER_WATCOM)
+        #define MK_FP(seg,off) ((void *)(((unsigned long)(seg) << 16) | (off)))
+    #endif
 #endif
 
-/* Get segment and offset from far pointer */
-#ifdef COMPILER_BORLAND
-    #define FP_SEG(fp) FP_SEG(fp)
-    #define FP_OFF(fp) FP_OFF(fp)
-#elif defined(COMPILER_WATCOM)
-    #define FP_SEG(fp) FP_SEG(fp)
-    #define FP_OFF(fp) FP_OFF(fp)
-#elif defined(COMPILER_MSC)
-    #define FP_SEG(fp) ((unsigned)((unsigned long)(fp) >> 16))
-    #define FP_OFF(fp) ((unsigned)(fp))
-#else
-    #define FP_SEG(fp) 0
-    #define FP_OFF(fp) ((unsigned)(fp))
+#ifndef FP_SEG
+    #if defined(COMPILER_MSC)
+        #define FP_SEG(fp) ((unsigned)((unsigned long)(fp) >> 16))
+    #elif !defined(COMPILER_BORLAND) && !defined(COMPILER_WATCOM)
+        #define FP_SEG(fp) 0
+    #endif
+#endif
+
+#ifndef FP_OFF
+    #if defined(COMPILER_MSC)
+        #define FP_OFF(fp) ((unsigned)(fp))
+    #elif !defined(COMPILER_BORLAND) && !defined(COMPILER_WATCOM)
+        #define FP_OFF(fp) ((unsigned)(fp))
+    #endif
 #endif
 
 /* NULL definition */
@@ -332,18 +346,32 @@
     #define IO_IN16(port)         inpw(port)
     
 #else
-    /* Fallback - assume Linux-style for testing */
-    #define IO_OUT8(port, value)  outb((value), (port))
-    #define IO_IN8(port)          inb(port)
-    #define IO_OUT16(port, value) outw((value), (port))
-    #define IO_IN16(port)         inw(port)
+    /* Fallback for non-DOS builds (macOS/Linux) - stub functions for syntax checking */
+    /* Note: Use static functions without inline for C89 compatibility */
+    static void _stub_outb(unsigned short port, unsigned char value) { (void)port; (void)value; }
+    static unsigned char _stub_inb(unsigned short port) { (void)port; return 0; }
+    static void _stub_outw(unsigned short port, unsigned short value) { (void)port; (void)value; }
+    static unsigned short _stub_inw(unsigned short port) { (void)port; return 0; }
+
+    #define IO_OUT8(port, value)  _stub_outb((port), (value))
+    #define IO_IN8(port)          _stub_inb(port)
+    #define IO_OUT16(port, value) _stub_outw((port), (value))
+    #define IO_IN16(port)         _stub_inw(port)
 #endif
 
 /* Compatibility aliases for existing code */
+#ifndef COMPILER_UNKNOWN
 #define outb(port, value) IO_OUT8((port), (value))
 #define inb(port)         IO_IN8(port)
 #define outw(port, value) IO_OUT16((port), (value))
 #define inw(port)         IO_IN16(port)
+#else
+/* For unknown compilers, these are already defined as stubs above */
+#define outb(port, value) _stub_outb((port), (value))
+#define inb(port)         _stub_inb(port)
+#define outw(port, value) _stub_outw((port), (value))
+#define inw(port)         _stub_inw(port)
+#endif
 
 /* Error codes compatibility */
 #ifndef SUCCESS

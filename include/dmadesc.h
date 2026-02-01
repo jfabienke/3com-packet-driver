@@ -22,6 +22,9 @@
 #include "3c515.h"
 #include "cachecoh.h"
 
+/* Forward declaration for cache coherency context (full definition in cachecoh.h) */
+typedef struct cache_coherency_context cache_coherency_context_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -544,11 +547,11 @@ int dma_dump_ring_state(advanced_dma_context_t *ctx, char *buffer, size_t buffer
 int dma_validate_descriptors(advanced_dma_context_t *ctx);
 
 /**
- * @brief Test DMA functionality
+ * @brief Test DMA functionality (advanced context version)
  * @param ctx DMA context structure
  * @return 0 on success, negative error code on failure
  */
-int dma_self_test(advanced_dma_context_t *ctx);
+int dma_desc_self_test(advanced_dma_context_t *ctx);
 
 #ifdef __cplusplus
 }

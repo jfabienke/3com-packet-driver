@@ -242,14 +242,18 @@ static inline bool el3_disable_rx(uint16_t io_base) {
  * @param disable_crc Set true if driver provides CRC (normally false)
  * @param request_int Set true to request completion interrupt
  */
-static inline void el3_write_tx_preamble(uint16_t io_base, uint16_t frame_length, 
+static inline void el3_write_tx_preamble(uint16_t io_base, uint16_t frame_length,
                                        bool disable_crc, bool request_int) {
-    uint16_t word1 = (frame_length & 0x7FF);  /* Bits 0-10: length */
+    /* C89: All declarations must be at beginning of block */
+    uint16_t word1;
+    uint16_t word2;
+
+    word1 = (frame_length & 0x7FF);  /* Bits 0-10: length */
     if (disable_crc) word1 |= 0x2000;         /* Bit 13: DCG */
     if (request_int) word1 |= 0x8000;         /* Bit 15: Int */
-    
-    uint16_t word2 = 0x0000;                  /* Reserved, must be zero */
-    
+
+    word2 = 0x0000;                  /* Reserved, must be zero */
+
     /* Write preamble as two words */
     outw(word1, io_base + EL3_DATA_PORT);
     outw(word2, io_base + EL3_DATA_PORT);

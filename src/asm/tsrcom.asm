@@ -1,18 +1,19 @@
 ; TSR Common Routines
 ; Implements battle-tested TSR defensive patterns for DOS packet driver
 ; Based on analysis of 3C5X9PD and 30+ years of DOS networking survival techniques
+; Converted to NASM syntax
 
-.model small
-.386
+bits 16
+cpu 386
 
-include 'tsr_defensive_wasm.inc'
+%include 'tsr_defensive.inc'
 
 ; CPU optimization level constants (must match packet_ops.asm)
 OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
 OPT_16BIT           EQU 1       ; 16-bit optimizations (186+: PUSHA, INS/OUTS)
 
 ; External reference to CPU optimization level
-EXTRN current_cpu_opt:BYTE
+extern current_cpu_opt
 
 ;-----------------------------------------------------------------------------
 ; 8086-SAFE REGISTER SAVE/RESTORE MACROS
@@ -23,13 +24,12 @@ EXTRN current_cpu_opt:BYTE
 ; SAVE_ALL_REGS - Save all general purpose registers
 ; On 186+: uses PUSHA (1 byte, faster)
 ; On 8086: uses explicit pushes (14 bytes, but compatible)
-SAVE_ALL_REGS MACRO
-    LOCAL use_pusha, done
+%macro SAVE_ALL_REGS 0
     push ax                         ; Save AX first (we need it for the check)
     mov al, [current_cpu_opt]
     test al, OPT_16BIT
     pop ax                          ; Restore AX
-    jnz use_pusha
+    jnz %%use_pusha
     ; 8086 path: explicit push sequence
     push ax
     push cx
@@ -39,17 +39,16 @@ SAVE_ALL_REGS MACRO
     push bp
     push si
     push di
-    jmp short done
-use_pusha:
+    jmp short %%done
+%%use_pusha:
     pusha
-done:
-ENDM
+%%done:
+%endmacro
 
 ; RESTORE_ALL_REGS - Restore all general purpose registers
 ; On 186+: uses POPA (1 byte, faster)
 ; On 8086: uses explicit pops (14 bytes, but compatible)
-RESTORE_ALL_REGS MACRO
-    LOCAL use_popa, done
+%macro RESTORE_ALL_REGS 0
     ; We can't easily check the flag here without corrupting registers
     ; So we'll use a memory flag set during SAVE_ALL_REGS
     ; For simplicity, just check the CPU opt level again using stack
@@ -57,7 +56,7 @@ RESTORE_ALL_REGS MACRO
     mov al, [current_cpu_opt]
     test al, OPT_16BIT
     pop ax
-    jnz use_popa
+    jnz %%use_popa
     ; 8086 path: explicit pop sequence (reverse order)
     pop di
     pop si
@@ -67,13 +66,13 @@ RESTORE_ALL_REGS MACRO
     pop dx
     pop cx
     pop ax
-    jmp short done
-use_popa:
+    jmp short %%done
+%%use_popa:
     popa
-done:
-ENDM
+%%done:
+%endmacro
 
-.data
+segment _DATA class=DATA
 
 ; TSR identification and status
 driver_signature    db 'PKT DRVR v2.0 - 3Com Advanced',0
@@ -81,39 +80,43 @@ driver_installed    db 0                ; Installation status flag
 multiplex_id        db 0xC9             ; AMIS multiplex ID
 
 ; Saved interrupt vectors
-old_int2f_offset    dw ?
-old_int2f_segment   dw ?
-old_int28_offset    dw ?  
-old_int28_segment   dw ?
-old_int60_offset    dw ?
-old_int60_segment   dw ?
+old_int2f_offset    dw 0
+old_int2f_segment   dw 0
+old_int28_offset    dw 0
+old_int28_segment   dw 0
+old_int60_offset    dw 0
+old_int60_segment   dw 0
 
-; DOS safety management
+; DOS safety management - GLOBAL EXPORTS for linkasm.asm and other ASM modules
+global indos_segment
+global indos_offset
+global criterr_segment
+global criterr_offset
 indos_segment       dw 0
 indos_offset        dw 0
 criterr_segment     dw 0                ; 0 if not available
 criterr_offset      dw 0
 
 ; Stack management
-caller_ss           dw ?
-caller_sp           dw ?
-driver_stack        db 2048 dup(?)      ; Private stack (2KB)
+caller_ss           dw 0
+caller_sp           dw 0
+driver_stack        times 2048 db 0     ; Private stack (2KB)
 stack_top           equ $ - 2           ; Top of stack
 
-; Critical section management  
+; Critical section management
 critical_nesting    db 0
 
 ; Vector validation
 vector_check_timer  dw 0                ; Periodic validation timer
 
 ; Work queue for deferred operations
-work_queue          dw 32 dup(?)        ; Deferred work queue
+work_queue          times 32 dw 0       ; Deferred work queue
 queue_head          dw 0
 queue_tail          dw 0
 work_pending        db 0
 
 ; UMB management (DOS 5.0+ support)
-public umb_segment, umb_available
+global umb_segment, umb_available
 umb_available       db 0                ; UMB support available flag
 umb_linked          db 0                ; UMBs linked into memory chain
 umb_segment         dw 0                ; Our UMB segment (if allocated)
@@ -131,200 +134,193 @@ umb_allocation_attempted db 0           ; Flag to prevent retry loops
 conventional_fallback   db 0           ; Using conventional memory flag
 
 ; Performance profiling (if enabled)
-ifdef PROFILE_BUILD
-timer_start_high    dw ?
-timer_start_low     dw ?
-endif
+%ifdef PROFILE_BUILD
+timer_start_high    dw 0
+timer_start_low     dw 0
+%endif
 
 ; Error statistics
 error_count         dw 0
 recovery_count      dw 0
 last_error_code     db 0
 
-.code
+segment _TEXT class=CODE
 
 ;=============================================================================
 ; INITIALIZATION ROUTINES
 ;=============================================================================
 
-public initialize_tsr_defense
-initialize_tsr_defense proc
+global initialize_tsr_defense
+initialize_tsr_defense:
     push ax
     push bx
     push cx
     push dx
     push es
-    
+
     ; Get InDOS flag address
     call get_indos_address
-    
+
     ; Get critical error flag (DOS 3.0+)
     call get_critical_error_flag
-    
+
     ; Install AMIS multiplex handler
     call install_multiplex_handler
-    
-    ; Install DOS idle hook  
+
+    ; Install DOS idle hook
     call install_idle_hook
-    
+
     ; Initialize vector validation
-    mov WORD PTR [vector_check_timer], 1000  ; Check every ~1000 calls
+    mov word [vector_check_timer], 1000  ; Check every ~1000 calls
 
     ; Mark as initialized
-    mov BYTE PTR [driver_installed], 1
-    
+    mov byte [driver_installed], 1
+
     pop es
     pop dx
-    pop cx  
+    pop cx
     pop bx
     pop ax
     clc                                  ; Success
     ret
-initialize_tsr_defense endp
 
-get_indos_address proc
+get_indos_address:
     push es
     push bx
-    
+
     mov ah, 34h
     int 21h                              ; Returns ES:BX -> InDOS flag
     mov [indos_segment], es
     mov [indos_offset], bx
-    
+
     pop bx
     pop es
     ret
-get_indos_address endp
 
-get_critical_error_flag proc
+get_critical_error_flag:
     push ds
     push si
-    
+
     ; Try to get critical error flag (DOS 3.0+)
     mov ax, 5D06h
     int 21h                              ; Returns DS:SI -> critical error flag
-    jc gcef_not_available                ; Not supported
+    jc .not_available                    ; Not supported
 
     mov [criterr_segment], ds
     mov [criterr_offset], si
-    jmp short gcef_done
+    jmp short .done
 
-gcef_not_available:
-    mov WORD PTR [criterr_segment], 0    ; Mark as unavailable
+.not_available:
+    mov word [criterr_segment], 0        ; Mark as unavailable
 
-gcef_done:
+.done:
     pop si
     pop ds
     ret
-get_critical_error_flag endp
 
 ;=============================================================================
 ; INTERRUPT VECTOR MANAGEMENT
 ;=============================================================================
 
-install_multiplex_handler proc
+install_multiplex_handler:
     ; Save original INT 2Fh vector
     mov ax, 352Fh
     int 21h
     mov [old_int2f_offset], bx
     mov [old_int2f_segment], es
-    
+
     ; Install our handler
     push ds
     mov ax, cs
     mov ds, ax
-    mov dx, offset int2f_handler
+    mov dx, int2f_handler
     mov ax, 252Fh
     int 21h
     pop ds
-    
-    ret
-install_multiplex_handler endp
 
-install_idle_hook proc
+    ret
+
+install_idle_hook:
     ; Save original INT 28h vector
     mov ax, 3528h
     int 21h
     mov [old_int28_offset], bx
     mov [old_int28_segment], es
-    
+
     ; Install our handler
     push ds
     mov ax, cs
     mov ds, ax
-    mov dx, offset int28_handler
+    mov dx, int28_handler
     mov ax, 2528h
     int 21h
     pop ds
-    
-    ret
-install_idle_hook endp
 
-public install_packet_api_vector
-install_packet_api_vector proc
+    ret
+
+global install_packet_api_vector
+install_packet_api_vector:
     ; Save original INT 60h vector
     mov ax, 3560h
     int 21h
     mov [old_int60_offset], bx
     mov [old_int60_segment], es
-    
+
     ; Install packet driver API vector (will be set by main driver)
     ; This is just the infrastructure - actual handler set elsewhere
-    
+
     ret
-install_packet_api_vector endp
 
 ;=============================================================================
 ; AMIS-COMPLIANT MULTIPLEX HANDLER
 ;=============================================================================
 
-int2f_handler proc far
+int2f_handler:
     cmp ah, [cs:multiplex_id]
-    jne i2f_chain
+    jne .chain
 
     ; Handle AMIS standard functions
     cmp al, AMIS_INSTALLATION_CHECK
-    je i2f_installation_check
+    je .installation_check
     cmp al, AMIS_GET_ENTRY_POINT
-    je i2f_get_entry_point
+    je .get_entry_point
     cmp al, AMIS_UNINSTALL_CHECK
-    je i2f_uninstall_check
+    je .uninstall_check
 
-i2f_chain:
+.chain:
     ; Chain to original handler
-    jmp dword ptr [cs:old_int2f_offset]
+    jmp far [cs:old_int2f_offset]
 
-i2f_installation_check:
-    AMIS_INSTALLATION_CHECK driver_signature, 0x0200
+.installation_check:
+    AMIS_INSTALL_CHECK_RESPONSE driver_signature, 0x0200
 
-i2f_get_entry_point:
-    AMIS_GET_ENTRY_POINT private_api_entry, 0x0200
+.get_entry_point:
+    AMIS_GET_ENTRY_POINT_RESPONSE private_api_entry, 0x0200
 
-i2f_uninstall_check:
+.uninstall_check:
     ; Check if we can uninstall
     call check_uninstall_safety
-    jc i2f_cannot_uninstall
+    jc .cannot_uninstall
 
     mov al, 0FFh                         ; Can uninstall
     iret
 
-i2f_cannot_uninstall:
+.cannot_uninstall:
     mov al, 07h                          ; Cannot uninstall now
     iret
-int2f_handler endp
 
 ;=============================================================================
 ; DOS IDLE HOOK FOR DEFERRED OPERATIONS
 ;=============================================================================
 
-int28_handler proc far
+int28_handler:
     ; Check if we have deferred work
-    cmp BYTE PTR [cs:work_pending], 0
-    jz i28_chain
+    cmp byte [cs:work_pending], 0
+    jz .chain
 
     ; Check if DOS is safe
     CHECK_DOS_COMPLETELY_SAFE
-    jnz i28_chain                        ; DOS still busy
+    jnz .chain                           ; DOS still busy
 
     ; Process deferred work safely
     SAFE_STACK_SWITCH
@@ -346,150 +342,147 @@ int28_handler proc far
 
     RESTORE_CALLER_STACK
 
-i28_chain:
+.chain:
     ; Chain to original idle handler
-    jmp dword ptr [cs:old_int28_offset]
-int28_handler endp
+    jmp far [cs:old_int28_offset]
 
 ;=============================================================================
 ; DEFERRED WORK QUEUE MANAGEMENT
 ;=============================================================================
 
-public queue_deferred_work
-queue_deferred_work proc
+global queue_deferred_work
+queue_deferred_work:
     ; AX = function address to call later
     ; Returns: CY set if queue full
-    
+
     ENTER_CRITICAL
-    
+
     ; Check for queue space
     mov bx, [queue_tail]
     inc bx
     and bx, 31                           ; Wrap at 32 entries
     cmp bx, [queue_head]
-    je qdw_queue_full
-    
+    je .queue_full
+
     ; Add to queue
     mov bx, [queue_tail]
-    mov WORD PTR [work_queue + bx*2], ax
-    inc WORD PTR [queue_tail]
-    and WORD PTR [queue_tail], 31
-    mov BYTE PTR [work_pending], 1
-    
+    shl bx, 1                        ; Scale by 2 for word access (16-bit mode)
+    mov word [work_queue + bx], ax
+    inc word [queue_tail]
+    and word [queue_tail], 31
+    mov byte [work_pending], 1
+
     EXIT_CRITICAL
     clc
     ret
-    
-qdw_queue_full:
+
+.queue_full:
     EXIT_CRITICAL
     stc
     ret
-queue_deferred_work endp
 
-process_work_queue proc
+process_work_queue:
     ; Process all queued work
 
-pwq_process_loop:
+.process_loop:
     ENTER_CRITICAL
 
     ; Check if queue empty
     mov ax, [queue_head]
     cmp ax, [queue_tail]
-    je pwq_queue_empty
-    
+    je .queue_empty
+
     ; Get next work item
     mov bx, ax
-    mov ax, [work_queue + bx*2]
+    shl bx, 1                        ; Scale by 2 for word access (16-bit mode)
+    mov ax, [work_queue + bx]
     inc word [queue_head]
     and word [queue_head], 31
-    
+
     EXIT_CRITICAL
-    
+
     ; Call the deferred function
     push ax
     call ax                              ; Call deferred function
     add sp, 2
-    
-    ; Continue processing
-    jmp short pwq_process_loop
 
-pwq_queue_empty:
+    ; Continue processing
+    jmp short .process_loop
+
+.queue_empty:
     mov byte [work_pending], 0           ; Mark queue empty
     EXIT_CRITICAL
     ret
-process_work_queue endp
 
 ;=============================================================================
 ; VECTOR OWNERSHIP VALIDATION
 ;=============================================================================
 
-public validate_interrupt_vectors
-validate_interrupt_vectors proc
+global validate_interrupt_vectors
+validate_interrupt_vectors:
     ; Periodic validation of owned vectors
     ; Should be called from timer interrupt or main loop
-    
+
     dec word [vector_check_timer]
-    jnz viv_skip_check                   ; Not time to check yet
+    jnz .skip_check                      ; Not time to check yet
 
     ; Reset timer
     mov word [vector_check_timer], 1000
 
     ; Check INT 60h (packet driver API)
     CHECK_VECTOR_OWNERSHIP 60h, packet_api_entry
-    jnc viv_vectors_ok
+    jnc .vectors_ok
 
     ; Vector stolen - attempt recovery
     call emergency_vector_recovery
 
-viv_vectors_ok:
-viv_skip_check:
+.vectors_ok:
+.skip_check:
     ret
-validate_interrupt_vectors endp
 
-emergency_vector_recovery proc
+emergency_vector_recovery:
     ; Attempt to reclaim stolen vectors
     push ax
     push dx
-    
+
     inc word [recovery_count]
-    
+
     ; Log the event
     mov al, 0FFh                         ; Recovery event code
     call log_error_event
-    
+
     ; Try to reinstall packet API vector
     push ds
     mov ax, cs
     mov ds, ax
-    mov dx, offset packet_api_entry      ; Will be set by main driver
+    mov dx, packet_api_entry             ; Will be set by main driver
     mov ax, 2560h                        ; Set INT 60h
     int 21h
     pop ds
-    
+
     pop dx
     pop ax
     ret
-emergency_vector_recovery endp
 
 ;=============================================================================
 ; SAFE MEMORY ALLOCATION WITH PROTECTION
 ;=============================================================================
 
-public allocate_protected_memory
-allocate_protected_memory proc
+global allocate_protected_memory
+allocate_protected_memory:
     ; CX = requested size
     ; Returns: BX = protected pointer, CY = error
-    
+
     push ax
     push cx
-    
+
     ; Add space for canaries
     add cx, 8                            ; 4 bytes front + 4 bytes rear
-    
+
     ; Allocate memory (using DOS or XMS - implementation specific)
     call allocate_raw_memory
-    jc apm_allocation_failed
-    
+    jc .allocation_failed
+
     ; Place protection canaries
     PLACE_FRONT_CANARY bx
     PLACE_REAR_CANARY bx, cx
@@ -502,29 +495,28 @@ allocate_protected_memory proc
     clc
     ret
 
-apm_allocation_failed:
+.allocation_failed:
     pop cx
     pop ax
     stc
     ret
-allocate_protected_memory endp
 
-public validate_protected_memory
-validate_protected_memory proc
+global validate_protected_memory
+validate_protected_memory:
     ; BX = protected pointer, CX = original size
     ; Returns: CY set if corruption detected
-    
+
     push ax
-    
+
     ; Check canaries
     CHECK_CANARIES bx, cx
-    jc vpm_corruption_detected
+    jc .corruption_detected
 
     pop ax
     clc
     ret
 
-vpm_corruption_detected:
+.corruption_detected:
     ; Log corruption event
     mov al, 0xFE                         ; Memory corruption code
     call log_error_event
@@ -532,24 +524,23 @@ vpm_corruption_detected:
     pop ax
     stc
     ret
-validate_protected_memory endp
 
 ;=============================================================================
 ; HARDWARE I/O WITH TIMEOUT PROTECTION
 ;=============================================================================
 
-public safe_port_read
-safe_port_read proc
+global safe_port_read
+safe_port_read:
     ; DX = port, CX = timeout
     ; Returns: AL = value, CY = timeout
-    
+
     push cx
 
-spr_wait_loop:
+.wait_loop:
     in al, dx
     test al, al                          ; Simple responsiveness check
-    jnz spr_port_ready
-    loop spr_wait_loop
+    jnz .port_ready
+    loop .wait_loop
 
     ; Timeout occurred
     pop cx
@@ -558,89 +549,84 @@ spr_wait_loop:
     stc
     ret
 
-spr_port_ready:
+.port_ready:
     pop cx
     clc
     ret
-safe_port_read endp
 
-public safe_port_write
-safe_port_write proc
+global safe_port_write
+safe_port_write:
     ; DX = port, AL = value, CX = timeout for readback verification
     ; Returns: CY = error
-    
+
     push ax
     push cx
-    
+
     ; Write to port
     out dx, al
-    
+
     ; Verify write (if port supports readback)
     mov cx, TIMEOUT_SHORT
     call verify_port_write
-    
+
     pop cx
     pop ax
     ret
-safe_port_write endp
 
-verify_port_write proc
+verify_port_write:
     ; Simple verification - implementation depends on hardware
     ; For now, just a short delay
     push cx
     mov cx, 100
-vpw_delay_loop:
+.delay_loop:
     nop
-    loop vpw_delay_loop
+    loop .delay_loop
     pop cx
 
     clc                                  ; Assume success
     ret
-verify_port_write endp
 
 ;=============================================================================
 ; ERROR HANDLING AND LOGGING
 ;=============================================================================
 
-log_error_event proc
+log_error_event:
     ; AL = error code
     ; Simple error logging - stores last error for diagnostics
-    
+
     push ax
-    
+
     mov [last_error_code], al
     inc word [error_count]
-    
+
     ; In a full implementation, this would write to a circular buffer
     ; For now, just update counters
-    
+
     pop ax
     ret
-log_error_event endp
 
 ;=============================================================================
 ; UNINSTALL SAFETY CHECKS
 ;=============================================================================
 
-check_uninstall_safety proc
+check_uninstall_safety:
     ; Returns: CY set if cannot uninstall safely
-    
+
     ; Check if any applications still have access types registered
     ; This is driver-specific - placeholder for now
-    
+
     ; Check if hardware is still active
     ; This is hardware-specific - placeholder for now
-    
+
     ; For now, assume we can always uninstall
     clc
     ret
-check_uninstall_safety endp
 
 ;=============================================================================
 ; PRIVATE API ENTRY POINT
 ;=============================================================================
 
-private_api_entry proc far
+private_api_entry:
     ; Private API for advanced applications
     ; AH = function code, other registers = parameters
 
@@ -656,9 +642,9 @@ private_api_entry proc far
 
     ; Validate function code
     cmp ah, 80h
-    jb pae_invalid_function
+    jb .invalid_function
     cmp ah, 8Fh
-    ja pae_invalid_function
+    ja .invalid_function
 
     ; Dispatch to private function handlers
     mov al, ah
@@ -666,7 +652,7 @@ private_api_entry proc far
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    call word ptr [private_function_table + bx]
+    call word [private_function_table + bx]
 
     pop es
     pop ds
@@ -676,7 +662,7 @@ private_api_entry proc far
     RESTORE_CALLER_STACK
     retf
 
-pae_invalid_function:
+.invalid_function:
     mov ah, BAD_COMMAND
     stc
 
@@ -687,7 +673,6 @@ pae_invalid_function:
 
     RESTORE_CALLER_STACK
     retf
-private_api_entry endp
 
 ; Private function dispatch table
 private_function_table:
@@ -703,112 +688,105 @@ private_function_table:
 ; PRIVATE API FUNCTION IMPLEMENTATIONS
 ;=============================================================================
 
-get_driver_statistics proc
+get_driver_statistics:
     ; Return driver statistics
     ; ES:DI -> statistics buffer (provided by caller)
-    
+
     ; Copy statistics to caller's buffer
     push si
     push cx
-    
-    mov si, offset error_count
+
+    mov si, error_count
     mov cx, 8                            ; Copy 8 bytes of statistics
     rep movsb
-    
+
     pop cx
     pop si
-    
+
     clc
     ret
-get_driver_statistics endp
 
-reset_driver_statistics proc
+reset_driver_statistics:
     ; Reset error counters
-    
+
     mov word [error_count], 0
     mov word [recovery_count], 0
     mov byte [last_error_code], 0
-    
+
     clc
     ret
-reset_driver_statistics endp
 
-get_hardware_status proc
+get_hardware_status:
     ; Return hardware status
     ; Implementation specific to actual hardware
-    
+
     ; Placeholder - return generic "OK" status
     mov ax, 0x0100                       ; Status: OK, version 1.0
     clc
     ret
-get_hardware_status endp
 
-set_debug_level proc
+set_debug_level:
     ; Set debug output level
     ; AL = debug level (0=off, 1=errors, 2=warnings, 3=info, 4=verbose)
-    
+
     ; Store debug level (implementation specific)
     ; For now, just acknowledge the command
-    
+
     clc
     ret
-set_debug_level endp
 
-get_memory_usage proc
-    ; Return memory usage statistics  
+get_memory_usage:
+    ; Return memory usage statistics
     ; ES:DI -> memory usage buffer
-    
+
     ; Return basic memory information
     ; This would need to integrate with actual memory manager
-    
+
     clc
     ret
-get_memory_usage endp
 
-public validate_driver_integrity
-validate_driver_integrity proc
+global validate_driver_integrity
+validate_driver_integrity:
     ; Comprehensive driver integrity check
     ; Returns: CY set if corruption detected
-    
+
     ; Check our data structures
     ; Validate vector ownership
     call validate_interrupt_vectors
-    
+
     ; Check memory canaries (if any are active)
     ; This would iterate through protected allocations
-    
+
     ; Validate critical data structures
     ; Implementation specific to driver data
-    
+
     ; For now, assume integrity is OK
     clc
     ret
-validate_driver_integrity endp
 
 ;=============================================================================
 ; UTILITY ROUTINES
 ;=============================================================================
 
-allocate_raw_memory proc
+allocate_raw_memory:
     ; CX = size to allocate
     ; Returns: BX = pointer, CY = error
-    ; 
+    ;
     ; This is a placeholder - actual implementation would:
     ; 1. Try UMB allocation first
-    ; 2. Fall back to XMS if available  
+    ; 2. Fall back to XMS if available
     ; 3. Fall back to conventional memory as last resort
-    
+
     ; For now, return error (not implemented)
     stc
     ret
-allocate_raw_memory endp
 
 ;=============================================================================
 ; UMB SUPPORT FUNCTIONS (DOS 5.0+)
 ;=============================================================================
 
-public detect_memory_managers
-detect_memory_managers proc
+global detect_memory_managers
+detect_memory_managers:
     ; Detect available memory managers for UMB support
     push ax
     push bx
@@ -817,47 +795,47 @@ detect_memory_managers proc
     push si
     push di
     push es
-    
+
     ; Reset memory manager type
     mov byte [memory_manager_type], 0
-    
+
     ; Check for HIMEM.SYS
     call detect_himem
-    jnc dmm_himem_found
+    jnc .himem_found
 
     ; Check for EMM386
     call detect_emm386
-    jnc dmm_emm386_found
+    jnc .emm386_found
 
     ; Check for QEMM386
     call detect_qemm
-    jnc dmm_qemm_found
+    jnc .qemm_found
 
     ; No memory manager found
-    jmp short dmm_no_manager
+    jmp short .no_manager
 
-dmm_himem_found:
+.himem_found:
     mov byte [memory_manager_type], 1
-    jmp short dmm_manager_detected
+    jmp short .manager_detected
 
-dmm_emm386_found:
+.emm386_found:
     mov byte [memory_manager_type], 2
-    jmp short dmm_manager_detected
+    jmp short .manager_detected
 
-dmm_qemm_found:
+.qemm_found:
     mov byte [memory_manager_type], 3
 
-dmm_manager_detected:
+.manager_detected:
     ; Check DOS version for UMB support (need DOS 5.0+)
     mov ah, 30h
     int 21h
     cmp al, 5                       ; DOS version 5.0 or higher
-    jae dmm_dos_ok
+    jae .dos_ok
 
     mov byte [memory_manager_type], 0   ; Disable if DOS too old
 
-dmm_dos_ok:
-dmm_no_manager:
+.dos_ok:
+.no_manager:
     pop es
     pop di
     pop si
@@ -866,9 +844,8 @@ dmm_no_manager:
     pop bx
     pop ax
     ret
-detect_memory_managers endp
 
-detect_himem proc
+detect_himem:
     ; Check for HIMEM.SYS presence
     push ds
     push si
@@ -878,29 +855,28 @@ detect_himem proc
     ; Search for HIMEM signature in device chain
     mov ax, 3800h                   ; Get country info
     int 21h
-    jc dh_not_found
+    jc .not_found
 
     ; Alternative: Check XMS driver
     mov ax, 4300h                   ; XMS installation check
     int 2Fh
     cmp al, 80h
-    jne dh_not_found
+    jne .not_found
 
     clc                             ; HIMEM found
-    jmp short dh_exit
+    jmp short .exit
 
-dh_not_found:
+.not_found:
     stc                             ; Not found
 
-dh_exit:
+.exit:
     pop es
     pop di
     pop si
     pop ds
     ret
-detect_himem endp
 
-detect_emm386 proc
+detect_emm386:
     ; Check for EMM386.EXE
     push ax
     push bx
@@ -910,25 +886,24 @@ detect_emm386 proc
     mov ax, 1600h                   ; Enhanced mode check
     int 2Fh
     cmp al, 0
-    je de_not_found
+    je .not_found
     cmp al, 80h
-    je de_not_found
+    je .not_found
 
     ; EMM386 likely present
     clc
-    jmp short de_exit
+    jmp short .exit
 
-de_not_found:
+.not_found:
     stc
 
-de_exit:
+.exit:
     pop dx
     pop bx
     pop ax
     ret
-detect_emm386 endp
 
-detect_qemm proc
+detect_qemm:
     ; Check for QEMM386
     push ax
     push bx
@@ -938,193 +913,188 @@ detect_qemm proc
     mov ax, 5945h                   ; QEMM API check
     int 2Fh
     cmp ax, 5945h
-    je dq_not_found
+    je .not_found
 
     ; QEMM found
     clc
-    jmp short dq_exit
+    jmp short .exit
 
-dq_not_found:
+.not_found:
     stc
 
-dq_exit:
+.exit:
     pop dx
     pop bx
     pop ax
     ret
-detect_qemm endp
 
-public check_umb_availability
-check_umb_availability proc
+global check_umb_availability
+check_umb_availability:
     ; Check if UMBs are available and can be used
     push ax
     push bx
-    
+
     ; First detect memory managers
     call detect_memory_managers
-    
+
     ; Check if any memory manager found
     cmp byte [memory_manager_type], 0
-    je cua_not_available
+    je .not_available
 
     ; Try to get current allocation strategy
     mov ax, 5800h                   ; Get allocation strategy
     int 21h
-    jc cua_not_available
-    
+    jc .not_available
+
     mov [original_alloc_strategy], al
-    
+
     ; Try to get UMB link state
     mov ax, 5802h                   ; Get UMB link state
     int 21h
-    jc cua_not_available
+    jc .not_available
 
     ; UMBs are available
     mov byte [umb_available], 1
     clc
-    jmp short cua_exit
+    jmp short .exit
 
-cua_not_available:
+.not_available:
     mov byte [umb_available], 0
     stc
 
-cua_exit:
+.exit:
     pop bx
     pop ax
     ret
-check_umb_availability endp
 
-public attempt_umb_allocation
-attempt_umb_allocation proc
+global attempt_umb_allocation
+attempt_umb_allocation:
     ; Try to allocate UMB for TSR
     ; CX = required size in paragraphs
     ; Returns: AX = allocated segment (0 if failed), CY = status
-    
+
     push bx
     push cx
     push dx
-    
+
     ; Check if already attempted
     cmp byte [umb_allocation_attempted], 1
-    je aua_already_attempted
+    je .already_attempted
 
     ; Mark as attempted
     mov byte [umb_allocation_attempted], 1
 
     ; Check UMB availability
     call check_umb_availability
-    jc aua_allocation_failed
+    jc .allocation_failed
 
     ; Link UMBs into memory chain
     call link_umbs
-    jc aua_allocation_failed
+    jc .allocation_failed
 
     ; Set allocation strategy to try UMBs first
     mov ax, 5801h                   ; Set allocation strategy
     mov bx, 0081h                   ; Best fit high memory first
     int 21h
-    jc aua_allocation_failed
+    jc .allocation_failed
 
     ; Try to allocate UMB
     mov ah, 48h                     ; Allocate memory
     mov bx, cx                      ; Size in paragraphs
     int 21h
-    jc aua_allocation_failed
+    jc .allocation_failed
 
     ; Check if allocated segment is in UMB range (A000h-FFFFh)
     cmp ax, 0A000h
-    jb aua_conventional_allocated
+    jb .conventional_allocated
 
     ; Successfully allocated UMB
     mov [umb_segment], ax
     mov [umb_size_paragraphs], cx
     clc                             ; Success
-    jmp short aua_exit
+    jmp short .exit
 
-aua_conventional_allocated:
+.conventional_allocated:
     ; Got conventional memory instead - still usable but not optimal
     mov [umb_segment], ax
     mov [umb_size_paragraphs], cx
     mov byte [conventional_fallback], 1
     clc                             ; Success (but conventional)
-    jmp short aua_exit
+    jmp short .exit
 
-aua_already_attempted:
+.already_attempted:
     ; Return previously allocated segment
     mov ax, [umb_segment]
     cmp ax, 0
-    jz aua_allocation_failed
+    jz .allocation_failed
     clc
-    jmp short aua_exit
+    jmp short .exit
 
-aua_allocation_failed:
+.allocation_failed:
     ; Restore original allocation strategy
     call restore_allocation_strategy
     xor ax, ax                      ; No segment allocated
     stc                             ; Failure
 
-aua_exit:
+.exit:
     pop dx
     pop cx
     pop bx
     ret
-attempt_umb_allocation endp
 
-link_umbs proc
+link_umbs:
     ; Link UMBs into the DOS memory chain
     push ax
     push bx
 
     ; Check if already linked
     cmp byte [umb_linked], 1
-    je lu_already_linked
+    je .already_linked
 
     ; Link UMBs
     mov ax, 5803h                   ; Link/unlink UMB
     mov bx, 1                       ; Link UMBs
     int 21h
-    jc lu_link_failed
+    jc .link_failed
 
     mov byte [umb_linked], 1
     clc
-    jmp short lu_exit
+    jmp short .exit
 
-lu_already_linked:
+.already_linked:
     clc                             ; Success
-    jmp short lu_exit
+    jmp short .exit
 
-lu_link_failed:
+.link_failed:
     stc
 
-lu_exit:
+.exit:
     pop bx
     pop ax
     ret
-link_umbs endp
 
-public restore_allocation_strategy
-restore_allocation_strategy proc
+global restore_allocation_strategy
+restore_allocation_strategy:
     ; Restore original DOS allocation strategy
     push ax
     push bx
-    
+
     ; Restore allocation strategy
     mov ax, 5801h                   ; Set allocation strategy
     mov bl, [original_alloc_strategy]
     xor bh, bh
     int 21h
-    
+
     pop bx
     pop ax
     ret
-restore_allocation_strategy endp
 
-public relocate_tsr_to_umb
-relocate_tsr_to_umb proc
+global relocate_tsr_to_umb
+relocate_tsr_to_umb:
     ; Relocate TSR code/data to allocated UMB
     ; BX = source segment, CX = size in paragraphs
     ; Returns: AX = destination segment, CY = status
-    
+
     push bx
     push cx
     push dx
@@ -1132,11 +1102,11 @@ relocate_tsr_to_umb proc
     push di
     push ds
     push es
-    
+
     ; Check if we have a UMB
     mov ax, [umb_segment]
     cmp ax, 0
-    jz rtu_no_umb
+    jz .no_umb
 
     ; Set up for memory copy
     mov ds, bx                      ; Source segment
@@ -1157,14 +1127,14 @@ relocate_tsr_to_umb proc
     ; Success
     mov ax, [umb_segment]           ; Return UMB segment
     clc
-    jmp short rtu_exit
+    jmp short .exit
 
-rtu_no_umb:
+.no_umb:
     ; No UMB allocated
     xor ax, ax
     stc
 
-rtu_exit:
+.exit:
     pop es
     pop ds
     pop di
@@ -1173,52 +1143,50 @@ rtu_exit:
     pop cx
     pop bx
     ret
-relocate_tsr_to_umb endp
 
-public get_memory_usage_info
-get_memory_usage_info proc
+global get_memory_usage_info
+get_memory_usage_info:
     ; Get information about memory usage
     ; ES:DI -> buffer for memory usage structure
-    ; Structure: umb_available(1), umb_segment(2), umb_size(2), 
+    ; Structure: umb_available(1), umb_segment(2), umb_size(2),
     ;           conventional_fallback(1), memory_manager_type(1)
-    
+
     push ax
-    
+
     ; UMB available flag
     mov al, [umb_available]
-    mov es:[di], al
-    
+    mov [es:di], al
+
     ; UMB segment
     mov ax, [umb_segment]
-    mov es:[di+1], ax
-    
+    mov [es:di+1], ax
+
     ; UMB size in paragraphs
     mov ax, [umb_size_paragraphs]
-    mov es:[di+3], ax
-    
+    mov [es:di+3], ax
+
     ; Conventional fallback flag
     mov al, [conventional_fallback]
-    mov es:[di+5], al
-    
+    mov [es:di+5], al
+
     ; Memory manager type
     mov al, [memory_manager_type]
-    mov es:[di+6], al
-    
+    mov [es:di+6], al
+
     pop ax
     ret
-get_memory_usage_info endp
 
-public cleanup_umb_allocation
-cleanup_umb_allocation proc
+global cleanup_umb_allocation
+cleanup_umb_allocation:
     ; Clean up UMB resources during uninstall
     push ax
     push bx
     push es
-    
+
     ; Free UMB if allocated
     mov ax, [umb_segment]
     cmp ax, 0
-    jz cua_no_umb_to_free
+    jz .no_umb_to_free
 
     mov es, ax                      ; Segment to free
     mov ah, 49h                     ; Free memory
@@ -1228,24 +1196,21 @@ cleanup_umb_allocation proc
     mov word [umb_segment], 0
     mov word [umb_size_paragraphs], 0
 
-cua_no_umb_to_free:
+.no_umb_to_free:
     ; Restore original allocation strategy
     call restore_allocation_strategy
-    
+
     ; Clear flags
     mov byte [umb_available], 0
     mov byte [umb_linked], 0
     mov byte [umb_allocation_attempted], 0
     mov byte [conventional_fallback], 0
     mov byte [memory_manager_type], 0
-    
+
     pop es
     pop bx
     pop ax
     ret
-cleanup_umb_allocation endp
 
 ; External references that will be provided by main driver
-extern packet_api_entry:far             ; Main packet API entry point
-
-end
+extern packet_api_entry                 ; Main packet API entry point

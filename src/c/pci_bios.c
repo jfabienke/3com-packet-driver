@@ -55,33 +55,153 @@ static struct {
     uint8_t hardware_mechanism;
 } pci_bios_info = {0};
 
+#ifdef __WATCOMC__
+/*
+ * Watcom C helpers for 32-bit register access in 16-bit mode.
+ * The standard REGS union doesn't have ecx/edx fields in 16-bit mode,
+ * so we need assembly helpers with operand size override prefix (0x66).
+ */
+
+/* Get 32-bit value from EDX register after an interrupt call */
+uint32_t pci_get_edx_32(void);
+#pragma aux pci_get_edx_32 = \
+    ".386"                   \
+    "mov eax, edx"           \
+    "mov edx, eax"           \
+    "shr edx, 16"            \
+    value [ax dx]            \
+    modify exact [ax dx];
+
+/* Get 32-bit value from ECX register after an interrupt call */
+uint32_t pci_get_ecx_32(void);
+#pragma aux pci_get_ecx_32 = \
+    ".386"                   \
+    "mov eax, ecx"           \
+    "mov edx, eax"           \
+    "shr edx, 16"            \
+    value [ax dx]            \
+    modify exact [ax dx];
+
+/* Set 32-bit ECX register before an interrupt call */
+void pci_set_ecx_32(uint32_t value);
+#pragma aux pci_set_ecx_32 = \
+    ".386"                   \
+    "shl edx, 16"            \
+    "mov dx, ax"             \
+    "mov ecx, edx"           \
+    parm [ax dx]             \
+    modify exact [cx];
+
+/*
+ * Extended INT 1Ah call for PCI BIOS with 32-bit register support.
+ * This wrapper handles setting/getting 32-bit values for ECX and EDX.
+ */
+typedef struct {
+    uint16_t ax_in;
+    uint16_t bx_in;
+    uint32_t ecx_in;
+    uint16_t di_in;
+    uint16_t si_in;
+    uint16_t ax_out;
+    uint16_t bx_out;
+    uint32_t ecx_out;
+    uint32_t edx_out;
+    uint16_t cflag_out;
+} pci_int1a_data_t;
+
+/* Perform PCI BIOS INT 1Ah call with 32-bit ECX/EDX support */
+void pci_int1a_call(pci_int1a_data_t far* data);
+#pragma aux pci_int1a_call = \
+    ".386"                   \
+    "push ds"                \
+    "push si"                \
+    "push bp"                \
+    "mov bp, ax"             \
+    "mov ds, dx"             \
+    "mov ax, [bp]"           \
+    "mov bx, [bp+2]"         \
+    "mov ecx, [bp+4]"        \
+    "mov di, [bp+8]"         \
+    "mov si, [bp+10]"        \
+    "int 1Ah"                \
+    "pushf"                  \
+    "mov [bp+12], ax"        \
+    "mov [bp+14], bx"        \
+    "mov [bp+16], ecx"       \
+    "mov [bp+20], edx"       \
+    "pop ax"                 \
+    "and ax, 1"              \
+    "mov [bp+24], ax"        \
+    "pop bp"                 \
+    "pop si"                 \
+    "pop ds"                 \
+    parm [dx ax]             \
+    modify [ax bx cx dx di si];
+
+#endif /* __WATCOMC__ */
+
 /**
  * @brief Check if PCI BIOS is present
- * 
+ *
  * Uses INT 1Ah, AX=B101h to detect PCI BIOS presence and capabilities
- * 
+ *
  * @return true if PCI BIOS is present, false otherwise
  */
 bool pci_bios_present(void) {
-    union REGS regs;
-    struct SREGS sregs;
-    
+#ifdef __WATCOMC__
+    pci_int1a_data_t pci_data;
+
     /* Check if we've already detected the BIOS */
     if (pci_bios_info.present) {
         return true;
     }
-    
+
+    /* Clear structure */
+    memset(&pci_data, 0, sizeof(pci_data));
+
+    /* PCI BIOS Installation Check */
+    pci_data.ax_in = (PCI_FUNCTION_ID << 8) | PCI_BIOS_PRESENT;
+    pci_data.di_in = 0;  /* Clear EDI for PM entry point (we don't use it) */
+
+    pci_int1a_call(&pci_data);
+
+    /* Check if successful - EDX should contain 'PCI ' (0x20494350) */
+    if ((pci_data.cflag_out == 0) && (pci_data.edx_out == 0x20494350)) {
+        pci_bios_info.present = true;
+        pci_bios_info.major_version = (pci_data.bx_out >> 8) & 0xFF;
+        pci_bios_info.minor_version = pci_data.bx_out & 0xFF;
+        pci_bios_info.last_bus = pci_data.ecx_out & 0xFF;
+        pci_bios_info.hardware_mechanism = pci_data.ax_out & 0xFF;
+
+        LOG_INFO("PCI BIOS v%d.%d detected, last bus=%d, mechanisms=0x%02X",
+                 pci_bios_info.major_version, pci_bios_info.minor_version,
+                 pci_bios_info.last_bus, pci_bios_info.hardware_mechanism);
+
+        return true;
+    }
+
+    LOG_DEBUG("PCI BIOS not detected");
+    return false;
+#else
+    union REGS regs;
+    struct SREGS sregs;
+
+    /* Check if we've already detected the BIOS */
+    if (pci_bios_info.present) {
+        return true;
+    }
+
     /* Clear registers */
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
-    
+
     /* PCI BIOS Installation Check */
     regs.h.ah = PCI_FUNCTION_ID;
     regs.h.al = PCI_BIOS_PRESENT;
     regs.x.di = 0;  /* Clear EDI for PM entry point (we don't use it) */
-    
+
     int86x(0x1A, &regs, &regs, &sregs);
-    
+
     /* Check if successful */
     if ((regs.x.cflag == 0) && (regs.x.edx == 0x20494350)) { /* 'PCI ' */
         pci_bios_info.present = true;
@@ -89,16 +209,17 @@ bool pci_bios_present(void) {
         pci_bios_info.minor_version = regs.h.bl;
         pci_bios_info.last_bus = regs.h.cl;
         pci_bios_info.hardware_mechanism = regs.h.al;
-        
+
         LOG_INFO("PCI BIOS v%d.%d detected, last bus=%d, mechanisms=0x%02X",
                  pci_bios_info.major_version, pci_bios_info.minor_version,
                  pci_bios_info.last_bus, pci_bios_info.hardware_mechanism);
-        
+
         return true;
     }
-    
+
     LOG_DEBUG("PCI BIOS not detected");
     return false;
+#endif
 }
 
 /**
@@ -326,7 +447,7 @@ uint16_t pci_read_config_word(uint8_t bus, uint8_t device, uint8_t function, uin
 
 /**
  * @brief Read PCI configuration dword
- * 
+ *
  * @param bus Bus number (0-255)
  * @param device Device number (0-31)
  * @param function Function number (0-7)
@@ -334,35 +455,63 @@ uint16_t pci_read_config_word(uint8_t bus, uint8_t device, uint8_t function, uin
  * @return Configuration dword value or 0xFFFFFFFF on error
  */
 uint32_t pci_read_config_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    union REGS regs;
-    struct SREGS sregs;
-    
+#ifdef __WATCOMC__
+    pci_int1a_data_t pci_data;
+
     if (!pci_bios_present()) {
         return 0xFFFFFFFF;
     }
-    
+
     /* Ensure dword alignment */
     if (offset & 0x03) {
         LOG_WARNING("PCI config dword read at unaligned offset 0x%02X", offset);
         return 0xFFFFFFFF;
     }
-    
+
+    memset(&pci_data, 0, sizeof(pci_data));
+
+    pci_data.ax_in = (PCI_FUNCTION_ID << 8) | PCI_READ_CONFIG_DWORD;
+    pci_data.bx_in = (bus << 8) | ((device << 3) | (function & 0x07));
+    pci_data.di_in = offset;
+
+    pci_int1a_call(&pci_data);
+
+    if (pci_data.cflag_out != 0) {
+        return 0xFFFFFFFF;
+    }
+
+    return pci_data.ecx_out;
+#else
+    union REGS regs;
+    struct SREGS sregs;
+
+    if (!pci_bios_present()) {
+        return 0xFFFFFFFF;
+    }
+
+    /* Ensure dword alignment */
+    if (offset & 0x03) {
+        LOG_WARNING("PCI config dword read at unaligned offset 0x%02X", offset);
+        return 0xFFFFFFFF;
+    }
+
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
-    
+
     regs.h.ah = PCI_FUNCTION_ID;
     regs.h.al = PCI_READ_CONFIG_DWORD;
     regs.h.bh = bus;
     regs.h.bl = (device << 3) | (function & 0x07);
     regs.x.di = offset;
-    
+
     int86x(0x1A, &regs, &regs, &sregs);
-    
+
     if (regs.x.cflag != 0) {
         return 0xFFFFFFFF;
     }
-    
+
     return regs.x.ecx;
+#endif
 }
 
 /**
@@ -444,7 +593,7 @@ bool pci_write_config_word(uint8_t bus, uint8_t device, uint8_t function, uint8_
 
 /**
  * @brief Write PCI configuration dword
- * 
+ *
  * @param bus Bus number (0-255)
  * @param device Device number (0-31)
  * @param function Function number (0-7)
@@ -453,32 +602,57 @@ bool pci_write_config_word(uint8_t bus, uint8_t device, uint8_t function, uint8_
  * @return true on success, false on error
  */
 bool pci_write_config_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value) {
-    union REGS regs;
-    struct SREGS sregs;
-    
+#ifdef __WATCOMC__
+    pci_int1a_data_t pci_data;
+
     if (!pci_bios_present()) {
         return false;
     }
-    
+
     /* Ensure dword alignment */
     if (offset & 0x03) {
         LOG_WARNING("PCI config dword write at unaligned offset 0x%02X", offset);
         return false;
     }
-    
+
+    memset(&pci_data, 0, sizeof(pci_data));
+
+    pci_data.ax_in = (PCI_FUNCTION_ID << 8) | PCI_WRITE_CONFIG_DWORD;
+    pci_data.bx_in = (bus << 8) | ((device << 3) | (function & 0x07));
+    pci_data.ecx_in = value;
+    pci_data.di_in = offset;
+
+    pci_int1a_call(&pci_data);
+
+    return (pci_data.cflag_out == 0);
+#else
+    union REGS regs;
+    struct SREGS sregs;
+
+    if (!pci_bios_present()) {
+        return false;
+    }
+
+    /* Ensure dword alignment */
+    if (offset & 0x03) {
+        LOG_WARNING("PCI config dword write at unaligned offset 0x%02X", offset);
+        return false;
+    }
+
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
-    
+
     regs.h.ah = PCI_FUNCTION_ID;
     regs.h.al = PCI_WRITE_CONFIG_DWORD;
     regs.h.bh = bus;
     regs.h.bl = (device << 3) | (function & 0x07);
     regs.x.ecx = value;
     regs.x.di = offset;
-    
+
     int86x(0x1A, &regs, &regs, &sregs);
-    
+
     return (regs.x.cflag == 0);
+#endif
 }
 
 /**
@@ -525,7 +699,7 @@ bool pci_find_device(uint16_t vendor_id, uint16_t device_id, uint16_t index,
 
 /**
  * @brief Find PCI device by class code
- * 
+ *
  * @param class_code 24-bit class code (class, subclass, prog-if)
  * @param index Device index (0 for first, 1 for second, etc.)
  * @param bus Output: Bus number where device was found
@@ -535,32 +709,58 @@ bool pci_find_device(uint16_t vendor_id, uint16_t device_id, uint16_t index,
  */
 bool pci_find_class(uint32_t class_code, uint16_t index,
                    uint8_t *bus, uint8_t *device, uint8_t *function) {
-    union REGS regs;
-    struct SREGS sregs;
-    
+#ifdef __WATCOMC__
+    pci_int1a_data_t pci_data;
+
     if (!pci_bios_present() || !bus || !device || !function) {
         return false;
     }
-    
+
+    memset(&pci_data, 0, sizeof(pci_data));
+
+    pci_data.ax_in = (PCI_FUNCTION_ID << 8) | PCI_FIND_CLASS;
+    pci_data.ecx_in = class_code & 0x00FFFFFF;  /* Only lower 24 bits */
+    pci_data.si_in = index;
+
+    pci_int1a_call(&pci_data);
+
+    if (pci_data.cflag_out != 0) {
+        return false;
+    }
+
+    *bus = (pci_data.bx_out >> 8) & 0xFF;
+    *device = ((pci_data.bx_out & 0xFF) >> 3) & 0x1F;
+    *function = (pci_data.bx_out & 0xFF) & 0x07;
+
+    return true;
+#else
+    union REGS regs;
+    struct SREGS sregs;
+
+    if (!pci_bios_present() || !bus || !device || !function) {
+        return false;
+    }
+
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
-    
+
     regs.h.ah = PCI_FUNCTION_ID;
     regs.h.al = PCI_FIND_CLASS;
     regs.x.ecx = class_code & 0x00FFFFFF;  /* Only lower 24 bits */
     regs.x.si = index;
-    
+
     int86x(0x1A, &regs, &regs, &sregs);
-    
+
     if (regs.x.cflag != 0) {
         return false;
     }
-    
+
     *bus = regs.h.bh;
     *device = (regs.h.bl >> 3) & 0x1F;
     *function = regs.h.bl & 0x07;
-    
+
     return true;
+#endif
 }
 
 /**

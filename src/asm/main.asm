@@ -5,105 +5,105 @@
 ;
 ; This file is part of the 3Com Packet Driver project.
 ;
+; Converted to NASM syntax - 2026-01-25
 
-.MODEL SMALL
-.386
+bits 16
+cpu 386
+
+; C symbol naming bridge (maps C symbols to symbol_)
+%include "csym.inc"
 
 ; DOS Function Constants
-DOS_FUNC_TSR        EQU 31h     ; DOS function for TSR
-DOS_FUNC_GET_VEC    EQU 35h     ; DOS function to get interrupt vector
-DOS_FUNC_SET_VEC    EQU 25h     ; DOS function to set interrupt vector
+DOS_FUNC_TSR        equ 31h     ; DOS function for TSR
+DOS_FUNC_GET_VEC    equ 35h     ; DOS function to get interrupt vector
+DOS_FUNC_SET_VEC    equ 25h     ; DOS function to set interrupt vector
 
 ; Interrupt Constants
-PACKET_INT          EQU 60h     ; Packet Driver interrupt
-IRQ_BASE            EQU 08h     ; Base IRQ interrupt number
-DOS_IDLE_INT        EQU 28h     ; DOS idle interrupt
+PACKET_INT          equ 60h     ; Packet Driver interrupt
+IRQ_BASE            equ 08h     ; Base IRQ interrupt number
+DOS_IDLE_INT        equ 28h     ; DOS idle interrupt
 
 ; Return Codes
-SUCCESS             EQU 0       ; Success return code
-ERROR_GENERAL       EQU 1       ; General error code
-ERROR_ALREADY_LOADED EQU 2      ; Driver already loaded
-ERROR_CPU_UNSUPPORTED EQU 3     ; CPU not supported
-ERROR_HARDWARE      EQU 4       ; Hardware error
-ERROR_MEMORY        EQU 5       ; Memory allocation error
+SUCCESS             equ 0       ; Success return code
+ERROR_GENERAL       equ 1       ; General error code
+ERROR_ALREADY_LOADED equ 2      ; Driver already loaded
+ERROR_CPU_UNSUPPORTED equ 3     ; CPU not supported
+ERROR_HARDWARE      equ 4       ; Hardware error
+ERROR_MEMORY        equ 5       ; Memory allocation error
 
 ; Installation Signature
-INSTALL_CHECK_AX    EQU 1234h   ; Installation check signature
-INSTALL_RESP_AX     EQU 5678h   ; Installation response signature
-DRIVER_MAGIC        EQU 'PD'    ; Driver magic bytes
+INSTALL_CHECK_AX    equ 1234h   ; Installation check signature
+INSTALL_RESP_AX     equ 5678h   ; Installation response signature
+DRIVER_MAGIC        equ 'PD'    ; Driver magic bytes
 
 ; Data segment
-_DATA SEGMENT
-        ASSUME  DS:_DATA
+section .data
 
 ; Driver state variables
-driver_loaded       db 0        ; Driver loaded flag
-tsr_size           dw 0        ; TSR resident size in paragraphs
-original_vectors   dd 8 dup(0) ; Storage for original interrupt vectors
-original_int28     dd 0        ; Storage for original INT 28h vector
-init_complete      db 0        ; Initialization complete flag
-installed_irq      db 0        ; Installed hardware IRQ number
-nic_base_addr      dw 0        ; NIC base I/O address
+driver_loaded:       db 0        ; Driver loaded flag
+tsr_size:           dw 0        ; TSR resident size in paragraphs
+original_vectors:   times 8 dd 0 ; Storage for original interrupt vectors
+original_int28:     dd 0        ; Storage for original INT 28h vector
+init_complete:      db 0        ; Initialization complete flag
+installed_irq:      db 0        ; Installed hardware IRQ number
+nic_base_addr:      dw 0        ; NIC base I/O address
 
 ; Driver identification strings
-driver_signature   db 'PKT DRVR', 0   ; Driver signature
-version_string     db '3Com Packet Driver v1.0', 0Dh, 0Ah, 0
-install_msg        db '3Com Packet Driver installed successfully', 0Dh, 0Ah, 0
-already_loaded_msg db 'Driver already loaded', 0Dh, 0Ah, 0
-memory_error_msg   db 'Memory optimization initialization failed', 0Dh, 0Ah, 0
-defensive_error_msg db 'Defensive programming initialization failed', 0Dh, 0Ah, 0
-cpu_error_msg      db 'CPU detection failed', 0Dh, 0Ah, 0
-hardware_error_msg db 'Hardware initialization failed', 0Dh, 0Ah, 0
+driver_signature:   db 'PKT DRVR', 0   ; Driver signature
+version_string:     db '3Com Packet Driver v1.0', 0Dh, 0Ah, 0
+install_msg:        db '3Com Packet Driver installed successfully', 0Dh, 0Ah, 0
+already_loaded_msg: db 'Driver already loaded', 0Dh, 0Ah, 0
+memory_error_msg:   db 'Memory optimization initialization failed', 0Dh, 0Ah, 0
+defensive_error_msg: db 'Defensive programming initialization failed', 0Dh, 0Ah, 0
+cpu_error_msg:      db 'CPU detection failed', 0Dh, 0Ah, 0
+hardware_error_msg: db 'Hardware initialization failed', 0Dh, 0Ah, 0
 
 ; Integration status variables
-vector_stolen_flag  db 0        ; Flag indicating if interrupt vector was stolen
-hardware_irq_count  db 0        ; Number of installed hardware IRQs
-hardware_irq_error_msg db 'Warning: Hardware IRQ installation failed', 0Dh, 0Ah, 0
+vector_stolen_flag:  db 0        ; Flag indicating if interrupt vector was stolen
+hardware_irq_count:  db 0        ; Number of installed hardware IRQs
+hardware_irq_error_msg: db 'Warning: Hardware IRQ installation failed', 0Dh, 0Ah, 0
 
 ; Installation check variables
-magic_signature    dw DRIVER_MAGIC  ; Magic signature for installation check
-install_vector     dd 0             ; Storage for packet driver vector
-
-_DATA ENDS
+magic_signature:    dw DRIVER_MAGIC  ; Magic signature for installation check
+install_vector:     dd 0             ; Storage for packet driver vector
 
 ; Code segment
-_TEXT SEGMENT
-        ASSUME  CS:_TEXT, DS:_DATA
+section .text
 
 ; External function declarations
-EXTRN cpu_detect_main:PROC      ; From cpu_detect.asm
-EXTRN packet_api_init:PROC      ; From packet_api.asm
-EXTRN nic_irq_init:PROC         ; From nic_irq.asm
-EXTRN hardware_init_asm:PROC    ; From hardware.asm
-EXTRN pnp_detect_all:PROC       ; From pnp.asm
+extern cpu_detect_main      ; From cpu_detect.asm
+extern packet_api_init      ; From packet_api.asm
+extern nic_irq_init         ; From nic_irq.asm
+extern hardware_init_asm    ; From hardware.asm
+extern pnp_detect_all       ; From pnp.asm
 
 ; Hardware integration functions
-EXTRN hardware_get_detected_nics:PROC     ; Get detected NIC information
-EXTRN install_hardware_irq:PROC           ; Install IRQ for specific NIC
-EXTRN restore_all_hardware_irqs:PROC      ; Restore all hardware IRQs
-EXTRN packet_api_dispatcher:PROC          ; Full packet driver API
+extern hardware_get_detected_nics     ; Get detected NIC information
+extern install_hardware_irq           ; Install IRQ for specific NIC
+extern restore_all_hardware_irqs      ; Restore all hardware IRQs
+extern packet_api_dispatcher          ; Full packet driver API
 
 ; Diagnostic and logging functions
-EXTRN log_vector_ownership_warning:PROC   ; Log vector ownership issues
-EXTRN log_hardware_irq_restore_warning:PROC ; Log IRQ restore warnings
+extern log_vector_ownership_warning   ; Log vector ownership issues
+extern log_hardware_irq_restore_warning ; Log IRQ restore warnings
 
 ; DOS integration functions
-EXTRN dos_idle_background_processing:PROC ; Background tasks during DOS idle
+extern dos_idle_background_processing ; Background tasks during DOS idle
 
 ; Defensive programming integration
-EXTRN defensive_init:PROC       ; From defensive_integration.asm
-EXTRN defensive_shutdown:PROC   ; From defensive_integration.asm
-EXTRN safe_restore_vector:PROC  ; From defensive_integration.asm
-EXTRN check_vector_ownership:PROC ; From defensive_integration.asm
+extern defensive_init       ; From defensive_integration.asm
+extern defensive_shutdown   ; From defensive_integration.asm
+extern safe_restore_vector  ; From defensive_integration.asm
+extern check_vector_ownership ; From defensive_integration.asm
 
 ; Public function exports
-PUBLIC driver_entry
-PUBLIC tsr_main
-PUBLIC install_interrupts
-PUBLIC uninstall_interrupts
-PUBLIC check_driver_loaded
-PUBLIC packet_handler
-PUBLIC dos_idle_handler
+global driver_entry
+global tsr_main
+global install_interrupts
+global uninstall_interrupts
+global check_driver_loaded
+global packet_handler
+global dos_idle_handler
 
 ;-----------------------------------------------------------------------------
 ; driver_entry - Main driver entry point
@@ -113,7 +113,7 @@ PUBLIC dos_idle_handler
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-driver_entry PROC
+driver_entry:
         push    bp
         mov     bp, sp
         push    bx
@@ -124,10 +124,10 @@ driver_entry PROC
         push    ds
         push    es
 
-        ; Set up data segment
-        mov     ax, _DATA
+        ; Set up data segment (CS=DS in flat model)
+        push    cs
+        pop     ax
         mov     ds, ax
-        ASSUME  DS:_DATA
 
         ; Check if driver already loaded
         call    check_driver_loaded
@@ -178,46 +178,46 @@ driver_entry PROC
         jne     .install_error
 
         ; Mark driver as loaded
-        mov     byte ptr [driver_loaded], 1
-        mov     byte ptr [init_complete], 1
+        mov     byte [driver_loaded], 1
+        mov     byte [init_complete], 1
 
         ; Display installation success message
-        mov     dx, OFFSET install_msg
+        mov     dx, install_msg
         call    print_string
 
         ; Calculate TSR size and go resident
         call    tsr_main
-        
+
         ; Success - this point should not be reached after TSR
         mov     ax, SUCCESS
         jmp     .exit
 
 .already_loaded:
-        mov     dx, OFFSET already_loaded_msg
+        mov     dx, already_loaded_msg
         call    print_string
         mov     ax, ERROR_ALREADY_LOADED
         jmp     .exit
 
 .memory_error:
-        mov     dx, OFFSET memory_error_msg
+        mov     dx, memory_error_msg
         call    print_string
         mov     ax, ERROR_MEMORY
         jmp     .exit
 
 .defensive_error:
-        mov     dx, OFFSET defensive_error_msg
+        mov     dx, defensive_error_msg
         call    print_string
         mov     ax, ERROR_GENERAL
         jmp     .exit
 
 .cpu_error:
-        mov     dx, OFFSET cpu_error_msg
+        mov     dx, cpu_error_msg
         call    print_string
         mov     ax, ERROR_CPU_UNSUPPORTED
         jmp     .exit
 
 .hardware_error:
-        mov     dx, OFFSET hardware_error_msg
+        mov     dx, hardware_error_msg
         call    print_string
         mov     ax, ERROR_HARDWARE
         jmp     .exit
@@ -242,10 +242,10 @@ driver_entry PROC
 
 .install_irq_error:
         ; Hardware IRQ installation failed - continue with packet driver only
-        mov     dx, OFFSET hardware_irq_error_msg
+        mov     dx, hardware_irq_error_msg
         call    print_string
         ; Continue - packet driver can still work without hardware IRQs
-        jmp     .hardware_irq_install_complete
+        jmp     install_interrupts.hardware_irq_install_complete
 
 .exit:
         pop     es
@@ -257,7 +257,7 @@ driver_entry PROC
         pop     bx
         pop     bp
         ret
-driver_entry ENDP
+;; end driver_entry
 
 ;-----------------------------------------------------------------------------
 ; tsr_main - Make driver resident and calculate TSR size
@@ -266,7 +266,7 @@ driver_entry ENDP
 ; Output: Does not return (terminates and stays resident)
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-tsr_main PROC
+tsr_main:
         push    bp
         mov     bp, sp
         push    ax
@@ -280,7 +280,7 @@ tsr_main PROC
 
         ; If we have UMB, relocate before going resident
         call    finalize_umb_relocation
-        
+
         ; Release discardable initialization memory
         call    release_init_memory
 
@@ -289,7 +289,7 @@ tsr_main PROC
         mov     al, SUCCESS                 ; Exit code
         mov     dx, [tsr_size]             ; Optimized size in paragraphs
         int     21h                        ; DOS function call
-        
+
         ; This point should never be reached
         pop     dx
         pop     cx
@@ -297,7 +297,7 @@ tsr_main PROC
         pop     ax
         pop     bp
         ret
-tsr_main ENDP
+;; end tsr_main
 
 ;-----------------------------------------------------------------------------
 ; install_interrupts - Install interrupt vectors
@@ -306,7 +306,7 @@ tsr_main ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX, BX, CX, DX, ES
 ;-----------------------------------------------------------------------------
-install_interrupts PROC
+install_interrupts:
         push    bp
         mov     bp, sp
         push    bx
@@ -321,13 +321,13 @@ install_interrupts PROC
         mov     al, PACKET_INT
         int     21h
         ; ES:BX now contains original vector
-        mov     word ptr [original_vectors], bx
-        mov     word ptr [original_vectors+2], es
+        mov     word [original_vectors], bx
+        mov     word [original_vectors+2], es
 
         ; Install our packet driver interrupt handler
         mov     ah, DOS_FUNC_SET_VEC
         mov     al, PACKET_INT
-        mov     dx, OFFSET packet_handler
+        mov     dx, packet_handler
         push    ds
         push    cs
         pop     ds
@@ -339,13 +339,13 @@ install_interrupts PROC
         mov     al, DOS_IDLE_INT
         int     21h
         ; ES:BX now contains original vector
-        mov     word ptr [original_int28], bx
-        mov     word ptr [original_int28+2], es
+        mov     word [original_int28], bx
+        mov     word [original_int28+2], es
 
         ; Install our DOS idle interrupt handler for background processing
         mov     ah, DOS_FUNC_SET_VEC
         mov     al, DOS_IDLE_INT
-        mov     dx, OFFSET dos_idle_handler
+        mov     dx, dos_idle_handler
         push    ds
         push    cs
         pop     ds
@@ -353,15 +353,15 @@ install_interrupts PROC
         pop     ds
 
         ; Store installed vector for signature check
-        mov     word ptr [install_vector], OFFSET packet_handler
-        mov     word ptr [install_vector+2], cs
+        mov     word [install_vector], packet_handler
+        mov     word [install_vector+2], cs
 
         ; Install hardware interrupt handler for detected NICs
         ; Query hardware layer for detected NICs and their IRQ assignments
         call    hardware_get_detected_nics  ; Returns count in AX, info in hardware table
         cmp     ax, 0
         je      .no_hardware_irqs          ; No NICs detected, skip IRQ setup
-        
+
         ; Install IRQ handlers for each detected NIC
         mov     cx, ax                      ; CX = number of NICs
         mov     si, 0                       ; SI = NIC index
@@ -376,7 +376,7 @@ install_interrupts PROC
         inc     si
         dec     cx
         jnz     .install_irq_loop
-        
+
 .no_hardware_irqs:
 .hardware_irq_install_complete:
 
@@ -390,7 +390,11 @@ install_interrupts PROC
         pop     bx
         pop     bp
         ret
-install_interrupts ENDP
+
+.install_irq_error:
+        ; Jump to error handler defined in driver_entry
+        jmp     driver_entry.install_irq_error
+;; end install_interrupts
 
 ;-----------------------------------------------------------------------------
 ; uninstall_interrupts - Restore original interrupt vectors
@@ -399,7 +403,7 @@ install_interrupts ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX, BX, CX, DX, ES
 ;-----------------------------------------------------------------------------
-uninstall_interrupts PROC
+uninstall_interrupts:
         push    bp
         mov     bp, sp
         push    bx
@@ -408,18 +412,19 @@ uninstall_interrupts PROC
         push    es
         push    ds
 
-        ; Restore our data segment first
-        mov     ax, _DATA
+        ; Restore our data segment first (CS=DS in flat model)
+        push    cs
+        pop     ax
         mov     ds, ax
-        
+
         ; Use safe vector restoration instead of blind restoration
         ; This checks if we still own the vector before restoring it
         mov     al, PACKET_INT          ; Interrupt number
         mov     dx, cs                  ; Our handler segment
         ; Get actual packet handler offset from our installed handler
-        mov     bx, OFFSET packet_handler   ; Our handler offset
-        mov     cx, word ptr [original_vectors+2]  ; Original vector segment
-        mov     si, word ptr [original_vectors]    ; Original vector offset
+        mov     bx, packet_handler   ; Our handler offset
+        mov     cx, word [original_vectors+2]  ; Original vector segment
+        mov     si, word [original_vectors]    ; Original vector offset
         call    safe_restore_vector
         jc      .vector_not_restored    ; Vector was not ours - cannot restore safely
         jmp     .vector_restore_complete
@@ -430,7 +435,7 @@ uninstall_interrupts PROC
         ; Log vector ownership event for diagnostics
         call    log_vector_ownership_warning
         ; Set a warning flag but continue with shutdown
-        mov     byte ptr [vector_stolen_flag], 1
+        mov     byte [vector_stolen_flag], 1
 
 .vector_restore_complete:
         ; Shutdown defensive programming systems
@@ -439,9 +444,9 @@ uninstall_interrupts PROC
         ; Restore DOS idle interrupt vector (INT 28h) first
         mov     ah, DOS_FUNC_SET_VEC
         mov     al, DOS_IDLE_INT
-        mov     dx, word ptr [original_int28]       ; Original vector offset
+        mov     dx, word [original_int28]       ; Original vector offset
         push    ds
-        mov     ds, word ptr [original_int28+2]     ; Original vector segment
+        mov     ds, word [original_int28+2]     ; Original vector segment
         int     21h
         pop     ds
 
@@ -450,15 +455,15 @@ uninstall_interrupts PROC
         cmp     ax, 0
         jne     .hardware_irq_restore_failed
         jmp     .hardware_irq_restore_complete
-        
+
 .hardware_irq_restore_failed:
         ; Log but don't fail shutdown - vectors may have been chained
         call    log_hardware_irq_restore_warning
-        
+
 .hardware_irq_restore_complete:
         ; Clear installation signature
-        mov     word ptr [install_vector], 0
-        mov     word ptr [install_vector+2], 0
+        mov     word [install_vector], 0
+        mov     word [install_vector+2], 0
 
         mov     ax, SUCCESS
 
@@ -469,7 +474,7 @@ uninstall_interrupts PROC
         pop     bx
         pop     bp
         ret
-uninstall_interrupts ENDP
+;; end uninstall_interrupts
 
 ;-----------------------------------------------------------------------------
 ; check_driver_loaded - Check if driver is already loaded
@@ -478,7 +483,7 @@ uninstall_interrupts ENDP
 ; Output: AX = 0 if not loaded, non-zero if already loaded
 ; Uses:   AX, BX, CX, DX, ES
 ;-----------------------------------------------------------------------------
-check_driver_loaded PROC
+check_driver_loaded:
         push    bp
         mov     bp, sp
         push    bx
@@ -490,20 +495,20 @@ check_driver_loaded PROC
         mov     ah, DOS_FUNC_GET_VEC
         mov     al, PACKET_INT
         int     21h
-        
+
         ; Check if vector points to valid memory (not 0:0)
         mov     ax, es
         or      ax, bx
         jz      .not_loaded     ; Vector is 0:0, definitely not loaded
-        
+
         ; Try installation check using packet driver signature
         mov     ax, INSTALL_CHECK_AX
         int     PACKET_INT
-        
+
         ; Check for expected response
         cmp     ax, INSTALL_RESP_AX
         jne     .not_loaded
-        
+
         ; Driver appears to be loaded
         mov     ax, ERROR_ALREADY_LOADED
         jmp     .exit
@@ -518,7 +523,7 @@ check_driver_loaded PROC
         pop     bx
         pop     bp
         ret
-check_driver_loaded ENDP
+;; end check_driver_loaded
 
 ;-----------------------------------------------------------------------------
 ; packet_handler - Packet Driver API interrupt handler (INT 60h)
@@ -527,11 +532,11 @@ check_driver_loaded ENDP
 ; Output: Per function specification
 ; Uses:   Per function specification
 ;-----------------------------------------------------------------------------
-packet_handler PROC FAR
+packet_handler: ;; FAR procedure
         ; Check for installation signature request
         cmp     ax, INSTALL_CHECK_AX
         jne     .not_install_check
-        
+
         ; Return installation signature
         mov     ax, INSTALL_RESP_AX
         iret
@@ -548,15 +553,14 @@ packet_handler PROC FAR
         push    bp
         push    ds
         push    es
-        
+
         ; Set up data segment
         push    cs
         pop     ds
-        ASSUME  DS:_DATA
-        
+
         ; Call packet API dispatcher
         call    packet_api_dispatcher       ; Handles all packet driver functions
-        
+
         ; Restore registers
         pop     es
         pop     ds
@@ -568,10 +572,10 @@ packet_handler PROC FAR
         pop     bx
         ; Keep AX for return value
         add     sp, 2                       ; Skip saved AX
-        
+
         ; Return with appropriate flags
         iret
-packet_handler ENDP
+;; end packet_handler
 
 ;-----------------------------------------------------------------------------
 ; dos_idle_handler - DOS idle interrupt handler (INT 28h)
@@ -583,7 +587,7 @@ packet_handler ENDP
 ; Output: None
 ; Uses:   None (preserves all registers)
 ;-----------------------------------------------------------------------------
-dos_idle_handler PROC FAR
+dos_idle_handler: ;; FAR procedure
         ; Save all registers for background processing
         push    ax
         push    bx
@@ -594,15 +598,14 @@ dos_idle_handler PROC FAR
         push    bp
         push    ds
         push    es
-        
+
         ; Set up our data segment
         push    cs
         pop     ds
-        ASSUME  DS:_DATA
-        
+
         ; Perform background driver tasks during DOS idle time
         call    dos_idle_background_processing
-        
+
         ; Restore all registers
         pop     es
         pop     ds
@@ -613,13 +616,13 @@ dos_idle_handler PROC FAR
         pop     cx
         pop     bx
         pop     ax
-        
+
         ; Chain to original INT 28h handler
         pushf                           ; Simulate interrupt call
-        call    dword ptr [original_int28]
-        
+        call far [original_int28]
+
         iret
-dos_idle_handler ENDP
+;; end dos_idle_handler
 
 ;-----------------------------------------------------------------------------
 ; Memory optimization support functions
@@ -632,7 +635,7 @@ dos_idle_handler ENDP
 ; Output: Updates UMB status variables
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-attempt_umb_loading PROC
+attempt_umb_loading:
         push    bp
         mov     bp, sp
         push    cx
@@ -640,23 +643,23 @@ attempt_umb_loading PROC
         ; Calculate required TSR size first
         call    calculate_optimized_tsr_size
         mov     cx, ax                      ; CX = required paragraphs
-        
+
         ; Attempt UMB allocation
         call    attempt_umb_allocation
         jc      .no_umb
-        
+
         ; Success - UMB allocated
         jmp     short .exit
 
 .no_umb:
         ; UMB allocation failed - will use conventional memory
         ; This is not an error, just less optimal
-        
+
 .exit:
         pop     cx
         pop     bp
         ret
-attempt_umb_loading ENDP
+;; end attempt_umb_loading
 
 ;-----------------------------------------------------------------------------
 ; calculate_optimized_tsr_size - Calculate minimal resident size
@@ -665,27 +668,27 @@ attempt_umb_loading ENDP
 ; Output: AX = size in paragraphs
 ; Uses:   AX, BX, CX
 ;-----------------------------------------------------------------------------
-calculate_optimized_tsr_size PROC
+calculate_optimized_tsr_size:
         push    bp
         mov     bp, sp
         push    bx
         push    cx
 
         ; Calculate resident code size only (exclude init segments)
-        ; In a full implementation, this would use symbols from 
+        ; In a full implementation, this would use symbols from
         ; tsr_memory_opt.asm to get exact resident boundaries
-        
+
         ; For now, use a conservative estimate
         ; Resident code: ~2KB, Resident data: ~1KB, Stack: 512 bytes
         mov     ax, 2048 + 1024 + 512       ; Conservative resident size
-        
+
         ; Add PSP size (256 bytes)
         add     ax, 256
-        
+
         ; Round up to paragraphs
         add     ax, 15
         shr     ax, 4                       ; Convert to paragraphs
-        
+
         ; Minimum safety margin
         add     ax, 4                       ; Add 4 paragraphs (64 bytes) safety
 
@@ -693,16 +696,16 @@ calculate_optimized_tsr_size PROC
         pop     bx
         pop     bp
         ret
-calculate_optimized_tsr_size ENDP
+;; end calculate_optimized_tsr_size
 
 ;-----------------------------------------------------------------------------
 ; finalize_umb_relocation - Complete UMB relocation if available
 ;
-; Input:  None  
+; Input:  None
 ; Output: None
 ; Uses:   AX, BX, CX
 ;-----------------------------------------------------------------------------
-finalize_umb_relocation PROC
+finalize_umb_relocation:
         push    bp
         mov     bp, sp
         push    ax
@@ -713,33 +716,33 @@ finalize_umb_relocation PROC
         mov     ax, [umb_segment]           ; This would come from tsr_common
         cmp     ax, 0
         jz      .no_umb
-        
+
         ; UMB is available - in a full implementation, would:
         ; 1. Copy resident code/data to UMB
         ; 2. Update interrupt vectors to point to UMB
         ; 3. Set TSR size to minimal (just PSP in conventional memory)
-        
+
         ; For now, just note that UMB is available
         ; The TSR size calculation already accounts for this
-        
+
 .no_umb:
         ; Using conventional memory - normal TSR operation
-        
+
         pop     cx
         pop     bx
         pop     ax
         pop     bp
         ret
-finalize_umb_relocation ENDP
+;; end finalize_umb_relocation
 
 ;-----------------------------------------------------------------------------
 ; release_init_memory - Release discardable initialization memory
 ;
 ; Input:  None
-; Output: None  
+; Output: None
 ; Uses:   AX, BX
 ;-----------------------------------------------------------------------------
-release_init_memory PROC
+release_init_memory:
         push    bp
         mov     bp, sp
         push    ax
@@ -748,30 +751,30 @@ release_init_memory PROC
         ; Use DOS function 4Ah to resize memory block
         ; This releases everything above the resident size
         mov     ah, 4Ah                     ; Modify allocated memory blocks
-        mov     bx, [tsr_size]             ; New size in paragraphs  
+        mov     bx, [tsr_size]             ; New size in paragraphs
         int     21h                        ; Release excess memory
         jc      .resize_failed
-        
+
         ; Successfully released init memory
         jmp     short .exit
 
 .resize_failed:
         ; Memory resize failed - not critical, continue anyway
         ; The init memory will just stay allocated
-        
+
 .exit:
         pop     bx
         pop     ax
         pop     bp
         ret
-release_init_memory ENDP
+;; end release_init_memory
 
 ;-----------------------------------------------------------------------------
 ; External function references for memory optimization
 ;-----------------------------------------------------------------------------
-EXTRN initialize_memory_optimization:PROC   ; From tsr_memory_opt.asm
-EXTRN attempt_umb_allocation:PROC           ; From tsr_common.asm
-EXTRN umb_segment:WORD                      ; From tsr_common.asm data
+extern initialize_memory_optimization   ; From tsr_memory_opt.asm
+extern attempt_umb_allocation           ; From tsr_common.asm
+extern umb_segment                      ; From tsr_common.asm data
 
 ;-----------------------------------------------------------------------------
 ; print_string - Print null-terminated string to console
@@ -780,34 +783,30 @@ EXTRN umb_segment:WORD                      ; From tsr_common.asm data
 ; Output: None
 ; Uses:   AX, DX
 ;-----------------------------------------------------------------------------
-print_string PROC
+print_string:
         push    ax
         push    si
         push    bx
-        
+
         mov     si, dx
 .loop:
         lodsb                   ; Load byte from DS:SI into AL
         or      al, al         ; Check for null terminator
         jz      .done
-        
+
         ; Print character using DOS function 02h
         mov     dl, al
         mov     ah, 02h
         int     21h
         jmp     .loop
-        
+
 .done:
         pop     bx
         pop     si
         pop     ax
         ret
-print_string ENDP
+;; end print_string
 
 ; Marker for end of resident code
 tsr_end:
         nop     ; End marker for TSR size calculation
-
-_TEXT ENDS
-
-END driver_entry

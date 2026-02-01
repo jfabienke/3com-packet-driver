@@ -7,12 +7,20 @@
  */
 
 #include <stddef.h>
-#include "../include/hardware.h"
-#include "../include/logging.h"
+#include "hardware.h"
+#include "logging.h"
+
+/* Size verification - confirm packing is working */
+#ifdef __WATCOMC__
+/* Watcom doesn't support _Static_assert, use pragma message approximation */
+#pragma message("hwstubs.c: sizeof(nic_info_t) verification at runtime")
+#endif
 
 /* Global NIC array - will be populated by hardware detection */
-static nic_info_t g_nics[MAX_NICS] = {0};
-static int g_nic_count = 0;
+/* External linkage to match declarations in hardware.h */
+/* Zero-initialization is still guaranteed for globals in C89 */
+nic_info_t g_nics[MAX_NICS];
+int g_num_nics;
 
 /**
  * @brief Get the primary (first active) NIC for testing
@@ -24,26 +32,47 @@ static int g_nic_count = 0;
  */
 nic_info_t* hardware_get_primary_nic(void) {
     int i;
-    
-    for (i = 0; i < g_nic_count; i++) {
+
+    /* Size verification - log actual struct sizes for DGROUP analysis */
+    log_info("SIZEOF: nic_info_t=%u, MAX_NICS=%d, g_nics[]=%u bytes",
+             (unsigned)sizeof(nic_info_t), MAX_NICS,
+             (unsigned)(MAX_NICS * sizeof(nic_info_t)));
+
+    for (i = 0; i < g_num_nics; i++) {
         if ((g_nics[i].status & NIC_STATUS_PRESENT) &&
             (g_nics[i].status & NIC_STATUS_INITIALIZED)) {
-            LOG_INFO("Primary NIC selected: index %d, type %d", 
+            log_info("Primary NIC selected: index %d, type %d",
                      i, g_nics[i].type);
             return &g_nics[i];
         }
     }
     
-    LOG_WARNING("No primary NIC available for testing");
+    log_warning("No primary NIC available for testing");
     return NULL;
 }
 
 /**
  * @brief Stub for hardware cleanup
- * 
+ *
  * This will be replaced by the actual implementation
  */
-int hardware_cleanup(void) {
-    LOG_INFO("Hardware cleanup (stub)");
+void hardware_cleanup(void) {
+    log_info("Hardware cleanup (stub)");
+}
+
+/**
+ * @brief Stub for clearing pending NIC interrupts
+ *
+ * This will be replaced by the actual implementation
+ * which reads/acknowledges pending interrupt status.
+ *
+ * @param nic Pointer to NIC info structure
+ * @return 0 on success, negative on error
+ */
+int hardware_clear_interrupts(nic_info_t *nic) {
+    if (!nic) {
+        return -1;
+    }
+    log_info("Hardware clear interrupts (stub)");
     return 0;
 }

@@ -152,7 +152,7 @@ uint32_t benchmark_network_throughput(void);
 #define SHOULD_ENCOURAGE_WRITE_BACK(analysis) \
     (((analysis)->coherency != COHERENCY_PROBLEM || \
       (analysis)->selected_tier <= CACHE_TIER_3_SOFTWARE) && \
-     detect_cache_mode() != CACHE_WRITE_BACK)
+     detect_cache_mode() != CACHE_MODE_WRITE_BACK)
 
 #define PERFORMANCE_IMPROVEMENT_SIGNIFICANT(before, after) \
     (calculate_performance_improvement_percentage((before), (after)) >= MIN_SIGNIFICANT_IMPROVEMENT)

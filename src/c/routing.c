@@ -6,6 +6,12 @@
  *
  * This file is part of the 3Com Packet Driver project.
  *
+ * Last Updated: 2026-01-26 15:30 UTC
+ *
+ * XMS OPTIMIZATION: On 386+ systems with XMS available, advanced routing
+ * features (large bridge tables, extended learning) use XMS memory. On
+ * 8086/286 systems or without XMS, basic routing remains functional with
+ * reduced table sizes.
  */
 
 #include "routing.h"
@@ -19,6 +25,7 @@
 #include "atomtime.h"
 #include "arp.h"
 #include "nic_init.h"
+#include "xms_alloc.h"
 
 /* Global routing state */
 routing_table_t g_routing_table;
@@ -30,6 +37,20 @@ bool g_routing_enabled = false;
 static bool g_routing_initialized = false;
 static bool g_learning_enabled = true;
 static uint32_t g_aging_time_ms = 300000; /* 5 minutes default */
+
+/*
+ * XMS-based advanced routing features.
+ * When XMS is available, we can support larger bridge tables and
+ * extended learning features. Without XMS, basic routing still works
+ * but with reduced capacity.
+ */
+static int g_routing_xms_available = 0;
+static uint16_t g_max_route_entries = 64;   /* Default without XMS */
+static uint16_t g_max_bridge_entries = 128; /* Default without XMS */
+
+/* With XMS, we can support larger tables */
+#define ROUTING_XMS_MAX_ROUTES  256
+#define ROUTING_XMS_MAX_BRIDGE  512
 
 /* Rate limiting structures */
 typedef struct rate_limit_info {
@@ -53,28 +74,73 @@ static bool routing_check_rate_limit_internal(uint8_t nic_index);
 /* Routing initialization and cleanup */
 int routing_init(const config_t *config) {
     int result;
+    int xms_result;
     (void)config; /* Currently unused, accepted for interface consistency */
 
     if (g_routing_initialized) {
         return SUCCESS;
     }
 
-    /* Initialize routing table */
-    result = routing_table_init(&g_routing_table, 256);
+    LOG_INFO("Initializing routing subsystem");
+
+    /*
+     * XMS Table Allocation Strategy:
+     * The routing and bridge tables can grow large (up to ~16 KB combined).
+     * On 386+ with XMS, we allocate extended table capacity from XMS.
+     * On 8086/286 or without XMS, we use reduced table sizes.
+     *
+     * Note: Unlike promiscuous mode which requires XMS for the large buffer,
+     * routing can function on all systems - just with different capacity limits.
+     */
+    g_routing_xms_available = 0;
+    g_max_route_entries = 64;    /* Conservative default */
+    g_max_bridge_entries = 128;  /* Conservative default */
+
+    /* Check if XMS is available for extended routing tables */
+    if (g_xms_available) {
+        /* Attempt to allocate routing tables from XMS */
+        xms_result = xms_alloc_routing_tables();
+
+        if (xms_result == 0) {
+            g_routing_xms_available = 1;
+            g_max_route_entries = ROUTING_XMS_MAX_ROUTES;
+            g_max_bridge_entries = ROUTING_XMS_MAX_BRIDGE;
+            LOG_INFO("Routing: using XMS for extended tables (%d routes, %d bridge entries)",
+                     g_max_route_entries, g_max_bridge_entries);
+        } else {
+            LOG_WARNING("Routing: XMS allocation failed (%d), using reduced capacity", xms_result);
+        }
+    } else {
+        LOG_INFO("Routing: XMS not available, using basic tables");
+        if (xms_unavailable_reason()) {
+            LOG_INFO("Reason: %s", xms_unavailable_reason());
+        }
+    }
+
+    /* Initialize routing table with appropriate capacity */
+    result = routing_table_init(&g_routing_table, g_max_route_entries);
     if (result != SUCCESS) {
+        if (g_routing_xms_available) {
+            xms_free_routing_tables();
+            g_routing_xms_available = 0;
+        }
         return result;
     }
-    
-    /* Initialize bridge table */
-    result = bridge_table_init(&g_bridge_table, 512);
+
+    /* Initialize bridge table with appropriate capacity */
+    result = bridge_table_init(&g_bridge_table, g_max_bridge_entries);
     if (result != SUCCESS) {
         routing_table_cleanup(&g_routing_table);
+        if (g_routing_xms_available) {
+            xms_free_routing_tables();
+            g_routing_xms_available = 0;
+        }
         return result;
     }
-    
+
     /* Initialize statistics */
     routing_stats_init(&g_routing_stats);
-    
+
     /* Initialize rate limiting */
     {
         int i;
@@ -84,16 +150,19 @@ int routing_init(const config_t *config) {
             g_rate_limits[i].last_reset_time = 0;
         }
     }
-    
+
     /* Set default routing configuration */
     g_routing_table.default_decision = ROUTE_DECISION_FORWARD;
     g_routing_table.default_nic = 0;
     g_routing_table.learning_enabled = g_learning_enabled;
     g_routing_table.learning_timeout = g_aging_time_ms;
-    
+
     g_routing_initialized = true;
     g_routing_enabled = false; /* Must be explicitly enabled */
-    
+
+    LOG_INFO("Routing subsystem initialized (max routes: %d, max bridge: %d)",
+             g_max_route_entries, g_max_bridge_entries);
+
     return SUCCESS;
 }
 
@@ -101,16 +170,31 @@ void routing_cleanup(void) {
     if (!g_routing_initialized) {
         return;
     }
-    
+
+    LOG_INFO("Cleaning up routing subsystem");
+
     /* Cleanup routing and bridge tables */
     routing_table_cleanup(&g_routing_table);
     bridge_table_cleanup(&g_bridge_table);
-    
+
+    /* Free XMS if allocated */
+    if (g_routing_xms_available) {
+        xms_free_routing_tables();
+        g_routing_xms_available = 0;
+        LOG_DEBUG("Freed XMS routing tables");
+    }
+
     /* Clear statistics */
     routing_stats_init(&g_routing_stats);
-    
+
+    /* Reset capacity to defaults */
+    g_max_route_entries = 64;
+    g_max_bridge_entries = 128;
+
     g_routing_initialized = false;
     g_routing_enabled = false;
+
+    LOG_INFO("Routing subsystem cleaned up");
 }
 
 int routing_enable(bool enable) {

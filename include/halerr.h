@@ -204,25 +204,25 @@ extern "C" {
 
 /* Error severity levels */
 typedef enum {
-    HAL_SEVERITY_INFO     = 0,  /* Informational */
-    HAL_SEVERITY_WARNING  = 1,  /* Warning condition */
-    HAL_SEVERITY_ERROR    = 2,  /* Error condition */
-    HAL_SEVERITY_CRITICAL = 3,  /* Critical error */
-    HAL_SEVERITY_FATAL    = 4   /* Fatal error */
+    HAL_SEVERITY_INFO,      /* 0: Informational */
+    HAL_SEVERITY_WARNING,   /* 1: Warning condition */
+    HAL_SEVERITY_ERROR,     /* 2: Error condition */
+    HAL_SEVERITY_CRITICAL,  /* 3: Critical error */
+    HAL_SEVERITY_FATAL      /* 4: Fatal error */
 } hal_error_severity_t;
 
 /* Error category classifications */
 typedef enum {
-    HAL_ERROR_CAT_GENERIC     = 0,  /* Generic errors */
-    HAL_ERROR_CAT_MEMORY      = 1,  /* Memory-related */
-    HAL_ERROR_CAT_HARDWARE    = 2,  /* Hardware-related */
-    HAL_ERROR_CAT_NETWORK     = 3,  /* Network-related */
-    HAL_ERROR_CAT_DMA         = 4,  /* DMA-related */
-    HAL_ERROR_CAT_INTERRUPT   = 5,  /* Interrupt-related */
-    HAL_ERROR_CAT_DRIVER      = 6,  /* Driver/software */
-    HAL_ERROR_CAT_3C509B      = 7,  /* 3C509B specific */
-    HAL_ERROR_CAT_3C515       = 8,  /* 3C515-TX specific */
-    HAL_ERROR_CAT_ASSEMBLY    = 9   /* Assembly interface */
+    HAL_ERROR_CAT_GENERIC,    /* 0: Generic errors */
+    HAL_ERROR_CAT_MEMORY,     /* 1: Memory-related */
+    HAL_ERROR_CAT_HARDWARE,   /* 2: Hardware-related */
+    HAL_ERROR_CAT_NETWORK,    /* 3: Network-related */
+    HAL_ERROR_CAT_DMA,        /* 4: DMA-related */
+    HAL_ERROR_CAT_INTERRUPT,  /* 5: Interrupt-related */
+    HAL_ERROR_CAT_DRIVER,     /* 6: Driver/software */
+    HAL_ERROR_CAT_3C509B,     /* 7: 3C509B specific */
+    HAL_ERROR_CAT_3C515,      /* 8: 3C515-TX specific */
+    HAL_ERROR_CAT_ASSEMBLY    /* 9: Assembly interface */
 } hal_error_category_t;
 
 /* Error information structure */
@@ -270,18 +270,24 @@ hal_error_category_t hal_get_error_category(int error_code);
  * @param error_code HAL error/return code
  * @return true if success, false if error
  */
-static inline bool hal_is_success(int error_code) {
+#ifndef HAL_IS_SUCCESS_DEFINED
+#define HAL_IS_SUCCESS_DEFINED
+static bool hal_is_success(int error_code) {
     return (error_code == HAL_SUCCESS);
 }
+#endif
 
 /**
  * @brief Check if error code indicates failure
  * @param error_code HAL error/return code
  * @return true if error, false if success
  */
-static inline bool hal_is_error(int error_code) {
+#ifndef HAL_IS_ERROR_DEFINED
+#define HAL_IS_ERROR_DEFINED
+static bool hal_is_error(int error_code) {
     return (error_code < 0);
 }
+#endif
 
 /**
  * @brief Check if error is recoverable
@@ -295,16 +301,19 @@ bool hal_is_recoverable_error(int error_code);
  * @param error_code HAL error code
  * @return true if hardware error, false otherwise
  */
-static inline bool hal_is_hardware_error(int error_code) {
+#ifndef HAL_IS_HARDWARE_ERROR_DEFINED
+#define HAL_IS_HARDWARE_ERROR_DEFINED
+static bool hal_is_hardware_error(int error_code) {
     return (error_code >= HAL_ERROR_HARDWARE_FAILURE && error_code <= HAL_ERROR_HARDWARE_MISMATCH);
 }
+#endif
 
 /**
  * @brief Check if error is memory-related
  * @param error_code HAL error code
  * @return true if memory error, false otherwise
  */
-static inline bool hal_is_memory_error(int error_code) {
+static bool hal_is_memory_error(int error_code) {
     return (error_code >= HAL_ERROR_MEMORY && error_code <= HAL_ERROR_DMA_MEMORY);
 }
 
@@ -313,7 +322,7 @@ static inline bool hal_is_memory_error(int error_code) {
  * @param error_code HAL error code
  * @return true if network error, false otherwise
  */
-static inline bool hal_is_network_error(int error_code) {
+static bool hal_is_network_error(int error_code) {
     return (error_code >= HAL_ERROR_LINK_DOWN && error_code <= HAL_ERROR_SEQUENCING_ERROR);
 }
 

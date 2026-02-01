@@ -28,20 +28,20 @@ extern "C" {
 
 /* Promiscuous mode levels */
 typedef enum {
-    PROMISC_LEVEL_OFF = 0,           /* Disabled */
-    PROMISC_LEVEL_BASIC,             /* Basic promiscuous mode */
-    PROMISC_LEVEL_FULL,              /* Full packet capture */
-    PROMISC_LEVEL_SELECTIVE          /* Selective with filters */
+    PROMISC_LEVEL_OFF,               /* 0: Disabled */
+    PROMISC_LEVEL_BASIC,             /* 1: Basic promiscuous mode */
+    PROMISC_LEVEL_FULL,              /* 2: Full packet capture */
+    PROMISC_LEVEL_SELECTIVE          /* 3: Selective with filters */
 } promisc_level_t;
 
 /* Promiscuous mode filter types */
 typedef enum {
-    PROMISC_FILTER_ALL = 0,          /* Capture all packets */
-    PROMISC_FILTER_PROTOCOL,         /* Filter by protocol */
-    PROMISC_FILTER_MAC_SRC,          /* Filter by source MAC */
-    PROMISC_FILTER_MAC_DST,          /* Filter by destination MAC */
-    PROMISC_FILTER_LENGTH,           /* Filter by packet length */
-    PROMISC_FILTER_CONTENT           /* Filter by packet content */
+    PROMISC_FILTER_ALL,              /* 0: Capture all packets */
+    PROMISC_FILTER_PROTOCOL,         /* 1: Filter by protocol */
+    PROMISC_FILTER_MAC_SRC,          /* 2: Filter by source MAC */
+    PROMISC_FILTER_MAC_DST,          /* 3: Filter by destination MAC */
+    PROMISC_FILTER_LENGTH,           /* 4: Filter by packet length */
+    PROMISC_FILTER_CONTENT           /* 5: Filter by packet content */
 } promisc_filter_type_t;
 
 /* Promiscuous mode filter definition */
@@ -113,7 +113,8 @@ typedef struct {
 /* Global promiscuous mode state */
 extern promisc_config_t g_promisc_config;
 extern promiscuous_stats_t g_promisc_stats;
-extern promisc_packet_buffer_t g_promisc_buffers[PROMISC_BUFFER_COUNT];
+/* NOTE: g_promisc_buffers removed - now uses XMS allocation on 386+ systems.
+ * See src/c/promisc.c for XMS buffer strategy. */
 extern promisc_filter_t g_promisc_filters[PROMISC_MAX_FILTERS];
 extern promisc_app_handle_t g_promisc_apps[PROMISC_MAX_APPLICATIONS];
 extern volatile uint32_t g_promisc_buffer_head;
@@ -132,6 +133,10 @@ int promisc_get_packet(promisc_packet_buffer_t *buffer);
 int promisc_peek_packet(promisc_packet_buffer_t *buffer);
 void promisc_process_captured_packets(void);
 
+/* Assembly-callable wrapper for adding packets (XMS support) */
+int promisc_add_buffer_packet_asm(const uint8_t far *packet, uint16_t length,
+                                   uint8_t nic_index, uint8_t filter_matched);
+
 /* Filter management */
 int promisc_add_filter(const promisc_filter_t *filter);
 int promisc_remove_filter(int filter_id);
@@ -142,7 +147,7 @@ int promisc_get_filter_count(void);
 /* Application management */
 int promisc_register_application(uint32_t pid, promisc_level_t level, void far *callback);
 int promisc_unregister_application(uint16_t handle);
-int promisc_deliver_to_applications(const promisc_packet_buffer_t *packet);
+int promisc_deliver_to_applications(const promisc_packet_buffer_t HUGE *packet);
 int promisc_get_application_count(void);
 
 /* Statistics and monitoring */

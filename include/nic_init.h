@@ -118,6 +118,10 @@ typedef struct nic_detect_info {
     uint8_t connector_type;                     /* Physical connector type */
     uint16_t special_features;                  /* Special hardware features */
     
+    /* === Negotiated Link Parameters === */
+    uint8_t negotiated_duplex;                  /* Negotiated duplex (0=half, 1=full) */
+    uint16_t negotiated_speed;                  /* Negotiated speed (10, 100) */
+
     /* === Generic Bus Information === */
     uint8_t bus_type;                           /* Bus type (NIC_BUS_*) */
     
@@ -195,15 +199,17 @@ int nic_configure_3c509b(nic_info_t *nic);
 int nic_configure_3c515(nic_info_t *nic);
 
 /* Hardware detection helpers */
-bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info);
-bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info);
+/* Using int instead of bool for C89 compatibility (returns 0=false, 1=true) */
+int nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info);
+int nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info);
 int nic_read_mac_address_3c509b(uint16_t io_base, uint8_t *mac);
 int nic_read_mac_address_3c515(uint16_t io_base, uint8_t *mac);
 
 /* PnP and EISA detection */
 int nic_detect_pnp_3c509b(nic_detect_info_t *info_list, int max_count);
-int nic_detect_eisa_3c509b(nic_detect_info_t *info_list, int max_count);
-bool nic_is_pnp_capable(uint16_t io_base);
+int nic_detect_eisa_3c509b(void);
+/* Using int instead of bool for C89 compatibility */
+int nic_is_pnp_capable(uint16_t io_base);
 
 /* IRQ detection and configuration */
 int nic_detect_irq(nic_info_t *nic);
@@ -284,6 +290,9 @@ typedef struct nic_init_stats {
     uint32_t self_tests_passed;                 /* Self-tests passed */
 } nic_init_stats_t;
 
+/* Init statistics - always available (32 bytes - cheap telemetry)
+ * Large diagnostic structs (coherency_analysis, chipset_detection) are
+ * guarded by INIT_DIAG to save ~8KB DGROUP in release builds */
 extern nic_init_stats_t g_nic_init_stats;
 
 void nic_init_stats_clear(void);

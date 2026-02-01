@@ -9,8 +9,16 @@
 #ifndef _PCI_SHIM_H_
 #define _PCI_SHIM_H_
 
+/* C89 compatibility - include portability header first */
+#include "portabl.h"
+
+/* Try standard headers, fallback to portabl.h types */
+#ifdef __WATCOMC__
+/* Watcom C89 mode: portabl.h provides types */
+#else
 #include <stdint.h>
 #include <stdbool.h>
+#endif
 
 /**
  * @brief Install the PCI BIOS shim layer
@@ -88,13 +96,13 @@ void pci_shim_get_extended_stats(pci_shim_stats_t* stats);
 
 /**
  * @brief Control config space caching
- * 
+ *
  * Enable or disable config space caching for performance optimization.
  * Caching is forced on in V86 mode to minimize I/O port access.
- * 
- * @param enabled true to enable caching, false to disable
+ *
+ * @param enabled true (non-zero) to enable caching, false (0) to disable
  */
-void pci_shim_set_cache_enabled(bool enabled);
+void pci_shim_set_cache_enabled(int enabled);
 
 /**
  * @brief Clear config cache
@@ -105,8 +113,9 @@ void pci_shim_set_cache_enabled(bool enabled);
 void pci_shim_clear_cache(void);
 
 /* Enhanced config access functions with V86 awareness and caching */
-bool pci_shim_enhanced_install(void);
-bool pci_shim_enhanced_uninstall(void);
+/* Note: Use int instead of bool for C89/Watcom compatibility */
+int pci_shim_enhanced_install(void);
+int pci_shim_enhanced_uninstall(void);
 uint8_t pci_enhanced_read_config_byte(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint8_t pci_enhanced_write_config_byte(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint8_t value);
 uint16_t pci_enhanced_read_config_word(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);

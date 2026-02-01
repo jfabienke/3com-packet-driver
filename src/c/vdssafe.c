@@ -12,6 +12,8 @@
 #include <dos.h>
 #include <string.h>
 #include <stdlib.h>
+#include <conio.h>   /* For inportb, outportb */
+#include <i86.h>     /* For _enable, _disable */
 #include "../../include/vdssafe.h"
 #include "../../include/vds_core.h"
 #include "../../include/cpudet.h"
@@ -35,14 +37,14 @@ static unsigned short read_flags_watcom(void);
     value [ax]      \
     modify [];
 
-static bool asm_get_interrupt_flag(void)
+static int vds_get_interrupt_flag(void)
 {
     return (read_flags_watcom() & 0x0200) != 0;  /* IF is bit 9 */
 }
 
 #elif defined(__TURBOC__) || defined(__BORLANDC__)
 /* Borland/Turbo C - inline assembly for flags read */
-static bool asm_get_interrupt_flag(void)
+static int vds_get_interrupt_flag(void)
 {
     unsigned int flags;
     asm {
@@ -55,7 +57,7 @@ static bool asm_get_interrupt_flag(void)
 
 #elif defined(_MSC_VER)
 /* Microsoft C - use inline assembly */
-static bool asm_get_interrupt_flag(void)
+static int vds_get_interrupt_flag(void)
 {
     unsigned int flags;
     __asm {
@@ -68,12 +70,12 @@ static bool asm_get_interrupt_flag(void)
 
 #else
 /* Generic fallback - conservative, no side effects */
-static bool asm_get_interrupt_flag(void)
+static int vds_get_interrupt_flag(void)
 {
     /* Without compiler support, conservatively assume we might be in ISR */
     /* This is safe but may reject some valid VDS calls */
     /* Better to be safe than to corrupt interrupt state */
-    return false;  /* Conservative - assume disabled/ISR context */
+    return 0;  /* Conservative - assume disabled/ISR context */
 }
 #endif
 
@@ -97,44 +99,47 @@ static vds_safety_stats_t safety_stats = {0};
 static volatile uint16_t isr_nesting_depth = 0;  /* ISR nesting counter */
 
 /* Default constraints for common devices */
+/* C89: Use positional initializers instead of designated initializers */
+/* Order: address_bits, max_sg_entries, max_segment_len, no_cross_mask,
+          alignment_mask, require_contiguous, allow_bounce */
 const dma_constraints_t ISA_DMA_CONSTRAINTS = {
-    .address_bits = 24,         /* 16MB limit */
-    .max_sg_entries = 1,        /* No scatter/gather */
-    .max_segment_len = 65536,   /* 64KB max */
-    .no_cross_mask = 0xFFFF,    /* No 64KB crossing */
-    .alignment_mask = 0x01,     /* Word alignment */
-    .require_contiguous = true,
-    .allow_bounce = true
+    24,         /* address_bits: 16MB limit */
+    1,          /* max_sg_entries: No scatter/gather */
+    65536,      /* max_segment_len: 64KB max */
+    0xFFFF,     /* no_cross_mask: No 64KB crossing */
+    0x01,       /* alignment_mask: Word alignment */
+    true,       /* require_contiguous */
+    true        /* allow_bounce */
 };
 
 const dma_constraints_t PCI_DMA_CONSTRAINTS = {
-    .address_bits = 32,         /* 4GB addressing */
-    .max_sg_entries = 64,       /* Scatter/gather supported */
-    .max_segment_len = 0x100000, /* 1MB segments */
-    .no_cross_mask = 0,         /* No boundary restrictions */
-    .alignment_mask = 0x03,     /* DWORD alignment */
-    .require_contiguous = false,
-    .allow_bounce = true
+    32,         /* address_bits: 4GB addressing */
+    64,         /* max_sg_entries: Scatter/gather supported */
+    0x100000,   /* max_segment_len: 1MB segments */
+    0,          /* no_cross_mask: No boundary restrictions */
+    0x03,       /* alignment_mask: DWORD alignment */
+    false,      /* require_contiguous */
+    true        /* allow_bounce */
 };
 
 const dma_constraints_t NIC_3C509_CONSTRAINTS = {
-    .address_bits = 24,         /* ISA bus */
-    .max_sg_entries = 1,        /* PIO only, no DMA */
-    .max_segment_len = 1536,    /* Ethernet MTU */
-    .no_cross_mask = 0xFFFF,    /* 64KB boundary */
-    .alignment_mask = 0x01,     /* Word alignment */
-    .require_contiguous = true,
-    .allow_bounce = false       /* PIO doesn't need bounce */
+    24,         /* address_bits: ISA bus */
+    1,          /* max_sg_entries: PIO only, no DMA */
+    1536,       /* max_segment_len: Ethernet MTU */
+    0xFFFF,     /* no_cross_mask: 64KB boundary */
+    0x01,       /* alignment_mask: Word alignment */
+    true,       /* require_contiguous */
+    false       /* allow_bounce: PIO doesn't need bounce */
 };
 
 const dma_constraints_t NIC_3C515_CONSTRAINTS = {
-    .address_bits = 32,         /* Bus master DMA */
-    .max_sg_entries = 16,       /* Supports scatter/gather */
-    .max_segment_len = 65536,   /* 64KB segments */
-    .no_cross_mask = 0xFFFF,    /* Prefer no 64KB crossing */
-    .alignment_mask = 0x0F,     /* 16-byte alignment */
-    .require_contiguous = false,
-    .allow_bounce = true
+    32,         /* address_bits: Bus master DMA */
+    16,         /* max_sg_entries: Supports scatter/gather */
+    65536,      /* max_segment_len: 64KB segments */
+    0xFFFF,     /* no_cross_mask: Prefer no 64KB crossing */
+    0x0F,       /* alignment_mask: 16-byte alignment */
+    false,      /* require_contiguous */
+    true        /* allow_bounce */
 };
 
 /* Forward declarations */
@@ -231,7 +236,7 @@ bool vds_in_isr_context(void)
     }
     
     /* Signal 2: Check EFLAGS.IF interrupt flag */
-    saved_if = asm_get_interrupt_flag();
+    saved_if = vds_get_interrupt_flag();
     if (!saved_if) {
         /* Interrupts disabled - likely in critical section or ISR */
         /* This alone isn't definitive, but combined with other signals... */
@@ -314,29 +319,30 @@ vds_safe_error_t vds_lock_with_constraints(void far* addr, uint32_t size,
 {
     vds_raw_lock_result_t raw_result;
     uint8_t error_code;
-    
+    uint16_t flags;
+
     if (!lock || !constraints) {
         return VDS_SAFE_INVALID_CONSTRAINTS;
     }
-    
+
     memset(lock, 0, sizeof(*lock));
     safety_stats.total_locks++;
-    
+
     /* CRITICAL: Check ISR context first! */
     if (vds_in_isr_context()) {
         safety_stats.isr_rejections++;
         LOG_ERROR("VDS Safety: CRITICAL - VDS called from ISR context!");
         return VDS_SAFE_IN_ISR;
     }
-    
+
     /* Check constraints */
     if (!vds_check_constraints(addr, size, constraints)) {
         /* Constraints violated - try recovery */
-        return vds_lock_with_recovery(addr, size, constraints, lock);
+        return vds_lock_with_recovery(addr, size, constraints, direction, lock);
     }
-    
+
     /* Direct lock attempt */
-    uint16_t flags = 0;
+    flags = 0;
     if (constraints->require_contiguous) {
         flags |= 0x01;  /* VDS contiguous flag */
     }
@@ -380,18 +386,22 @@ vds_safe_error_t vds_lock_with_recovery(void far* addr, uint32_t size,
 {
     vds_raw_lock_result_t raw_result;
     uint8_t error_code;
-    
+    dma_constraints_t relaxed;
+    uint32_t linear;
+    uint32_t aligned;
+    uint32_t aligned_size;
+
     safety_stats.recovery_attempts++;
-    
+
     LOG_INFO("VDS Safety: Attempting recovery for 0x%p + %lu", addr, size);
-    
+
     /* Recovery Path 1: Try without contiguous requirement */
     if (constraints->require_contiguous && !constraints->allow_bounce) {
-        dma_constraints_t relaxed = *constraints;
+        relaxed = *constraints;
         relaxed.require_contiguous = false;
-        
+
         LOG_DEBUG("Recovery 1: Trying scatter/gather");
-        
+
         error_code = vds_core_lock_region(addr, size, 0x02, direction, &raw_result);
         if (error_code == VDS_RAW_SUCCESS) {
             lock->success = true;
@@ -400,25 +410,25 @@ vds_safe_error_t vds_lock_with_recovery(void far* addr, uint32_t size,
             lock->physical_addr = raw_result.physical_addr;
             lock->vds_used_bounce = (raw_result.translation_type == VDS_TRANS_ALTERNATE);
             lock->is_scattered = true;
-            
+
             safety_stats.recovery_successes++;
             LOG_INFO("Recovery 1: Success with scatter/gather");
             return VDS_SAFE_OK;
         }
     }
-    
+
     /* Recovery Path 2: Try smaller aligned chunks */
     if (size > 4096) {
-        uint32_t linear = ((uint32_t)FP_SEG(addr) << 4) + FP_OFF(addr);
-        uint32_t aligned = (linear + 15) & ~15;  /* 16-byte align */
-        uint32_t aligned_size = size - (aligned - linear);
-        
+        linear = ((uint32_t)FP_SEG(addr) << 4) + FP_OFF(addr);
+        aligned = (linear + 15) & ~15;  /* 16-byte align */
+        aligned_size = size - (aligned - linear);
+
         if (aligned_size >= 1024) {
             void far* aligned_addr = MK_FP(aligned >> 4, aligned & 0x0F);
-            
+
             LOG_DEBUG("Recovery 2: Trying aligned chunk");
-            
-            error_code = vds_core_lock_region(aligned_addr, aligned_size, 
+
+            error_code = vds_core_lock_region(aligned_addr, aligned_size,
                                              constraints->require_contiguous ? 0x01 : 0,
                                              direction, &raw_result);
             if (error_code == VDS_RAW_SUCCESS) {
@@ -427,7 +437,7 @@ vds_safe_error_t vds_lock_with_recovery(void far* addr, uint32_t size,
                 lock->lock_handle = raw_result.lock_handle;
                 lock->physical_addr = raw_result.physical_addr;
                 lock->vds_used_bounce = (raw_result.translation_type == VDS_TRANS_ALTERNATE);
-                
+
                 safety_stats.recovery_successes++;
                 LOG_INFO("Recovery 2: Success with aligned chunk");
                 return VDS_SAFE_OK;
@@ -638,10 +648,12 @@ static bool allocate_bounce_pool(uint32_t pool_size)
  */
 static void free_bounce_pool(void)
 {
+    uint8_t error;
+
     if (bounce_pool.initialized) {
         /* Unlock VDS if pool was locked */
         if (bounce_pool.is_vds_locked && bounce_pool.vds_lock_handle) {
-            uint8_t error = vds_core_unlock_region(bounce_pool.vds_lock_handle);
+            error = vds_core_unlock_region(bounce_pool.vds_lock_handle);
             if (error != VDS_RAW_SUCCESS) {
                 LOG_WARNING("VDS Safety: Failed to unlock bounce pool (error: 0x%02X)",
                            error);
@@ -688,10 +700,12 @@ void far* vds_allocate_bounce_buffer(uint32_t size,
     }
     
     safety_stats.bounce_pool_used += blocks_needed * bounce_pool.block_size;
-    
+
     /* Return pointer to allocated region */
-    uint32_t offset = block_index * bounce_pool.block_size;
-    return (void far*)((uint8_t far*)bounce_pool.base_addr + offset);
+    {
+        uint32_t offset = block_index * bounce_pool.block_size;
+        return (void far*)((uint8_t far*)bounce_pool.base_addr + offset);
+    }
 }
 
 /**
@@ -729,16 +743,19 @@ static int find_free_bounce_block(uint32_t blocks_needed)
  */
 void vds_free_bounce_buffer(void far* buffer)
 {
+    uint32_t offset;
+    uint16_t block_index;
+
     if (!bounce_pool.initialized || !buffer) {
         return;
     }
-    
+
     /* Calculate block index */
-    uint32_t offset = (uint8_t far*)buffer - (uint8_t far*)bounce_pool.base_addr;
-    uint16_t block_index = offset / bounce_pool.block_size;
-    
+    offset = (uint8_t far*)buffer - (uint8_t far*)bounce_pool.base_addr;
+    block_index = offset / bounce_pool.block_size;
+
     /* Free blocks (we don't track size, so free until we hit unallocated) */
-    while (block_index < bounce_pool.num_blocks && 
+    while (block_index < bounce_pool.num_blocks &&
            bounce_pool.allocation_map[block_index] == 1) {
         bounce_pool.allocation_map[block_index] = 0;
         safety_stats.bounce_pool_used -= bounce_pool.block_size;
@@ -876,20 +893,23 @@ uint16_t vds_coalesce_sg_list(vds_sg_entry_t* sg_list, uint16_t sg_count,
     /* Coalesce strictly adjacent entries only */
     write_idx = 0;
     for (read_idx = 0; read_idx < sg_count - 1; read_idx++) {
+        uint32_t end_next;
+        uint32_t end_current;
+
         current = &sg_list[write_idx];
         next = &sg_list[read_idx + 1];
-        
+
         if (vds_can_coalesce_sg_entries(current, next, 0)) {
             /* Coalesce: extend current entry to include next */
-            uint32_t end_next = next->physical_addr + next->size;
-            uint32_t end_current = current->physical_addr + current->size;
-            
+            end_next = next->physical_addr + next->size;
+            end_current = current->physical_addr + current->size;
+
             if (end_next > end_current) {
                 /* Extend size to cover both entries and any gap */
                 current->size = end_next - current->physical_addr;
             }
             /* Don't increment write_idx - keep coalescing into same entry */
-            
+
             LOG_DEBUG("VDS Safety: Coalesced S/G entries %u-%u (new size: %lu)",
                      write_idx, read_idx + 1, current->size);
         } else {

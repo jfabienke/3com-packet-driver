@@ -6,11 +6,13 @@
 ; This file is part of the 3Com Packet Driver project.
 ;
 
-.MODEL SMALL
-.386
+; NASM syntax - 16-bit real mode code
+cpu 386
+bits 16
 
 ; CPU Type Constants
 ; Simplified CPU type constants - CPUID-capable CPUs use family/model
+CPU_UNKNOWN         EQU 0FFh    ; Unknown CPU type
 CPU_8086            EQU 0       ; 8086/8088 processor (no CPUID)
 CPU_80186           EQU 1       ; 80186/80188 processor (ENTER/LEAVE, PUSHA/POPA)
 CPU_80286           EQU 2       ; 80286 processor (no CPUID)
@@ -74,18 +76,26 @@ CPU_SUCCESS         EQU 0       ; CPU detection successful
 CPU_ERROR_UNSUPPORTED EQU 1     ; CPU not supported (< 286)
 
 ; Data segment
-_DATA SEGMENT
-        ASSUME  DS:_DATA
+SECTION _DATA class=DATA
+
+; Export data symbols for C access (PREFIX underscore for Watcom 16-bit data)
+global _cpuid_available
+global _cpu_features
+global _cache_line_size
+global _cpu_is_486_plus
+global _is_v86_mode
+global _sse2_available
 
 ; CPU detection results
 detected_cpu_type   db CPU_8086     ; Detected CPU type
+_cpu_features:                       ; Label for C access (prefix underscore)
 cpu_features        dd FEATURE_NONE ; Detected CPU features (expanded to 32-bit)
-cpu_vendor_id       db 13 dup(0)    ; CPU vendor string (12 chars + null)
+cpu_vendor_id       times 13 db 0   ; CPU vendor string (12 chars + null)
 cpu_step_id         db 0            ; CPU stepping ID
 cpu_family_id       db 0            ; CPU family
 cpu_model_id        db 0            ; CPU model
 cpu_signature       dd 0            ; Full CPUID signature
-cpu_brand_string    db 49 dup(0)    ; CPU brand string (48 chars + null)
+cpu_brand_string    times 49 db 0   ; CPU brand string (48 chars + null)
 
 ; Cache information structures
 cache_l1_data_size  dw CACHE_SIZE_UNKNOWN ; L1 data cache size (KB)
@@ -94,17 +104,22 @@ cache_l2_size       dw CACHE_SIZE_UNKNOWN ; L2 cache size (KB)
 cache_l1_data_assoc db 0            ; L1 data cache associativity
 cache_l1_code_assoc db 0            ; L1 instruction cache associativity
 cache_l2_assoc      db 0            ; L2 cache associativity
+_cache_line_size:                    ; Label for C access (prefix underscore)
 cache_line_size     db 0            ; Cache line size
-cache_descriptors   db MAX_CACHE_ENTRIES dup(0) ; Cache descriptor table
+cache_descriptors   times MAX_CACHE_ENTRIES db 0 ; Cache descriptor table
 
 ; CPUID and V86 mode info
 cpuid_max_level     dd 0            ; Maximum CPUID function supported
+_is_v86_mode:                        ; Label for C access (prefix underscore)
 is_v86_mode         db 0            ; 1 if running in V86 mode
 
 ; Safety flags for instruction gating
+_cpuid_available:                    ; Label for C access (prefix underscore)
 cpuid_available     db 0            ; 1 if CPUID instruction is available
 cpu_is_386_plus     db 0            ; 1 if CPU is 386 or higher
+_cpu_is_486_plus:                    ; Label for C access (prefix underscore)
 cpu_is_486_plus     db 0            ; 1 if CPU is 486 or higher
+_sse2_available:                     ; Label for C access (prefix underscore)
 sse2_available      db 0            ; 1 if SSE2 is available (for MFENCE)
 extended_family     db 0            ; Extended family value (family 15+)
 
@@ -122,7 +137,7 @@ rdtsc_start_low     dd 0            ; RDTSC start value (low 32 bits)
 rdtsc_start_high    dd 0            ; RDTSC start value (high 32 bits)
 
 ; Multi-trial speed detection for statistical robustness
-speed_trials        dw 5 dup(0)     ; Array for 5 speed measurements
+speed_trials        times 5 dw 0    ; Array for 5 speed measurements
 speed_confidence    db 0            ; Confidence level (0-100%)
 loop_overhead_ticks dw 0            ; Overhead from empty loop calibration
 port_61h_state      db 0            ; Saved port 61h state for PIT channel 2
@@ -143,51 +158,48 @@ has_rdtscp          db 0            ; 1 if RDTSCP instruction is available
 is_hypervisor       db 0            ; 1 if running under hypervisor/VM
 max_extended_leaf   dd 0            ; Maximum extended CPUID leaf supported
 
-_DATA ENDS
-
 ; Code segment
-_TEXT SEGMENT
-        ASSUME  CS:_TEXT, DS:_DATA
+SECTION _TEXT class=CODE
 
 ; Public function exports
-PUBLIC cpu_detect_main
-PUBLIC get_cpu_type
-PUBLIC get_cpu_features
-PUBLIC check_cpu_feature
-PUBLIC asm_detect_cpu_type
-PUBLIC asm_get_cpu_flags
-PUBLIC asm_get_cpu_family
-PUBLIC asm_get_cpuid_max_level
-PUBLIC asm_is_v86_mode
-PUBLIC asm_get_interrupt_flag
-PUBLIC asm_get_cpu_model
-PUBLIC asm_get_cpu_stepping
-PUBLIC asm_get_cpu_vendor
-PUBLIC asm_get_cpu_vendor_string
-PUBLIC asm_has_cyrix_extensions
-PUBLIC asm_get_cache_info
-PUBLIC asm_get_cpu_speed
-PUBLIC asm_get_speed_confidence
-PUBLIC asm_has_invariant_tsc
-PUBLIC asm_has_rdtscp
-PUBLIC asm_is_hypervisor
+global cpu_detect_main
+global get_cpu_type
+global get_cpu_features
+global check_cpu_feature
+global asm_detect_cpu_type
+global asm_get_cpu_flags
+global asm_get_cpu_family
+global asm_get_cpuid_max_level
+global asm_is_v86_mode
+global asm_get_interrupt_flag
+global asm_get_cpu_model
+global asm_get_cpu_stepping
+global asm_get_cpu_vendor
+global asm_get_cpu_vendor_string
+global asm_has_cyrix_extensions
+global asm_get_cache_info
+global asm_get_cpu_speed
+global asm_get_speed_confidence
+global asm_has_invariant_tsc
+global asm_has_rdtscp
+global asm_is_hypervisor
 
 ; New 386/486 specific detection functions
-PUBLIC detect_386_features
-PUBLIC detect_486_features  
-PUBLIC test_cache_type
-PUBLIC detect_486_cache_config
+global detect_386_features
+global detect_486_features
+global test_cache_type
+global detect_486_cache_config
 
 ; Enhanced CPUID feature detection functions
-PUBLIC get_cpu_signature_info
-PUBLIC get_cache_descriptors
-PUBLIC parse_cache_descriptors
-PUBLIC get_brand_string
-PUBLIC get_extended_features
-PUBLIC detect_v86_mode
-PUBLIC get_cpuid_max_level
-PUBLIC detect_clflush_support
-PUBLIC check_wbinvd_safety
+global get_cpu_signature_info
+global get_cache_descriptors
+global parse_cache_descriptors
+global get_brand_string
+global get_extended_features
+global detect_v86_mode
+global get_cpuid_max_level
+global detect_clflush_support
+global check_wbinvd_safety
 
 ; External references removed - SMC patching moved to separate module
 
@@ -199,7 +211,7 @@ PUBLIC check_wbinvd_safety
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-cpu_detect_main PROC
+cpu_detect_main:
         push    bp
         mov     bp, sp
         push    bx
@@ -225,16 +237,16 @@ cpu_detect_main PROC
 
         ; Detect CPU features based on detected type
         call    detect_cpu_features
-        mov     dword ptr [cpu_features], eax
+        mov     dword [cpu_features], eax
 
         ; Clear vendor ID string initially
-        mov     si, OFFSET cpu_vendor_id
+        mov     si, cpu_vendor_id
         mov     cx, 12
         mov     al, 0
         rep     stosb
 
         ; Get vendor ID if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_vendor_id
         
         ; Get maximum CPUID level first (safety)
@@ -250,10 +262,10 @@ cpu_detect_main PROC
         call    check_wbinvd_safety
         
         ; Initialize stepping ID (default to 0 if not detectable)
-        mov     byte ptr [cpu_step_id], 0
+        mov     byte [cpu_step_id], 0
         
         ; Get comprehensive CPU information if CPUID available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_comprehensive_info
         
         ; Get detailed signature information
@@ -298,8 +310,6 @@ cpu_detect_main PROC
         pop     bx
         pop     bp
         ret
-cpu_detect_main ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpu_vendor_id - Get CPU vendor string using CPUID
 ;
@@ -307,7 +317,7 @@ cpu_detect_main ENDP
 ; Output: Vendor string stored in cpu_vendor_id
 ; Uses:   EAX, EBX, ECX, EDX, SI
 ;-----------------------------------------------------------------------------
-get_cpu_vendor_id PROC
+get_cpu_vendor_id:
         push    bp
         mov     bp, sp
         push    si
@@ -318,26 +328,24 @@ get_cpu_vendor_id PROC
         db      0fh, 0a2h       ; CPUID instruction
         
         ; Vendor string is returned in EBX, EDX, ECX (in that order)
-        mov     si, OFFSET cpu_vendor_id
+        mov     si, cpu_vendor_id
         
         ; Store EBX (first 4 characters)
-        mov     dword ptr [si], ebx
+        mov     dword [si], ebx
         
         ; Store EDX (next 4 characters)
-        mov     dword ptr [si+4], edx
+        mov     dword [si+4], edx
         
         ; Store ECX (last 4 characters)
-        mov     dword ptr [si+8], ecx
+        mov     dword [si+8], ecx
         
         ; Null terminate the string
-        mov     byte ptr [si+12], 0
+        mov     byte [si+12], 0
         
         pop     di
         pop     si
         pop     bp
         ret
-get_cpu_vendor_id ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpu_stepping - Get CPU stepping information using CPUID
 ;
@@ -345,7 +353,7 @@ get_cpu_vendor_id ENDP
 ; Output: Stepping stored in cpu_step_id
 ; Uses:   EAX, EDX
 ;-----------------------------------------------------------------------------
-get_cpu_stepping PROC
+get_cpu_stepping:
         push    bp
         mov     bp, sp
         
@@ -359,8 +367,6 @@ get_cpu_stepping PROC
         
         pop     bp
         ret
-get_cpu_stepping ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpu_signature_info - Extract CPU signature information from CPUID
 ;
@@ -368,7 +374,7 @@ get_cpu_stepping ENDP
 ; Output: CPU family, model, stepping stored in respective variables
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-get_cpu_signature_info PROC
+get_cpu_signature_info:
         push    bp
         mov     bp, sp
         push    bx
@@ -376,7 +382,7 @@ get_cpu_signature_info PROC
         push    dx
         
         ; Check if CPUID is available using safety flag
-        cmp     byte ptr [cpuid_available], 0
+        cmp     byte [cpuid_available], 0
         je      .no_cpuid
         
         ; Execute CPUID function 1 to get signature info
@@ -384,7 +390,7 @@ get_cpu_signature_info PROC
         db      0fh, 0a2h       ; CPUID instruction
         
         ; Store the full signature
-        mov     dword ptr [cpu_signature], eax
+        mov     dword [cpu_signature], eax
         
         ; Extract stepping (bits 0-3)
         mov     bl, al
@@ -408,13 +414,13 @@ get_cpu_signature_info PROC
         push    eax
         shr     eax, 20         ; Shift to get bits 20-27
         and     eax, 0ffh
-        mov     byte ptr [extended_family], al  ; Store extended family
+        mov     byte [extended_family], al  ; Store extended family
         add     cl, al          ; Add to base family
         pop     eax
         
         ; Extended model: add extended model (bits 16-19) * 16
-        mov     dx, eax  
-        shr     dx, 16
+        mov     edx, eax
+        shr     edx, 16
         and     dx, 0fh
         shl     dx, 4
         add     bl, dl
@@ -426,10 +432,10 @@ get_cpu_signature_info PROC
         
 .no_cpuid:
         ; No CPUID available - set defaults
-        mov     byte ptr [cpu_family_id], 0
-        mov     byte ptr [cpu_model_id], 0
-        mov     byte ptr [cpu_step_id], 0
-        mov     dword ptr [cpu_signature], 0
+        mov     byte [cpu_family_id], 0
+        mov     byte [cpu_model_id], 0
+        mov     byte [cpu_step_id], 0
+        mov     dword [cpu_signature], 0
         
 .done:
         pop     dx
@@ -437,8 +443,6 @@ get_cpu_signature_info PROC
         pop     bx
         pop     bp
         ret
-get_cpu_signature_info ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_cpu_type - Detect specific CPU type
 ;
@@ -453,7 +457,7 @@ get_cpu_signature_info ENDP
 ; Output: AL = CPU type constant
 ; Uses:   AX, BX, CX, DX, Flags
 ;-----------------------------------------------------------------------------
-detect_cpu_type PROC
+detect_cpu_type:
         push    bp
         mov     bp, sp
         push    bx
@@ -461,9 +465,9 @@ detect_cpu_type PROC
         push    dx
 
         ; Initialize defaults
-        mov     byte ptr [cpu_is_386_plus], 0
-        mov     byte ptr [cpu_is_486_plus], 0
-        mov     byte ptr [cpuid_available], 0
+        mov     byte [cpu_is_386_plus], 0
+        mov     byte [cpu_is_486_plus], 0
+        mov     byte [cpuid_available], 0
         
         ; Test 1: 8086/186 vs 286+
         ; Try to clear FLAGS bits 12-15 ONLY (preserve IF and other flags)
@@ -500,12 +504,12 @@ detect_cpu_type PROC
         jne     .is_286         ; 286 cannot clear them
 
         ; We now know it's 386+
-        mov     byte ptr [cpu_is_386_plus], 1
+        mov     byte [cpu_is_386_plus], 1
         
         ; Test 3: 386 vs 486+ using AC flag (bit 18)
         ; GPT-5: Added CPU check before PUSHFD/POPFD usage
         ; CRITICAL: PUSHFD/POPFD are 386+ instructions, verify we're on 386+
-        cmp     byte ptr [cpu_is_386_plus], 1
+        cmp     byte [cpu_is_386_plus], 1
         jne     .skip_ac_test   ; Skip if not 386+ (should never happen here)
         
         pushfd                  ; 32-bit push (safe on 386+)
@@ -530,7 +534,7 @@ detect_cpu_type PROC
 .ac_test_done:
         
         ; AC flag toggles = 486+
-        mov     byte ptr [cpu_is_486_plus], 1
+        mov     byte [cpu_is_486_plus], 1
         jmp     .check_486_cpuid
         
 .is_386:
@@ -546,7 +550,7 @@ detect_cpu_type PROC
         je      .is_486_no_cpuid
         
         ; 486 with CPUID - continue to family check
-        mov     byte ptr [cpuid_available], 1
+        mov     byte [cpuid_available], 1
         jmp     .has_cpuid
         
 .is_486_no_cpuid:
@@ -592,8 +596,8 @@ detect_cpu_type PROC
 
 .is_286:
         mov     al, CPU_80286
-        mov     byte ptr [cpu_is_386_plus], 0
-        mov     byte ptr [cpu_is_486_plus], 0
+        mov     byte [cpu_is_386_plus], 0
+        mov     byte [cpu_is_486_plus], 0
         jmp     .done
 
 .is_8086_or_186:
@@ -609,15 +613,15 @@ detect_cpu_type PROC
 .is_8086:
         ; CPU is 8086/8088
         mov     al, CPU_8086
-        mov     byte ptr [cpu_is_386_plus], 0
-        mov     byte ptr [cpu_is_486_plus], 0
+        mov     byte [cpu_is_386_plus], 0
+        mov     byte [cpu_is_486_plus], 0
         jmp     .done
         
 .is_186:
         ; CPU is 80186/80188
         mov     al, CPU_80186
-        mov     byte ptr [cpu_is_386_plus], 0
-        mov     byte ptr [cpu_is_486_plus], 0
+        mov     byte [cpu_is_386_plus], 0
+        mov     byte [cpu_is_486_plus], 0
 
 .done:
         pop     dx
@@ -625,8 +629,6 @@ detect_cpu_type PROC
         pop     bx
         pop     bp
         ret
-detect_cpu_type ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_cpuid_available - Test if CPUID instruction is available
 ;
@@ -634,14 +636,14 @@ detect_cpu_type ENDP
 ; Output: AL = 1 if CPUID available, 0 if not
 ; Uses:   AX, Flags
 ;-----------------------------------------------------------------------------
-test_cpuid_available PROC
+test_cpuid_available:
         push    bp
         mov     bp, sp
         push    bx
         push    cx
         
         ; CRITICAL SAFETY CHECK: Must be 386+ to use PUSHFD/POPFD
-        cmp     byte ptr [cpu_is_386_plus], 1
+        cmp     byte [cpu_is_386_plus], 1
         jne     .no_cpuid_early_cpu
         
         ; Test if we can modify the ID flag (bit 21) in EFLAGS
@@ -689,8 +691,6 @@ test_cpuid_available PROC
         pop     bx
         pop     bp
         ret
-test_cpuid_available ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_cpu_features - Detect CPU features based on type
 ;
@@ -698,7 +698,7 @@ test_cpuid_available ENDP
 ; Output: EAX = feature flags (32-bit)
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-detect_cpu_features PROC
+detect_cpu_features:
         push    bp
         mov     bp, sp
         push    bx
@@ -740,7 +740,7 @@ detect_cpu_features PROC
         pop     eax             ; Restore current features
         or      eax, ebx        ; Combine 386 features
 
-        cmp     byte ptr [detected_cpu_type], CPU_80486
+        cmp     byte [detected_cpu_type], CPU_80486
         jb      .test_fpu       ; Skip to FPU test for 386
         
         ; 486+ features (even without CPUID)
@@ -749,7 +749,7 @@ detect_cpu_features PROC
         or      eax, FEATURE_INVLPG    ; INVLPG instruction
         
         ; Only set CPUID feature if actually available
-        cmp     byte ptr [cpuid_available], 1
+        cmp     byte [cpuid_available], 1
         jne     .no_cpuid_feature
         or      eax, FEATURE_CPUID
 .no_cpuid_feature:
@@ -778,8 +778,6 @@ detect_cpu_features PROC
         pop     bx
         pop     bp
         ret
-detect_cpu_features ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_fpu_present - Test for floating point unit presence
 ;
@@ -787,7 +785,7 @@ detect_cpu_features ENDP
 ; Output: CL = 1 if FPU present, 0 if not
 ; Uses:   AX, CX
 ;-----------------------------------------------------------------------------
-test_fpu_present PROC
+test_fpu_present:
         push    bp
         mov     bp, sp
         
@@ -810,8 +808,8 @@ test_fpu_present PROC
         jne     .no_fpu
         
         ; Additional test: try to set and read control word
-        fnstcw  word ptr [bp-2] ; Store control word
-        mov     ax, word ptr [bp-2]
+        fnstcw  word [bp-2] ; Store control word
+        mov     ax, word [bp-2]
         and     ax, 103fh       ; Mask valid bits
         cmp     ax, 003fh       ; Expected initial value
         jne     .no_fpu
@@ -821,8 +819,6 @@ test_fpu_present PROC
 .no_fpu:
         pop     bp
         ret
-test_fpu_present ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpuid_features - Get additional features from CPUID instruction
 ;
@@ -830,69 +826,69 @@ test_fpu_present ENDP
 ; Output: BX = Additional feature flags from CPUID
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-get_cpuid_features PROC
+get_cpuid_features:
         push    bp
         mov     bp, sp
         push    cx
         push    dx
-        
-        mov     bx, 0           ; Initialize additional features
-        
+
+        mov     ebx, 0          ; Initialize additional features (32-bit)
+
         ; Check if CPUID is available using safety flag
-        cmp     byte ptr [cpuid_available], 0
+        cmp     byte [cpuid_available], 0
         je      .done           ; No CPUID available
-        
+
         ; Check max CPUID level first (safety check)
-        cmp     dword ptr [cpuid_max_level], 1
+        cmp     dword [cpuid_max_level], 1
         jb      .done           ; Need at least level 1 for features
-        
+
         ; Safe to execute CPUID function 1 (feature flags)
         mov     eax, 1
         db      0fh, 0a2h       ; CPUID instruction (machine code for compatibility)
-        
+
         ; EDX contains standard feature flags, ECX contains extended features
-        
+
         ; Extract TSC (Time Stamp Counter) - bit 4 in EDX
         test    edx, 10h
         jz      .no_tsc
-        or      bx, FEATURE_TSC
+        or      ebx, FEATURE_TSC
 .no_tsc:
-        
+
         ; Extract MSR (Model Specific Registers) - bit 5 in EDX
         test    edx, 20h
         jz      .no_msr
-        or      bx, FEATURE_MSR
+        or      ebx, FEATURE_MSR
 .no_msr:
-        
+
         ; Extract CX8 (CMPXCHG8B) - bit 8 in EDX
         test    edx, 100h
         jz      .no_cx8
-        or      bx, FEATURE_CX8
+        or      ebx, FEATURE_CX8
 .no_cx8:
-        
+
         ; Extract MMX - bit 23 in EDX
         test    edx, 800000h
         jz      .no_mmx
-        or      bx, FEATURE_MMX
+        or      ebx, FEATURE_MMX
 .no_mmx:
-        
+
         ; Extract SSE - bit 25 in EDX
         test    edx, 2000000h
         jz      .no_sse
-        or      bx, FEATURE_SSE
+        or      ebx, FEATURE_SSE
 .no_sse:
-        
+
         ; Extract SSE2 - bit 26 in EDX
         test    edx, 4000000h
         jz      .no_sse2
-        or      bx, FEATURE_SSE2
-        mov     byte ptr [sse2_available], 1   ; Set SSE2 flag for MFENCE
+        or      ebx, FEATURE_SSE2
+        mov     byte [sse2_available], 1   ; Set SSE2 flag for MFENCE
 .no_sse2:
-        
+
         ; Extract Hyper-Threading - bit 28 in EDX
         test    edx, 10000000h
         jz      .no_ht
-        or      bx, FEATURE_HT
+        or      ebx, FEATURE_HT
 .no_ht:
         
         ; Note: ECX features could be added here for newer CPUs
@@ -903,8 +899,6 @@ get_cpuid_features PROC
         pop     cx
         pop     bp
         ret
-get_cpuid_features ENDP
-
 ; SMC patching functions removed - moved to separate module
 ; All self-modifying code optimization has been moved to smc_patch.asm
 ; This module now focuses exclusively on CPU detection
@@ -916,11 +910,9 @@ get_cpuid_features ENDP
 ; Output: AL = CPU type constant
 ; Uses:   AL
 ;-----------------------------------------------------------------------------
-get_cpu_type PROC
+get_cpu_type:
         mov     al, [detected_cpu_type]
         ret
-get_cpu_type ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpu_features - Return detected CPU features
 ;
@@ -928,11 +920,9 @@ get_cpu_type ENDP
 ; Output: AX = CPU feature flags
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-get_cpu_features PROC
-        mov     eax, dword ptr [cpu_features]
+get_cpu_features:
+        mov     eax, dword [cpu_features]
         ret
-get_cpu_features ENDP
-
 ;-----------------------------------------------------------------------------
 ; check_cpu_feature - Check if specific CPU feature is available
 ;
@@ -940,21 +930,19 @@ get_cpu_features ENDP
 ; Output: AX = 0 if not available, non-zero if available
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-check_cpu_feature PROC
+check_cpu_feature:
         push    bp
         mov     bp, sp
         push    bx
 
         mov     ebx, eax                ; Save feature to check
-        mov     eax, dword ptr [cpu_features] ; Get current features
+        mov     eax, dword [cpu_features] ; Get current features
         and     eax, ebx                ; Test for specific feature
         ; AX now contains 0 if feature not present, non-zero if present
 
         pop     bx
         pop     bp
         ret
-check_cpu_feature ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_detect_cpu_type - C-callable wrapper for CPU type detection
 ;
@@ -962,12 +950,10 @@ check_cpu_feature ENDP
 ; Output: AX = CPU type constant
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_detect_cpu_type PROC
+asm_detect_cpu_type:
         mov     al, [detected_cpu_type]
         mov     ah, 0                   ; Clear high byte for 16-bit return
         ret
-asm_detect_cpu_type ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_flags - C-callable wrapper for CPU feature flags
 ;
@@ -977,14 +963,12 @@ asm_detect_cpu_type ENDP
 ;         DX = High 16 bits
 ; Uses:   AX, DX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_flags PROC
-        mov     eax, dword ptr [cpu_features] ; Get full 32 bits
+asm_get_cpu_flags:
+        mov     eax, dword [cpu_features] ; Get full 32 bits
         mov     dx, ax          ; Copy low word to DX temporarily
         shr     eax, 16         ; Shift high word into AX
         xchg    ax, dx          ; AX = low word, DX = high word
         ret
-asm_get_cpu_flags ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_386_features - Detect 386-specific features and capabilities
 ;
@@ -992,7 +976,7 @@ asm_get_cpu_flags ENDP
 ; Output: EAX = 386-specific feature flags
 ; Uses:   EAX, EBX, ECX, EDX, Flags, CR0
 ;-----------------------------------------------------------------------------
-detect_386_features PROC
+detect_386_features:
         push    bp
         mov     bp, sp
         push    bx
@@ -1003,7 +987,7 @@ detect_386_features PROC
         mov     eax, 0
         
         ; Verify we're actually on a 386+ CPU
-        cmp     byte ptr [detected_cpu_type], CPU_80386
+        cmp     byte [detected_cpu_type], CPU_80386
         jb      .not_386
         
         ; Test 1: Alignment Check (AC) flag capability 
@@ -1043,8 +1027,6 @@ detect_386_features PROC
         pop     bx
         pop     bp
         ret
-detect_386_features ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_alignment_check_flag - Test if AC flag can be set in EFLAGS
 ;
@@ -1052,7 +1034,7 @@ detect_386_features ENDP
 ; Output: BL = 1 if AC flag can be set (486+), 0 if not (386)
 ; Uses:   AX, BX, EAX, EBX, Flags
 ;-----------------------------------------------------------------------------
-test_alignment_check_flag PROC
+test_alignment_check_flag:
         push    bp
         mov     bp, sp
         push    ecx
@@ -1060,7 +1042,7 @@ test_alignment_check_flag PROC
         mov     bl, 0           ; Assume no AC flag capability (386)
         
         ; CRITICAL SAFETY CHECK: Must be 386+ to use PUSHFD/POPFD
-        cmp     byte ptr [cpu_is_386_plus], 1
+        cmp     byte [cpu_is_386_plus], 1
         jne     .no_ac_early_cpu
         
         ; Save current EFLAGS (safe on 386+)
@@ -1101,8 +1083,6 @@ test_alignment_check_flag PROC
         pop     ecx
         pop     bp
         ret
-test_alignment_check_flag ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_v86_mode_capability - Test Virtual 8086 mode flag capability
 ;
@@ -1110,7 +1090,7 @@ test_alignment_check_flag ENDP
 ; Output: BL = 1 if VM flag settable, 0 if not
 ; Uses:   AX, BX, EAX, EBX, Flags
 ;-----------------------------------------------------------------------------
-test_v86_mode_capability PROC
+test_v86_mode_capability:
         push    bp
         mov     bp, sp
         
@@ -1146,8 +1126,6 @@ test_v86_mode_capability PROC
 .no_v86:
         pop     bp
         ret
-test_v86_mode_capability ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_32bit_operations - Verify 32-bit register operations work
 ;
@@ -1155,7 +1133,7 @@ test_v86_mode_capability ENDP
 ; Output: BL = 1 if 32-bit ops work, 0 if not  
 ; Uses:   AX, BX, EAX, EBX
 ;-----------------------------------------------------------------------------
-test_32bit_operations PROC
+test_32bit_operations:
         push    bp
         mov     bp, sp
         
@@ -1182,8 +1160,6 @@ test_32bit_operations PROC
 .no_32bit:
         pop     bp
         ret
-test_32bit_operations ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_paging_support - Test access to CR0 register for paging support
 ;
@@ -1191,14 +1167,14 @@ test_32bit_operations ENDP
 ; Output: BL = 1 if CR0 accessible (386+ with paging), 0 if not
 ; Uses:   AX, BX, EAX, Flags
 ;-----------------------------------------------------------------------------
-test_paging_support PROC
+test_paging_support:
         push    bp
         mov     bp, sp
         
         mov     bl, 0           ; Assume no paging support
         
         ; CRITICAL SAFETY CHECK: Must be 386+ to access CR0
-        cmp     byte ptr [cpu_is_386_plus], 1
+        cmp     byte [cpu_is_386_plus], 1
         jne     .no_paging      ; Not 386+ - no CR0 access
         
         ; CRITICAL SAFETY CHECK: Must not be in V86 mode (CR0 access will GP fault)
@@ -1233,8 +1209,6 @@ test_paging_support PROC
 .done:
         pop     bp
         ret
-test_paging_support ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_486_features - Detect 486-specific features and capabilities  
 ;
@@ -1242,7 +1216,7 @@ test_paging_support ENDP
 ; Output: EAX = 486-specific feature flags
 ; Uses:   EAX, EBX, ECX, EDX, Flags
 ;-----------------------------------------------------------------------------
-detect_486_features PROC
+detect_486_features:
         push    bp
         mov     bp, sp
         push    bx
@@ -1253,7 +1227,7 @@ detect_486_features PROC
         mov     eax, 0
         
         ; Verify we're actually on a 486+ CPU
-        cmp     byte ptr [detected_cpu_type], CPU_80486
+        cmp     byte [detected_cpu_type], CPU_80486
         jb      .not_486
         
         ; Test 1: Internal cache presence and configuration
@@ -1297,8 +1271,6 @@ detect_486_features PROC
         pop     bx
         pop     bp
         ret
-detect_486_features ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_486_cache_config - Detect internal cache configuration
 ;
@@ -1307,7 +1279,7 @@ detect_486_features ENDP
 ;         CX = cache size (if detectable)
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-detect_486_cache_config PROC
+detect_486_cache_config:
         push    bp
         mov     bp, sp
         push    dx
@@ -1319,11 +1291,11 @@ detect_486_cache_config PROC
         ; Use cache-specific timing differences or control registers
         
         ; Method 1: Check if CPUID is available for cache info
-        cmp     byte ptr [detected_cpu_type], CPU_80486
+        cmp     byte [detected_cpu_type], CPU_80486
         jb      .no_cache_info
         
         ; If CPUID available, try to get cache info
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_cpuid_cache
         
         ; Use CPUID function 2 for cache information (if supported)
@@ -1353,8 +1325,6 @@ detect_486_cache_config PROC
         pop     dx
         pop     bp
         ret
-detect_486_cache_config ENDP
-
 ;-----------------------------------------------------------------------------
 ; timing_based_cache_detection - Use timing to detect cache presence
 ;
@@ -1362,7 +1332,7 @@ detect_486_cache_config ENDP
 ; Output: AX = 1 if cache detected, 0 if not
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-timing_based_cache_detection PROC
+timing_based_cache_detection:
         push    bp
         mov     bp, sp
         
@@ -1373,8 +1343,6 @@ timing_based_cache_detection PROC
         
         pop     bp
         ret
-timing_based_cache_detection ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_cache_type - Test for Write-Back vs Write-Through cache mode
 ;
@@ -1382,7 +1350,7 @@ timing_based_cache_detection ENDP
 ; Output: CL = 0 for Write-Through, 1 for Write-Back  
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-test_cache_type PROC
+test_cache_type:
         push    bp
         mov     bp, sp
         push    ax
@@ -1392,7 +1360,7 @@ test_cache_type PROC
         mov     cl, 0           ; Assume Write-Through
         
         ; CRITICAL SAFETY CHECK: Must be 486+ to access CR0
-        cmp     byte ptr [cpu_is_486_plus], 1
+        cmp     byte [cpu_is_486_plus], 1
         jne     .no_cache_control
         
         ; CRITICAL SAFETY CHECK: Must not be in V86 mode (CR0 access will GP fault)
@@ -1424,8 +1392,6 @@ test_cache_type PROC
         pop     ax
         pop     bp
         ret
-test_cache_type ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_bswap_instruction - Test BSWAP instruction availability
 ;
@@ -1433,14 +1399,14 @@ test_cache_type ENDP
 ; Output: BL = 1 if BSWAP available, 0 if not
 ; Uses:   AX, BX, EAX, EBX
 ;-----------------------------------------------------------------------------
-test_bswap_instruction PROC
+test_bswap_instruction:
         push    bp
         mov     bp, sp
         
         mov     bl, 0           ; Assume not available
         
         ; CRITICAL SAFETY CHECK: Must be 486+ to test BSWAP
-        cmp     byte ptr [cpu_is_486_plus], 1
+        cmp     byte [cpu_is_486_plus], 1
         jne     .no_bswap_early_cpu
         
         ; Test BSWAP instruction (486+ only)
@@ -1474,8 +1440,6 @@ test_bswap_instruction PROC
 .done:
         pop     bp
         ret
-test_bswap_instruction ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_cmpxchg_instruction - Test CMPXCHG instruction availability
 ;
@@ -1483,14 +1447,14 @@ test_bswap_instruction ENDP
 ; Output: BL = 1 if CMPXCHG available, 0 if not
 ; Uses:   AX, BX, CX, EAX, EBX, ECX
 ;-----------------------------------------------------------------------------
-test_cmpxchg_instruction PROC
+test_cmpxchg_instruction:
         push    bp
         mov     bp, sp
         
         mov     bl, 0           ; Assume not available
         
         ; CRITICAL SAFETY CHECK: Must be 486+ to test CMPXCHG
-        cmp     byte ptr [cpu_is_486_plus], 1
+        cmp     byte [cpu_is_486_plus], 1
         jne     .no_cmpxchg_early_cpu
         
         ; Test CMPXCHG instruction (486+ only)
@@ -1525,8 +1489,6 @@ test_cmpxchg_instruction PROC
 .done:
         pop     bp
         ret
-test_cmpxchg_instruction ENDP
-
 ;-----------------------------------------------------------------------------
 ; test_invlpg_instruction - Test INVLPG instruction availability
 ;
@@ -1534,7 +1496,7 @@ test_cmpxchg_instruction ENDP
 ; Output: BL = 1 if INVLPG available, 0 if not
 ; Uses:   AX, BX
 ;-----------------------------------------------------------------------------
-test_invlpg_instruction PROC
+test_invlpg_instruction:
         push    bp
         mov     bp, sp
         
@@ -1545,7 +1507,7 @@ test_invlpg_instruction PROC
         ; For safety, we'll use CPU type detection
         
         ; If we're on 486+, assume INVLPG is available
-        cmp     byte ptr [detected_cpu_type], CPU_80486
+        cmp     byte [detected_cpu_type], CPU_80486
         jb      .no_invlpg
         
         mov     bl, 1           ; INVLPG assumed available on 486+
@@ -1553,8 +1515,6 @@ test_invlpg_instruction PROC
 .no_invlpg:
         pop     bp
         ret
-test_invlpg_instruction ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cache_descriptors - Get cache descriptors from CPUID leaf 2
 ;
@@ -1562,7 +1522,7 @@ test_invlpg_instruction ENDP
 ; Output: Cache descriptors stored in cache_descriptors array
 ; Uses:   EAX, EBX, ECX, EDX, SI
 ;-----------------------------------------------------------------------------
-get_cache_descriptors PROC
+get_cache_descriptors:
         push    bp
         mov     bp, sp
         push    bx
@@ -1571,11 +1531,11 @@ get_cache_descriptors PROC
         push    si
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_cpuid
         
         ; Clear cache descriptors array
-        mov     si, OFFSET cache_descriptors
+        mov     si, cache_descriptors
         mov     cx, MAX_CACHE_ENTRIES
         mov     al, 0
         rep     stosb
@@ -1598,104 +1558,124 @@ get_cache_descriptors PROC
 .count_ok:
         
         ; Initialize descriptor storage pointer
-        mov     si, OFFSET cache_descriptors
-        xor     di, di          ; Descriptor index
-        mov     bx, cx          ; Save original iteration count for comparison
-        
+        ; Use DI as running pointer (valid [di] addressing)
+        mov     di, cache_descriptors
+        xor     si, si          ; Descriptor count (for limit checking)
+        push    bp
+        mov     bp, cx          ; Save original iteration count in BP
+
 .descriptor_loop:
         push    cx              ; Save iteration counter
-        
+
         ; Execute CPUID(2) for this iteration
         mov     eax, 2
         db      0fh, 0a2h       ; CPUID instruction
-        
+
         ; Check if we should skip EAX (bit 31 set means ignore)
         test    eax, 80000000h
         jnz     .skip_eax_iter
-        
+
         ; Store EAX descriptors (skip AL on first iteration)
         pop     cx
         push    cx              ; Peek at iteration counter
-        cmp     cx, bx          ; Check if this is first iteration (cx == original count)
+        cmp     cx, bp          ; Check if this is first iteration (cx == original count)
         je      .skip_al        ; Skip AL on first iteration (contains count)
-        cmp     di, MAX_CACHE_ENTRIES - 1
+        cmp     si, MAX_CACHE_ENTRIES - 1
         jae     .skip_eax_iter
-        mov     [si+di], al
+        mov     [di], al
         inc     di
+        inc     si
 .skip_al:
-        cmp     di, MAX_CACHE_ENTRIES - 3
+        cmp     si, MAX_CACHE_ENTRIES - 3
         jae     .skip_eax_iter
-        mov     [si+di], ah
+        mov     [di], ah
         inc     di
+        inc     si
         shr     eax, 16
-        mov     [si+di], al
+        mov     [di], al
         inc     di
-        mov     [si+di], ah
+        inc     si
+        mov     [di], ah
         inc     di
-        
+        inc     si
+
 .skip_eax_iter:
         ; Store descriptors from EBX (if bit 31 is clear)
         test    ebx, 80000000h
         jnz     .skip_ebx_iter
-        cmp     di, MAX_CACHE_ENTRIES - 4
+        cmp     si, MAX_CACHE_ENTRIES - 4
         jae     .skip_ebx_iter
-        mov     [si+di], bl
+        mov     [di], bl
         inc     di
-        mov     [si+di], bh
+        inc     si
+        mov     [di], bh
         inc     di
+        inc     si
         shr     ebx, 16
-        mov     [si+di], bl
+        mov     [di], bl
         inc     di
-        mov     [si+di], bh
+        inc     si
+        mov     [di], bh
         inc     di
-        
+        inc     si
+
 .skip_ebx_iter:
         ; Store descriptors from ECX (if bit 31 is clear)
         test    ecx, 80000000h
         jnz     .skip_ecx_iter
-        cmp     di, MAX_CACHE_ENTRIES - 4
+        cmp     si, MAX_CACHE_ENTRIES - 4
         jae     .skip_ecx_iter
-        mov     [si+di], cl
+        mov     [di], cl
         inc     di
-        mov     [si+di], ch
+        inc     si
+        mov     [di], ch
         inc     di
+        inc     si
         shr     ecx, 16
-        mov     [si+di], cl
+        mov     [di], cl
         inc     di
-        mov     [si+di], ch
+        inc     si
+        mov     [di], ch
         inc     di
-        
+        inc     si
+
 .skip_ecx_iter:
         ; Store descriptors from EDX (if bit 31 is clear)
         test    edx, 80000000h
         jnz     .skip_edx_iter
-        cmp     di, MAX_CACHE_ENTRIES - 4
+        cmp     si, MAX_CACHE_ENTRIES - 4
         jae     .skip_edx_iter
-        mov     [si+di], dl
+        mov     [di], dl
         inc     di
-        mov     [si+di], dh
+        inc     si
+        mov     [di], dh
         inc     di
+        inc     si
         shr     edx, 16
-        mov     [si+di], dl
+        mov     [di], dl
         inc     di
-        mov     [si+di], dh
+        inc     si
+        mov     [di], dh
         inc     di
-        
+        inc     si
+
 .skip_edx_iter:
         ; Continue loop for remaining iterations
         pop     cx
         dec     cx
         jnz     .descriptor_loop
-        
+
+        pop     bp              ; Restore BP saved at start of loop
+
         ; Parse the collected descriptors
         call    parse_cache_descriptors
         jmp     .done
         
 .no_cpuid:
         ; No CPUID available - clear cache info
-        mov     word ptr [cache_l1_data_size], CACHE_SIZE_UNKNOWN
-        mov     word ptr [cache_l1_code_size], CACHE_SIZE_UNKNOWN
-        mov     word ptr [cache_l2_size], CACHE_SIZE_UNKNOWN
+        mov     word [cache_l1_data_size], CACHE_SIZE_UNKNOWN
+        mov     word [cache_l1_code_size], CACHE_SIZE_UNKNOWN
+        mov     word [cache_l2_size], CACHE_SIZE_UNKNOWN
         
 .done:
         pop     si
@@ -1704,8 +1684,6 @@ get_cache_descriptors PROC
         pop     bx
         pop     bp
         ret
-get_cache_descriptors ENDP
-
 ;-----------------------------------------------------------------------------
 ; parse_cache_descriptors - Parse cache descriptor bytes and extract info
 ;
@@ -1713,7 +1691,7 @@ get_cache_descriptors ENDP
 ; Output: Cache information stored in cache size/associativity variables
 ; Uses:   AX, BX, CX, DX, SI
 ;-----------------------------------------------------------------------------
-parse_cache_descriptors PROC
+parse_cache_descriptors:
         push    bp
         mov     bp, sp
         push    bx
@@ -1722,21 +1700,21 @@ parse_cache_descriptors PROC
         push    si
         
         ; Initialize cache information to unknown
-        mov     word ptr [cache_l1_data_size], CACHE_SIZE_UNKNOWN
-        mov     word ptr [cache_l1_code_size], CACHE_SIZE_UNKNOWN
-        mov     word ptr [cache_l2_size], CACHE_SIZE_UNKNOWN
-        mov     byte ptr [cache_l1_data_assoc], 0
-        mov     byte ptr [cache_l1_code_assoc], 0
-        mov     byte ptr [cache_l2_assoc], 0
-        mov     byte ptr [cache_line_size], 0
+        mov     word [cache_l1_data_size], CACHE_SIZE_UNKNOWN
+        mov     word [cache_l1_code_size], CACHE_SIZE_UNKNOWN
+        mov     word [cache_l2_size], CACHE_SIZE_UNKNOWN
+        mov     byte [cache_l1_data_assoc], 0
+        mov     byte [cache_l1_code_assoc], 0
+        mov     byte [cache_l2_assoc], 0
+        mov     byte [cache_line_size], 0
         
         ; Initialize TLB information to unknown
-        mov     word ptr [tlb_data_entries], 0
-        mov     word ptr [tlb_code_entries], 0
-        mov     word ptr [tlb_page_size], 0
+        mov     word [tlb_data_entries], 0
+        mov     word [tlb_code_entries], 0
+        mov     word [tlb_page_size], 0
         
         ; Parse each descriptor byte
-        mov     si, OFFSET cache_descriptors
+        mov     si, cache_descriptors
         mov     cx, MAX_CACHE_ENTRIES
         
 .parse_loop:
@@ -1817,135 +1795,136 @@ parse_cache_descriptors PROC
         jmp     .next_descriptor
         
 .l1_data_8kb_2way:
-        mov     word ptr [cache_l1_data_size], 8
-        mov     byte ptr [cache_l1_data_assoc], 2
-        mov     byte ptr [cache_line_size], 32
+        mov     word [cache_l1_data_size], 8
+        mov     byte [cache_l1_data_assoc], 2
+        mov     byte [cache_line_size], 32
         jmp     .next_descriptor
 
 .l1_data_8kb_4way:
-        mov     word ptr [cache_l1_data_size], 8
-        mov     byte ptr [cache_l1_data_assoc], 4
-        mov     byte ptr [cache_line_size], 32
+        mov     word [cache_l1_data_size], 8
+        mov     byte [cache_l1_data_assoc], 4
+        mov     byte [cache_line_size], 32
         jmp     .next_descriptor
         
 .l1_data_16kb_4way:
-        mov     word ptr [cache_l1_data_size], 16
-        mov     byte ptr [cache_l1_data_assoc], 4
-        mov     byte ptr [cache_line_size], 32
+        mov     word [cache_l1_data_size], 16
+        mov     byte [cache_l1_data_assoc], 4
+        mov     byte [cache_line_size], 32
         jmp     .next_descriptor
 
 .l1_data_16kb_8way:
-        mov     word ptr [cache_l1_data_size], 16
-        mov     byte ptr [cache_l1_data_assoc], 8
-        mov     byte ptr [cache_line_size], 64
+        mov     word [cache_l1_data_size], 16
+        mov     byte [cache_l1_data_assoc], 8
+        mov     byte [cache_line_size], 64
         jmp     .next_descriptor
 
 .l1_data_32kb_4way:
-        mov     word ptr [cache_l1_data_size], 32
-        mov     byte ptr [cache_l1_data_assoc], 4
-        mov     byte ptr [cache_line_size], 64
+        mov     word [cache_l1_data_size], 32
+        mov     byte [cache_l1_data_assoc], 4
+        mov     byte [cache_line_size], 64
         jmp     .next_descriptor
 
 .l1_data_32kb_8way:
-        mov     word ptr [cache_l1_data_size], 32
-        mov     byte ptr [cache_l1_data_assoc], 8
-        mov     byte ptr [cache_line_size], 64
+        mov     word [cache_l1_data_size], 32
+        mov     byte [cache_l1_data_assoc], 8
+        mov     byte [cache_line_size], 64
         jmp     .next_descriptor
 
 .l1_code_8kb_4way:
-        mov     word ptr [cache_l1_code_size], 8
-        mov     byte ptr [cache_l1_code_assoc], 4
+        mov     word [cache_l1_code_size], 8
+        mov     byte [cache_l1_code_assoc], 4
         jmp     .next_descriptor
         
 .l1_code_16kb_4way:
-        mov     word ptr [cache_l1_code_size], 16
-        mov     byte ptr [cache_l1_code_assoc], 4
+        mov     word [cache_l1_code_size], 16
+        mov     byte [cache_l1_code_assoc], 4
         jmp     .next_descriptor
         
 .l1_code_32kb_4way:
-        mov     word ptr [cache_l1_code_size], 32
-        mov     byte ptr [cache_l1_code_assoc], 4
+        mov     word [cache_l1_code_size], 32
+        mov     byte [cache_l1_code_assoc], 4
         jmp     .next_descriptor
 
 .l1_code_32kb_8way:
-        mov     word ptr [cache_l1_code_size], 32
-        mov     byte ptr [cache_l1_code_assoc], 8
+        mov     word [cache_l1_code_size], 32
+        mov     byte [cache_l1_code_assoc], 8
         jmp     .next_descriptor
         
 .l2_128kb_4way:
-        mov     word ptr [cache_l2_size], 128
-        mov     byte ptr [cache_l2_assoc], 4
+        mov     word [cache_l2_size], 128
+        mov     byte [cache_l2_assoc], 4
         jmp     .next_descriptor
         
 .l2_256kb_4way:
-        mov     word ptr [cache_l2_size], 256
-        mov     byte ptr [cache_l2_assoc], 4
+        mov     word [cache_l2_size], 256
+        mov     byte [cache_l2_assoc], 4
         jmp     .next_descriptor
         
 .l2_512kb_4way:
-        mov     word ptr [cache_l2_size], 512
-        mov     byte ptr [cache_l2_assoc], 4
+        mov     word [cache_l2_size], 512
+        mov     byte [cache_l2_assoc], 4
         jmp     .next_descriptor
         
 .l2_1mb_4way:
-        mov     word ptr [cache_l2_size], 1024
-        mov     byte ptr [cache_l2_assoc], 4
+        mov     word [cache_l2_size], 1024
+        mov     byte [cache_l2_assoc], 4
         jmp     .next_descriptor
 
 .l2_2mb_4way:
-        mov     word ptr [cache_l2_size], 2048
-        mov     byte ptr [cache_l2_assoc], 4
+        mov     word [cache_l2_size], 2048
+        mov     byte [cache_l2_assoc], 4
         jmp     .next_descriptor
 
 .l2_128kb_8way:
-        mov     word ptr [cache_l2_size], 128
-        mov     byte ptr [cache_l2_assoc], 8
+        mov     word [cache_l2_size], 128
+        mov     byte [cache_l2_assoc], 8
         jmp     .next_descriptor
 
 .l2_256kb_8way:
-        mov     word ptr [cache_l2_size], 256
-        mov     byte ptr [cache_l2_assoc], 8
+        mov     word [cache_l2_size], 256
+        mov     byte [cache_l2_assoc], 8
         jmp     .next_descriptor
 
 .l2_512kb_8way:
-        mov     word ptr [cache_l2_size], 512
-        mov     byte ptr [cache_l2_assoc], 8
+        mov     word [cache_l2_size], 512
+        mov     byte [cache_l2_assoc], 8
         jmp     .next_descriptor
 
 .l2_1mb_8way:
-        mov     word ptr [cache_l2_size], 1024
-        mov     byte ptr [cache_l2_assoc], 8
+        mov     word [cache_l2_size], 1024
+        mov     byte [cache_l2_assoc], 8
         jmp     .next_descriptor
 
 .l2_2mb_8way:
-        mov     word ptr [cache_l2_size], 2048
-        mov     byte ptr [cache_l2_assoc], 8
+        mov     word [cache_l2_size], 2048
+        mov     byte [cache_l2_assoc], 8
         jmp     .next_descriptor
 
 .tlb_data_4kb_32:
-        mov     word ptr [tlb_data_entries], 32
-        mov     word ptr [tlb_page_size], 4
+        mov     word [tlb_data_entries], 32
+        mov     word [tlb_page_size], 4
         jmp     .next_descriptor
         
 .tlb_data_4mb_2:
-        mov     word ptr [tlb_data_entries], 2
-        mov     word ptr [tlb_page_size], 4096     ; 4MB in KB
+        mov     word [tlb_data_entries], 2
+        mov     word [tlb_page_size], 4096     ; 4MB in KB
         jmp     .next_descriptor
         
 .tlb_code_mixed_64:
-        mov     word ptr [tlb_code_entries], 64
-        mov     word ptr [tlb_page_size], 4        ; Mixed, default to 4KB
+        mov     word [tlb_code_entries], 64
+        mov     word [tlb_page_size], 4        ; Mixed, default to 4KB
         jmp     .next_descriptor
         
 .tlb_code_mixed_128:
-        mov     word ptr [tlb_code_entries], 128
-        mov     word ptr [tlb_page_size], 4        ; Mixed, default to 4KB
+        mov     word [tlb_code_entries], 128
+        mov     word [tlb_page_size], 4        ; Mixed, default to 4KB
         jmp     .next_descriptor
         
 .next_descriptor:
         inc     si
         pop     cx
-        loop    .parse_loop
+        dec     cx
+        jnz     .parse_loop
         
         pop     si
         pop     dx
@@ -1953,8 +1932,6 @@ parse_cache_descriptors PROC
         pop     bx
         pop     bp
         ret
-parse_cache_descriptors ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_extended_cache_info - Get cache info from extended CPUID (AMD/VIA)
 ;
@@ -1962,7 +1939,7 @@ parse_cache_descriptors ENDP
 ; Output: Updates cache size variables if extended info available
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-get_extended_cache_info PROC
+get_extended_cache_info:
         push    bp
         mov     bp, sp
         push    bx
@@ -1970,7 +1947,7 @@ get_extended_cache_info PROC
         push    dx
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .done
         
         ; Check if extended CPUID is available
@@ -1992,10 +1969,10 @@ get_extended_cache_info PROC
         xor     ah, ah
         cmp     ax, 0
         je      .check_l1i
-        mov     word ptr [cache_l1_data_size], ax
+        mov     word [cache_l1_data_size], ax
         
         mov     al, cl          ; Get line size (bits 7-0)
-        mov     byte ptr [cache_line_size], al
+        mov     byte [cache_line_size], al
         
 .check_l1i:
         ; EDX = L1 instruction cache info
@@ -2004,7 +1981,7 @@ get_extended_cache_info PROC
         xor     ah, ah
         cmp     ax, 0
         je      .check_l2
-        mov     word ptr [cache_l1_code_size], ax
+        mov     word [cache_l1_code_size], ax
         
 .check_l2:
         ; Get L2 cache information (leaf 0x80000006)
@@ -2020,13 +1997,13 @@ get_extended_cache_info PROC
         shr     eax, 16         ; Get size (bits 31-16)
         cmp     ax, 0
         je      .done
-        mov     word ptr [cache_l2_size], ax
+        mov     word [cache_l2_size], ax
         
         ; Update line size if not already set
-        cmp     byte ptr [cache_line_size], 0
+        cmp     byte [cache_line_size], 0
         jne     .done
         mov     al, cl          ; Get line size (bits 7-0)
-        mov     byte ptr [cache_line_size], al
+        mov     byte [cache_line_size], al
         
 .done:
         pop     dx
@@ -2034,8 +2011,6 @@ get_extended_cache_info PROC
         pop     bx
         pop     bp
         ret
-get_extended_cache_info ENDP
-
 ;-----------------------------------------------------------------------------
 ; check_invariant_tsc - Check if TSC is invariant (power management safe)
 ;
@@ -2043,7 +2018,7 @@ get_extended_cache_info ENDP
 ; Output: invariant_tsc flag is set
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-check_invariant_tsc PROC
+check_invariant_tsc:
         push    bp
         mov     bp, sp
         push    bx
@@ -2051,10 +2026,10 @@ check_invariant_tsc PROC
         push    dx
         
         ; Default to non-invariant
-        mov     byte ptr [invariant_tsc], 0
+        mov     byte [invariant_tsc], 0
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_TSC
+        test    dword [cpu_features], FEATURE_TSC
         jz      .done           ; No TSC, no need to check
         
         ; Check if extended CPUID 0x80000007 is available
@@ -2072,7 +2047,7 @@ check_invariant_tsc PROC
         jz      .done
         
         ; TSC is invariant
-        mov     byte ptr [invariant_tsc], 1
+        mov     byte [invariant_tsc], 1
         
 .done:
         pop     dx
@@ -2080,8 +2055,6 @@ check_invariant_tsc PROC
         pop     bx
         pop     bp
         ret
-check_invariant_tsc ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_hypervisor - Detect if running under hypervisor/virtual machine
 ;
@@ -2089,7 +2062,7 @@ check_invariant_tsc ENDP
 ; Output: is_hypervisor variable is set
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-detect_hypervisor PROC
+detect_hypervisor:
         push    bp
         mov     bp, sp
         push    bx
@@ -2097,10 +2070,10 @@ detect_hypervisor PROC
         push    dx
         
         ; Default to not running under hypervisor
-        mov     byte ptr [is_hypervisor], 0
+        mov     byte [is_hypervisor], 0
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .done
         
         ; First check CPUID leaf 1, ECX bit 31 (hypervisor present)
@@ -2110,7 +2083,7 @@ detect_hypervisor PROC
         jz      .done           ; No hypervisor bit set
         
         ; Hypervisor detected
-        mov     byte ptr [is_hypervisor], 1
+        mov     byte [is_hypervisor], 1
         
         ; Try to get hypervisor vendor ID (CPUID 0x40000000)
         mov     eax, 40000000h
@@ -2145,8 +2118,6 @@ detect_hypervisor PROC
         pop     bx
         pop     bp
         ret
-detect_hypervisor ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_brand_string - Get CPU brand string from CPUID leaves 0x80000002-0x80000004
 ;
@@ -2154,7 +2125,7 @@ detect_hypervisor ENDP
 ; Output: Brand string stored in cpu_brand_string
 ; Uses:   EAX, EBX, ECX, EDX, SI, DI
 ;-----------------------------------------------------------------------------
-get_brand_string PROC
+get_brand_string:
         push    bp
         mov     bp, sp
         push    bx
@@ -2164,7 +2135,7 @@ get_brand_string PROC
         push    di
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_cpuid
         
         ; First check if extended CPUID functions are supported
@@ -2174,7 +2145,7 @@ get_brand_string PROC
         jb      .no_brand_string
         
         ; Clear brand string buffer
-        mov     di, OFFSET cpu_brand_string
+        mov     di, cpu_brand_string
         mov     cx, 48
         mov     al, 0
         rep     stosb
@@ -2182,36 +2153,36 @@ get_brand_string PROC
         ; Get brand string part 1 (CPUID 0x80000002)
         mov     eax, 80000002h
         db      0fh, 0a2h       ; CPUID instruction
-        mov     di, OFFSET cpu_brand_string
-        mov     dword ptr [di], eax
-        mov     dword ptr [di+4], ebx
-        mov     dword ptr [di+8], ecx
-        mov     dword ptr [di+12], edx
+        mov     di, cpu_brand_string
+        mov     dword [di], eax
+        mov     dword [di+4], ebx
+        mov     dword [di+8], ecx
+        mov     dword [di+12], edx
         
         ; Get brand string part 2 (CPUID 0x80000003)
         mov     eax, 80000003h
         db      0fh, 0a2h       ; CPUID instruction
-        mov     dword ptr [di+16], eax
-        mov     dword ptr [di+20], ebx
-        mov     dword ptr [di+24], ecx
-        mov     dword ptr [di+28], edx
+        mov     dword [di+16], eax
+        mov     dword [di+20], ebx
+        mov     dword [di+24], ecx
+        mov     dword [di+28], edx
         
         ; Get brand string part 3 (CPUID 0x80000004)
         mov     eax, 80000004h
         db      0fh, 0a2h       ; CPUID instruction
-        mov     dword ptr [di+32], eax
-        mov     dword ptr [di+36], ebx
-        mov     dword ptr [di+40], ecx
-        mov     dword ptr [di+44], edx
+        mov     dword [di+32], eax
+        mov     dword [di+36], ebx
+        mov     dword [di+40], ecx
+        mov     dword [di+44], edx
         
         ; Null terminate the string
-        mov     byte ptr [di+48], 0
+        mov     byte [di+48], 0
         jmp     .done
         
 .no_brand_string:
 .no_cpuid:
         ; Clear brand string if not available
-        mov     di, OFFSET cpu_brand_string
+        mov     di, cpu_brand_string
         mov     cx, 49
         mov     al, 0
         rep     stosb
@@ -2224,8 +2195,6 @@ get_brand_string PROC
         pop     bx
         pop     bp
         ret
-get_brand_string ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_extended_features - Get extended features from CPUID leaf 0x80000001
 ;
@@ -2233,16 +2202,16 @@ get_brand_string ENDP
 ; Output: Extended features stored in extended_features variable
 ; Uses:   EAX, EDX
 ;-----------------------------------------------------------------------------
-get_extended_features PROC
+get_extended_features:
         push    bp
         mov     bp, sp
         push    dx
         
         ; Initialize extended features to none
-        mov     dword ptr [extended_features], 0
+        mov     dword [extended_features], 0
         
         ; Check if CPUID is available
-        test    dword ptr [cpu_features], FEATURE_CPUID
+        test    dword [cpu_features], FEATURE_CPUID
         jz      .no_cpuid
         
         ; First check if extended CPUID functions are supported
@@ -2250,7 +2219,7 @@ get_extended_features PROC
         db      0fh, 0a2h       ; CPUID instruction
         
         ; Store maximum extended CPUID leaf
-        mov     dword ptr [max_extended_leaf], eax
+        mov     dword [max_extended_leaf], eax
         
         ; Validate that this is a valid extended leaf response
         ; Valid extended leaves are >= 0x80000000
@@ -2266,16 +2235,16 @@ get_extended_features PROC
         db      0fh, 0a2h       ; CPUID instruction
         
         ; Store extended features from EDX
-        mov     dword ptr [extended_features], edx
+        mov     dword [extended_features], edx
         
         ; Check for RDTSCP support (bit 27 in EDX)
         test    edx, 08000000h  ; Bit 27 - RDTSCP
         jz      .no_rdtscp
-        mov     byte ptr [has_rdtscp], 1
+        mov     byte [has_rdtscp], 1
         
 .no_rdtscp:
         ; Update main feature flags with extended features
-        mov     eax, dword ptr [cpu_features]
+        mov     eax, dword [cpu_features]
         
         ; Check for SYSCALL/SYSRET (bit 11 in extended features)
         test    edx, 800h
@@ -2284,7 +2253,7 @@ get_extended_features PROC
         
 .no_syscall:
         ; Store updated features
-        mov     dword ptr [cpu_features], eax
+        mov     dword [cpu_features], eax
         jmp     .done
         
 .no_extended:
@@ -2295,8 +2264,6 @@ get_extended_features PROC
         pop     dx
         pop     bp
         ret
-get_extended_features ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_v86_mode - Detect if running in Virtual 8086 mode
 ;
@@ -2306,12 +2273,12 @@ get_extended_features ENDP
 ;
 ; V86 mode detection is critical for safe WBINVD usage as it will trap
 ;-----------------------------------------------------------------------------
-detect_v86_mode PROC
+detect_v86_mode:
         push    bp
         mov     bp, sp
         
         ; Check if we're 386+ using safety flag (V86 mode doesn't exist on < 386)
-        cmp     byte ptr [cpu_is_386_plus], 0
+        cmp     byte [cpu_is_386_plus], 0
         je      .not_v86        ; Not 386+, can't be in V86 mode
         
         ; Safe to use 386+ instructions now
@@ -2325,8 +2292,8 @@ detect_v86_mode PROC
         jz      .not_v86_pop    ; Not in V86, need to restore EAX
         
         ; We're in V86 mode
-        mov     byte ptr [is_v86_mode], 1
-        or      dword ptr [cpu_features], FEATURE_V86_MODE
+        mov     byte [is_v86_mode], 1
+        or      dword [cpu_features], FEATURE_V86_MODE
         pop     eax
         mov     al, 1
         jmp     .done
@@ -2336,13 +2303,11 @@ detect_v86_mode PROC
         
 .not_v86:
         mov     al, 0
-        mov     byte ptr [is_v86_mode], 0
+        mov     byte [is_v86_mode], 0
         
 .done:
         pop     bp
         ret
-detect_v86_mode ENDP
-
 ;-----------------------------------------------------------------------------
 ; get_cpuid_max_level - Get maximum supported CPUID function
 ;
@@ -2350,7 +2315,7 @@ detect_v86_mode ENDP
 ; Output: EAX = Maximum standard CPUID function supported
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-get_cpuid_max_level PROC
+get_cpuid_max_level:
         push    bp
         mov     bp, sp
         push    bx
@@ -2358,7 +2323,7 @@ get_cpuid_max_level PROC
         push    dx
         
         ; Check if CPUID is available using safety flag
-        cmp     byte ptr [cpuid_available], 0
+        cmp     byte [cpuid_available], 0
         je      .no_cpuid
         
         ; Safe to use CPUID
@@ -2367,12 +2332,12 @@ get_cpuid_max_level PROC
         db      0fh, 0a2h       ; CPUID instruction
         
         ; Store max level
-        mov     dword ptr [cpuid_max_level], eax
+        mov     dword [cpuid_max_level], eax
         jmp     .done
         
 .no_cpuid:
         mov     eax, 0
-        mov     dword ptr [cpuid_max_level], 0
+        mov     dword [cpuid_max_level], 0
         
 .done:
         pop     dx
@@ -2380,8 +2345,6 @@ get_cpuid_max_level PROC
         pop     bx
         pop     bp
         ret
-get_cpuid_max_level ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_clflush_support - Detect CLFLUSH instruction and cache line size
 ;
@@ -2389,7 +2352,7 @@ get_cpuid_max_level ENDP
 ; Output: AL = 1 if CLFLUSH supported, 0 if not
 ; Uses:   EAX, EBX, ECX, EDX
 ;-----------------------------------------------------------------------------
-detect_clflush_support PROC
+detect_clflush_support:
         push    bp
         mov     bp, sp
         push    bx
@@ -2399,7 +2362,7 @@ detect_clflush_support PROC
         mov     al, 0           ; Assume not supported
         
         ; Check if we have CPUID and max level >= 1
-        cmp     dword ptr [cpuid_max_level], 1
+        cmp     dword [cpuid_max_level], 1
         jb      .no_clflush
         
         ; Execute CPUID function 1
@@ -2414,16 +2377,16 @@ detect_clflush_support PROC
         ; Cache line size is in bits 8-15 of EBX (in 8-byte chunks)
         mov     al, bh          ; Get bits 8-15
         shl     al, 3           ; Multiply by 8 for bytes
-        mov     byte ptr [cache_line_size], al
+        mov     byte [cache_line_size], al
         
         ; Set feature flag
-        or      dword ptr [cpu_features], FEATURE_CLFLUSH
+        or      dword [cpu_features], FEATURE_CLFLUSH
         mov     al, 1           ; Return success
         jmp     .done
         
 .no_clflush:
         ; Default cache line size to 64 bytes (common default)
-        mov     byte ptr [cache_line_size], 64
+        mov     byte [cache_line_size], 64
         
 .done:
         pop     dx
@@ -2431,8 +2394,6 @@ detect_clflush_support PROC
         pop     bx
         pop     bp
         ret
-detect_clflush_support ENDP
-
 ;-----------------------------------------------------------------------------
 ; check_wbinvd_safety - Check if WBINVD can be safely used
 ;
@@ -2442,23 +2403,23 @@ detect_clflush_support ENDP
 ;
 ; WBINVD will trap in V86 mode, so we need to check first
 ;-----------------------------------------------------------------------------
-check_wbinvd_safety PROC
+check_wbinvd_safety:
         push    bp
         mov     bp, sp
         
         ; Check if we're 486+ (WBINVD doesn't exist on < 486)
-        cmp     byte ptr [detected_cpu_type], CPU_80486
+        cmp     byte [detected_cpu_type], CPU_80486
         jb      .not_safe
-        cmp     byte ptr [detected_cpu_type], CPU_CPUID_CAPABLE
+        cmp     byte [detected_cpu_type], CPU_CPUID_CAPABLE
         jae     .check_v86      ; Need to check for V86 mode
         
 .check_v86:
         ; Check if we're in V86 mode
-        cmp     byte ptr [is_v86_mode], 0
+        cmp     byte [is_v86_mode], 0
         jne     .not_safe       ; Can't use WBINVD in V86 mode
         
         ; Safe to use WBINVD
-        or      dword ptr [cpu_features], FEATURE_WBINVD_SAFE
+        or      dword [cpu_features], FEATURE_WBINVD_SAFE
         mov     al, 1
         jmp     .done
         
@@ -2468,8 +2429,6 @@ check_wbinvd_safety PROC
 .done:
         pop     bp
         ret
-check_wbinvd_safety ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_cyrix_cpu - Detect Cyrix processors via DIR0/DIR1 registers
 ;
@@ -2479,14 +2438,14 @@ check_wbinvd_safety ENDP
 ;
 ; Cyrix CPUs have configuration registers at ports 22h/23h that Intel lacks
 ;-----------------------------------------------------------------------------
-detect_cyrix_cpu PROC
+detect_cyrix_cpu:
         push    bp
         mov     bp, sp
         push    bx
         push    cx
         
         ; Default to not Cyrix
-        mov     byte ptr [detected_vendor], VENDOR_UNKNOWN
+        mov     byte [detected_vendor], VENDOR_UNKNOWN
         
         ; Save interrupt state and disable
         pushf
@@ -2498,7 +2457,7 @@ detect_cyrix_cpu PROC
         jmp     short $+2       ; I/O delay
         in      al, 23h         ; Read DIR0 from port 23h
         mov     bl, al          ; Save original value
-        mov     byte ptr [cyrix_dir0_value], al
+        mov     byte [cyrix_dir0_value], al
         
         ; Try to modify DIR0 (toggle bit 7)
         xor     al, 80h         ; Toggle bit 7
@@ -2524,8 +2483,8 @@ detect_cyrix_cpu PROC
         out     23h, al
         
         ; Mark as Cyrix
-        mov     byte ptr [detected_vendor], VENDOR_CYRIX
-        mov     byte ptr [cyrix_dir0_present], 1
+        mov     byte [detected_vendor], VENDOR_CYRIX
+        mov     byte [cyrix_dir0_present], 1
         
         ; Could check DIR1 (index 0FFh) for specific model
         
@@ -2533,14 +2492,12 @@ detect_cyrix_cpu PROC
         ; Restore interrupt state
         popf
         
-        mov     al, byte ptr [detected_vendor]
+        mov     al, byte [detected_vendor]
         
         pop     cx
         pop     bx
         pop     bp
         ret
-detect_cyrix_cpu ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_amd_cpu - Detect AMD processors via unique behaviors
 ;
@@ -2550,7 +2507,7 @@ detect_cyrix_cpu ENDP
 ;
 ; AMD CPUs have different undefined opcode and flag behaviors
 ;-----------------------------------------------------------------------------
-detect_amd_cpu PROC
+detect_amd_cpu:
         push    bp
         mov     bp, sp
         push    bx
@@ -2558,7 +2515,7 @@ detect_amd_cpu PROC
         push    dx
         
         ; Default to not AMD
-        mov     byte ptr [detected_vendor], VENDOR_UNKNOWN
+        mov     byte [detected_vendor], VENDOR_UNKNOWN
         
         ; Test 1: UMOV instruction behavior (different on AMD)
         ; UMOV is an undefined opcode on Intel 486 but behaves differently on AMD
@@ -2585,18 +2542,16 @@ detect_amd_cpu PROC
         jne     .not_amd
         
         ; Likely AMD
-        mov     byte ptr [detected_vendor], VENDOR_AMD
+        mov     byte [detected_vendor], VENDOR_AMD
         
 .not_amd:
-        mov     al, byte ptr [detected_vendor]
+        mov     al, byte [detected_vendor]
         
         pop     dx
         pop     cx
         pop     bx
         pop     bp
         ret
-detect_amd_cpu ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_nexgen_cpu - Detect NexGen Nx586 despite no ID flag support
 ;
@@ -2606,7 +2561,7 @@ detect_amd_cpu ENDP
 ;
 ; NexGen supports CPUID but doesn't support ID flag test
 ;-----------------------------------------------------------------------------
-detect_nexgen_cpu PROC
+detect_nexgen_cpu:
         push    bp
         mov     bp, sp
         push    bx
@@ -2614,7 +2569,7 @@ detect_nexgen_cpu PROC
         push    dx
         
         ; Default to not NexGen
-        mov     byte ptr [detected_vendor], VENDOR_UNKNOWN
+        mov     byte [detected_vendor], VENDOR_UNKNOWN
         
         ; NexGen appears as 386 (no AC flag) but has CPUID
         ; Try CPUID despite ID flag test failing
@@ -2630,19 +2585,17 @@ detect_nexgen_cpu PROC
         jne     .not_nexgen
         
         ; It's a NexGen
-        mov     byte ptr [detected_vendor], VENDOR_NEXGEN
-        mov     byte ptr [nexgen_cpuid_works], 1
+        mov     byte [detected_vendor], VENDOR_NEXGEN
+        mov     byte [nexgen_cpuid_works], 1
         
 .not_nexgen:
-        mov     al, byte ptr [detected_vendor]
+        mov     al, byte [detected_vendor]
         
         pop     dx
         pop     cx
         pop     bx
         pop     bp
         ret
-detect_nexgen_cpu ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_cpu_vendor_no_cpuid - Detect CPU vendor without CPUID
 ;
@@ -2652,7 +2605,7 @@ detect_nexgen_cpu ENDP
 ;
 ; Tries various vendor-specific detection methods
 ;-----------------------------------------------------------------------------
-detect_cpu_vendor_no_cpuid PROC
+detect_cpu_vendor_no_cpuid:
         push    bp
         mov     bp, sp
         
@@ -2672,15 +2625,13 @@ detect_cpu_vendor_no_cpuid PROC
         je      .done
         
         ; Default to Intel if unknown
-        cmp     byte ptr [detected_vendor], VENDOR_UNKNOWN
+        cmp     byte [detected_vendor], VENDOR_UNKNOWN
         jne     .done
-        mov     byte ptr [detected_vendor], VENDOR_INTEL
+        mov     byte [detected_vendor], VENDOR_INTEL
         
 .done:
         pop     bp
         ret
-detect_cpu_vendor_no_cpuid ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_family - C-callable wrapper to get CPU family ID
 ;
@@ -2688,12 +2639,10 @@ detect_cpu_vendor_no_cpuid ENDP
 ; Output: AX = CPU family ID
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_family PROC
+asm_get_cpu_family:
         mov     al, [cpu_family_id]
         mov     ah, 0
         ret
-asm_get_cpu_family ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_model - C-callable wrapper to get CPU model ID
 ;
@@ -2701,12 +2650,10 @@ asm_get_cpu_family ENDP
 ; Output: AL = CPU model ID
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_model PROC
+asm_get_cpu_model:
         mov     al, [cpu_model_id]
         xor     ah, ah
         ret
-asm_get_cpu_model ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_stepping - C-callable wrapper to get CPU stepping ID
 ;
@@ -2714,12 +2661,10 @@ asm_get_cpu_model ENDP
 ; Output: AL = CPU stepping ID
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_stepping PROC
+asm_get_cpu_stepping:
         mov     al, [cpu_step_id]
         xor     ah, ah
         ret
-asm_get_cpu_stepping ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpuid_max_level - C-callable wrapper to get max CPUID level
 ;
@@ -2727,11 +2672,9 @@ asm_get_cpu_stepping ENDP
 ; Output: EAX = Maximum CPUID level
 ; Uses:   EAX
 ;-----------------------------------------------------------------------------
-asm_get_cpuid_max_level PROC
-        mov     eax, dword ptr [cpuid_max_level]
+asm_get_cpuid_max_level:
+        mov     eax, dword [cpuid_max_level]
         ret
-asm_get_cpuid_max_level ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_is_v86_mode - C-callable wrapper to check V86 mode
 ;
@@ -2739,12 +2682,10 @@ asm_get_cpuid_max_level ENDP
 ; Output: AX = 1 if in V86 mode, 0 if not
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_is_v86_mode PROC
+asm_is_v86_mode:
         mov     al, [is_v86_mode]
         mov     ah, 0
         ret
-asm_is_v86_mode ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_interrupt_flag - C-callable wrapper to check IF flag status
 ;
@@ -2754,7 +2695,7 @@ asm_is_v86_mode ENDP
 ;
 ; CRITICAL: Used by VDS safety layer for ISR context detection
 ;-----------------------------------------------------------------------------
-asm_get_interrupt_flag PROC
+asm_get_interrupt_flag:
         pushf                   ; Push flags register onto stack
         pop     ax              ; Pop flags into AX
         and     ax, 0200h       ; Isolate IF flag (bit 9)
@@ -2764,8 +2705,6 @@ asm_get_interrupt_flag PROC
 .ints_disabled:
         xor     ax, ax          ; Interrupts disabled (return 0)
         ret
-asm_get_interrupt_flag ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_vendor - C-callable wrapper to get CPU vendor
 ;
@@ -2773,12 +2712,10 @@ asm_get_interrupt_flag ENDP
 ; Output: AX = Vendor constant (VENDOR_INTEL, VENDOR_AMD, etc.)
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_vendor PROC
+asm_get_cpu_vendor:
         mov     al, [detected_vendor]
         mov     ah, 0
         ret
-asm_get_cpu_vendor ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_vendor_string - C-callable wrapper to get vendor string
 ;
@@ -2786,13 +2723,11 @@ asm_get_cpu_vendor ENDP
 ; Output: AX:DX = Far pointer to vendor ID string (12 chars)
 ; Uses:   AX, DX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_vendor_string PROC
+asm_get_cpu_vendor_string:
         ; Return pointer to cpu_vendor_id string
-        mov     ax, OFFSET cpu_vendor_id
-        mov     dx, seg cpu_vendor_id
+        mov     ax, cpu_vendor_id
+        mov     dx, _DATA
         ret
-asm_get_cpu_vendor_string ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_has_cyrix_extensions - Check if Cyrix CPU extensions present
 ;
@@ -2800,12 +2735,10 @@ asm_get_cpu_vendor_string ENDP
 ; Output: AX = 1 if Cyrix extensions detected, 0 otherwise
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_has_cyrix_extensions PROC
+asm_has_cyrix_extensions:
         mov     al, [cyrix_dir0_present]
         mov     ah, 0
         ret
-asm_has_cyrix_extensions ENDP
-
 ;-----------------------------------------------------------------------------
 ; asm_get_cache_info - C-callable wrapper to get cache information
 ;
@@ -2816,15 +2749,13 @@ asm_has_cyrix_extensions ENDP
 ;         DX = Cache line size (bytes)
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-asm_get_cache_info PROC
-        mov     ax, word ptr [cache_l1_data_size]
-        mov     bx, word ptr [cache_l1_code_size]
-        mov     cx, word ptr [cache_l2_size]
-        mov     dl, byte ptr [cache_line_size]
+asm_get_cache_info:
+        mov     ax, word [cache_l1_data_size]
+        mov     bx, word [cache_l1_code_size]
+        mov     cx, word [cache_l2_size]
+        mov     dl, byte [cache_line_size]
         xor     dh, dh          ; Clear high byte of DX
         ret
-asm_get_cache_info ENDP
-
 ;-----------------------------------------------------------------------------
 ; detect_cpu_speed - Detect CPU speed in MHz using PIT or RDTSC
 ;
@@ -2832,7 +2763,7 @@ asm_get_cache_info ENDP
 ; Output: detected_cpu_mhz and speed_confidence are set
 ; Uses:   AX, BX, CX, DX, SI, DI
 ;-----------------------------------------------------------------------------
-detect_cpu_speed PROC
+detect_cpu_speed:
         push    bp
         mov     bp, sp
         push    bx
@@ -2842,12 +2773,12 @@ detect_cpu_speed PROC
         push    di
         
         ; Check if running in V86 mode (timing may be unreliable)
-        cmp     byte ptr [is_v86_mode], 1
+        cmp     byte [is_v86_mode], 1
         je      .use_conservative_timing
         
         ; Perform multiple trials for statistical robustness
         mov     di, 5           ; 5 trials
-        mov     si, OFFSET speed_trials
+        mov     si, speed_trials
         
 .trial_loop:
         push    si
@@ -2862,8 +2793,8 @@ detect_cpu_speed PROC
         
         ; Sort trials and pick median
         call    sort_speed_trials
-        mov     ax, word ptr [speed_trials+4]  ; 3rd of 5 sorted values (median)
-        mov     word ptr [detected_cpu_mhz], ax
+        mov     ax, word [speed_trials+4]  ; 3rd of 5 sorted values (median)
+        mov     word [detected_cpu_mhz], ax
         
         ; Calculate confidence based on variance
         call    calculate_confidence
@@ -2872,8 +2803,8 @@ detect_cpu_speed PROC
 .use_conservative_timing:
         ; In V86 mode, use single measurement with fallback
         call    single_speed_trial
-        mov     word ptr [detected_cpu_mhz], ax
-        mov     byte ptr [speed_confidence], 50  ; Low confidence in V86
+        mov     word [detected_cpu_mhz], ax
+        mov     byte [speed_confidence], 50  ; Low confidence in V86
         
 .done:
         pop     di
@@ -2883,7 +2814,7 @@ detect_cpu_speed PROC
         pop     bx
         pop     bp
         ret
-detect_cpu_speed ENDP
+; End of detect_cpu_speed
 
 ;-----------------------------------------------------------------------------
 ; single_speed_trial - Perform a single speed measurement
@@ -2892,7 +2823,7 @@ detect_cpu_speed ENDP
 ; Output: AX = Measured speed in MHz
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-single_speed_trial PROC
+single_speed_trial:
         push    bp
         mov     bp, sp
         push    bx
@@ -2902,13 +2833,13 @@ single_speed_trial PROC
         push    di
         
         ; First calibrate loop overhead if not done
-        cmp     word ptr [loop_overhead_ticks], 0
+        cmp     word [loop_overhead_ticks], 0
         jne     .overhead_calibrated
         call    calibrate_loop_overhead
 .overhead_calibrated:
         
         ; Check if RDTSC is available (Pentium+)
-        test    dword ptr [cpu_features], FEATURE_TSC
+        test    dword [cpu_features], FEATURE_TSC
         jnz     .use_rdtsc
         
 .use_pit:
@@ -2917,7 +2848,7 @@ single_speed_trial PROC
         
         ; Save port 61h state (speaker control)
         in      al, 61h
-        mov     byte ptr [port_61h_state], al
+        mov     byte [port_61h_state], al
         and     al, 0FCh        ; Clear bits 0-1 (gate=0, speaker=0)
         ; Bit 0 = Timer 2 gate
         ; Bit 1 = Speaker data enable (force to 0 to prevent clicks)
@@ -2960,11 +2891,11 @@ single_speed_trial PROC
         dec     dx
         jnz     .read_pit_start
         ; PIT timeout - mark measurement as low confidence
-        mov     byte ptr [speed_confidence], 0
+        mov     byte [speed_confidence], 0
         mov     bx, 8000h       ; Use middle value as fallback
         
 .got_start_count:
-        mov     word ptr [pit_start_count], bx
+        mov     word [pit_start_count], bx
         
         ; Calibrated timing loop (10000 iterations, ~9 cycles each)
         mov     cx, 10000
@@ -3002,21 +2933,21 @@ single_speed_trial PROC
         jnz     .read_pit_end
         ; PIT timeout - use estimated value
         mov     dx, 6000h       ; Use estimated end value
-        mov     byte ptr [speed_confidence], 0
+        mov     byte [speed_confidence], 0
         
 .got_end_count:
         pop     cx
-        mov     word ptr [pit_end_count], dx
+        mov     word [pit_end_count], dx
         
         ; Restore port 61h state
-        mov     al, byte ptr [port_61h_state]
+        mov     al, byte [port_61h_state]
         out     61h, al
         
         sti                     ; Re-enable interrupts
         
         ; Calculate ticks elapsed
         ; PIT counts down, so elapsed = start - end
-        mov     bx, word ptr [pit_start_count]
+        mov     bx, word [pit_start_count]
         sub     bx, dx          ; BX = elapsed ticks
         jnc     .no_wrap_pit
         ; Handle wraparound (end > start means counter wrapped)
@@ -3025,7 +2956,7 @@ single_speed_trial PROC
 .no_wrap_pit:
         
         ; Subtract loop overhead
-        sub     bx, word ptr [loop_overhead_ticks]
+        sub     bx, word [loop_overhead_ticks]
         jc      .use_fallback   ; If negative, measurement failed
         
         ; Check for zero ticks to avoid division by zero
@@ -3037,8 +2968,8 @@ single_speed_trial PROC
         ; Each loop iteration is ~9 cycles (4 NOPs + loop)
         ; MHz = (iterations * cycles * PIT_freq) / (ticks * 1000000)
         ; Simplified: MHz = 107386 / ticks
-        mov     ax, 107386 AND 0FFFFh  ; Low word of constant
-        mov     dx, 107386 SHR 16      ; High word (1 for 107386)
+        mov     ax, 107386 & 0FFFFh    ; Low word of constant
+        mov     dx, 107386 >> 16       ; High word (1 for 107386)
         div     bx                     ; AX = MHz
         jmp     .store_result
         
@@ -3062,7 +2993,7 @@ single_speed_trial PROC
         
         ; Save and setup PIT channel 2 for calibration
         in      al, 61h
-        mov     byte ptr [port_61h_state], al
+        mov     byte [port_61h_state], al
         and     al, 0FCh        ; Clear bits 0-1 (gate=0, speaker=0)
         ; Ensures no audio clicks during measurement
         out     61h, al         ; Force gate low and speaker silent
@@ -3115,8 +3046,8 @@ single_speed_trial PROC
         
         ; Read RDTSC start
         db      0fh, 31h        ; RDTSC instruction
-        mov     dword ptr [rdtsc_start_low], eax
-        mov     dword ptr [rdtsc_start_high], edx
+        mov     dword [rdtsc_start_low], eax
+        mov     dword [rdtsc_start_high], edx
         
         ; Known delay loop (100000 iterations for better resolution)
         mov     ecx, 100000     ; Use ECX for 32-bit counter
@@ -3127,7 +3058,7 @@ single_speed_trial PROC
         jnz     .rdtsc_delay
         
         ; Check if RDTSCP is available for end measurement
-        cmp     byte ptr [has_rdtscp], 0
+        cmp     byte [has_rdtscp], 0
         jz      .use_rdtsc_with_fence
         
         ; Use RDTSCP for end measurement (self-serializing)
@@ -3144,8 +3075,8 @@ single_speed_trial PROC
         
 .got_end_tsc:
         ; Calculate cycles elapsed (end - start)
-        sub     eax, dword ptr [rdtsc_start_low]
-        sbb     edx, dword ptr [rdtsc_start_high]
+        sub     eax, dword [rdtsc_start_low]
+        sbb     edx, dword [rdtsc_start_high]
         mov     si, ax          ; Save low 16 bits of cycle count
         mov     di, dx          ; Save next 16 bits (32-bit total)
         
@@ -3179,7 +3110,7 @@ single_speed_trial PROC
         pop     cx
         
         ; Restore port 61h
-        mov     al, byte ptr [port_61h_state]
+        mov     al, byte [port_61h_state]
         out     61h, al
         
         sti                     ; Re-enable interrupts
@@ -3239,46 +3170,34 @@ single_speed_trial PROC
 .use_safe_path:
         ; For 386+ CPUs with very fast speeds, use true 32-bit division
         ; Check if we're on 386+ (has 32-bit operations)
-        test    dword ptr [cpu_features], FEATURE_32BIT
+        test    dword [cpu_features], FEATURE_32BIT
         jz      .use_approx_path ; Fall back to approximation on 286
         
         ; True 32-bit division path for 386+
         ; Calculate: (cycles_32 * 1193) / (ticks * 100) using 32-bit DIV
-        
+
         ; Build full 32-bit cycle count in EAX
+        ; DI:SI contains the 32-bit cycle count (DI=high, SI=low)
         push    bx              ; Save ticks
-        mov     ax, si          ; AX = low 16 bits of cycles
-        db      66h             ; 32-bit operand prefix
-        movzx   eax, ax         ; EAX = zero-extended low word
-        mov     ax, di          ; AX = high 16 bits of cycles
-        db      66h             ; 32-bit operand prefix
-        shl     eax, 16         ; Shift high word to upper 16 bits
-        mov     ax, si          ; Get low word again
-        db      66h             ; 32-bit operand prefix
-        or      eax, ax         ; EAX = full 32-bit cycle count
-        
+        movzx   eax, si         ; EAX = low 16 bits of cycles (zero-extended)
+        movzx   edx, di         ; EDX = high 16 bits of cycles (zero-extended)
+        shl     edx, 16         ; Shift high word to upper 16 bits
+        or      eax, edx        ; EAX = full 32-bit cycle count
+
         ; Multiply by 1193 for 64-bit result in EDX:EAX
-        db      66h             ; 32-bit operand prefix
-        mov     edx, eax        ; EDX = cycles
-        db      66h             ; 32-bit operand prefix
-        mov     eax, 1193       ; EAX = 1193
-        db      66h             ; 32-bit operand prefix
+        mov     edx, 1193       ; EDX = 1193
         mul     edx             ; EDX:EAX = cycles * 1193
         
         ; Calculate divisor: ticks * 100 in ECX
         pop     bx              ; Restore ticks
-        movzx   cx, bx          ; CX = ticks
-        db      66h             ; 32-bit operand prefix
-        movzx   ecx, cx         ; ECX = ticks (32-bit)
-        db      66h, 69h, 0C9h, 64h, 00h, 00h, 00h ; imul ecx, ecx, 100
-        
+        movzx   ecx, bx         ; ECX = ticks (32-bit, zero-extended from 16-bit)
+        imul    ecx, ecx, 100   ; ECX = ticks * 100
+
         ; Belt-and-suspenders: ensure divisor is non-zero
-        db      66h             ; 32-bit operand prefix
         or      ecx, ecx        ; Check if ECX is zero
         jz      .use_fallback   ; Bail if zero (shouldn't happen with timeouts)
-        
+
         ; Perform 64/32 division: EDX:EAX / ECX
-        db      66h             ; 32-bit operand prefix
         div     ecx             ; EAX = MHz, EDX = remainder
         
         ; Result in EAX, low 16 bits go to AX
@@ -3328,7 +3247,7 @@ single_speed_trial PROC
         
 .use_fallback:
         ; Use typical values based on CPU type
-        mov     bl, byte ptr [detected_cpu_type]
+        mov     bl, byte [detected_cpu_type]
         cmp     bl, CPU_8086
         jne     .check_186
         mov     ax, 5           ; 8086: typically 4.77-8 MHz
@@ -3372,7 +3291,7 @@ single_speed_trial PROC
         pop     bx
         pop     bp
         ret
-single_speed_trial ENDP
+; End of single_speed_trial
 
 ;-----------------------------------------------------------------------------
 ; calibrate_loop_overhead - Measure empty loop overhead for subtraction
@@ -3381,7 +3300,7 @@ single_speed_trial ENDP
 ; Output: loop_overhead_ticks is set
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-calibrate_loop_overhead PROC
+calibrate_loop_overhead:
         push    bp
         mov     bp, sp
         push    ax
@@ -3443,7 +3362,7 @@ calibrate_loop_overhead PROC
         add     bx, 0FFFFh
         inc     bx
 .no_wrap:
-        mov     word ptr [loop_overhead_ticks], bx
+        mov     word [loop_overhead_ticks], bx
         
         pop     dx
         pop     cx
@@ -3451,7 +3370,7 @@ calibrate_loop_overhead PROC
         pop     ax
         pop     bp
         ret
-calibrate_loop_overhead ENDP
+; End of calibrate_loop_overhead
 
 ;-----------------------------------------------------------------------------
 ; sort_speed_trials - Sort the 5 speed trial results (bubble sort)
@@ -3460,7 +3379,7 @@ calibrate_loop_overhead ENDP
 ; Output: speed_trials array is sorted in ascending order
 ; Uses:   AX, BX, CX, SI
 ;-----------------------------------------------------------------------------
-sort_speed_trials PROC
+sort_speed_trials:
         push    bp
         mov     bp, sp
         push    ax
@@ -3471,7 +3390,7 @@ sort_speed_trials PROC
         mov     cx, 4           ; 4 passes for 5 elements
 .outer_loop:
         push    cx
-        mov     si, OFFSET speed_trials
+        mov     si, speed_trials
         mov     cx, 4           ; 4 comparisons per pass
         
 .inner_loop:
@@ -3495,7 +3414,7 @@ sort_speed_trials PROC
         pop     ax
         pop     bp
         ret
-sort_speed_trials ENDP
+; End of sort_speed_trials
 
 ;-----------------------------------------------------------------------------
 ; calculate_confidence - Calculate confidence based on relative variance
@@ -3504,7 +3423,7 @@ sort_speed_trials ENDP
 ; Output: speed_confidence is set (0-100%)
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-calculate_confidence PROC
+calculate_confidence:
         push    bp
         mov     bp, sp
         push    ax
@@ -3513,15 +3432,15 @@ calculate_confidence PROC
         push    dx
         
         ; Get median value (3rd of 5)
-        mov     bx, word ptr [speed_trials+4]
+        mov     bx, word [speed_trials+4]
         
         ; Avoid division by zero
         or      bx, bx
         jz      .low_confidence
         
         ; Calculate spread as (max - min)
-        mov     ax, word ptr [speed_trials+8]  ; Max (5th element)
-        sub     ax, word ptr [speed_trials]    ; Min (1st element)
+        mov     ax, word [speed_trials+8]  ; Max (5th element)
+        sub     ax, word [speed_trials]    ; Min (1st element)
         
         ; Calculate relative spread: (spread * 100) / median
         ; This gives us percentage variation
@@ -3555,7 +3474,7 @@ calculate_confidence PROC
         mov     bx, 0
         
 .store_confidence:
-        mov     byte ptr [speed_confidence], bl
+        mov     byte [speed_confidence], bl
         
         pop     dx
         pop     cx
@@ -3563,7 +3482,7 @@ calculate_confidence PROC
         pop     ax
         pop     bp
         ret
-calculate_confidence ENDP
+; End of calculate_confidence
 
 ;-----------------------------------------------------------------------------
 ; asm_get_cpu_speed - C-callable wrapper to get CPU speed
@@ -3572,15 +3491,15 @@ calculate_confidence ENDP
 ; Output: AX = CPU speed in MHz
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_cpu_speed PROC
+asm_get_cpu_speed:
         ; First detect speed if not already done
-        cmp     word ptr [detected_cpu_mhz], 0
+        cmp     word [detected_cpu_mhz], 0
         jne     .already_detected
         call    detect_cpu_speed
 .already_detected:
-        mov     ax, word ptr [detected_cpu_mhz]
+        mov     ax, word [detected_cpu_mhz]
         ret
-asm_get_cpu_speed ENDP
+; End of asm_get_cpu_speed
 
 ;-----------------------------------------------------------------------------
 ; asm_get_speed_confidence - C-callable wrapper to get speed confidence
@@ -3589,11 +3508,11 @@ asm_get_cpu_speed ENDP
 ; Output: AL = Speed confidence (0-100%)
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_get_speed_confidence PROC
-        mov     al, byte ptr [speed_confidence]
+asm_get_speed_confidence:
+        mov     al, byte [speed_confidence]
         xor     ah, ah
         ret
-asm_get_speed_confidence ENDP
+; End of asm_get_speed_confidence
 
 ;-----------------------------------------------------------------------------
 ; asm_has_invariant_tsc - C-callable wrapper to check invariant TSC
@@ -3602,11 +3521,11 @@ asm_get_speed_confidence ENDP
 ; Output: AL = 1 if TSC is invariant, 0 otherwise
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_has_invariant_tsc PROC
-        mov     al, byte ptr [invariant_tsc]
+asm_has_invariant_tsc:
+        mov     al, byte [invariant_tsc]
         xor     ah, ah
         ret
-asm_has_invariant_tsc ENDP
+; End of asm_has_invariant_tsc
 
 ;-----------------------------------------------------------------------------
 ; asm_has_rdtscp - C-callable wrapper to check RDTSCP availability
@@ -3615,11 +3534,11 @@ asm_has_invariant_tsc ENDP
 ; Output: AL = 1 if RDTSCP is available, 0 otherwise
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_has_rdtscp PROC
-        mov     al, byte ptr [has_rdtscp]
+asm_has_rdtscp:
+        mov     al, byte [has_rdtscp]
         xor     ah, ah
         ret
-asm_has_rdtscp ENDP
+; End of asm_has_rdtscp
 
 ;-----------------------------------------------------------------------------
 ; asm_is_hypervisor - C-callable wrapper to check if running under hypervisor
@@ -3628,12 +3547,8 @@ asm_has_rdtscp ENDP
 ; Output: AL = 1 if running under hypervisor, 0 otherwise
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-asm_is_hypervisor PROC
-        mov     al, byte ptr [is_hypervisor]
+asm_is_hypervisor:
+        mov     al, byte [is_hypervisor]
         xor     ah, ah
         ret
-asm_is_hypervisor ENDP
-
-_TEXT ENDS
-
-END
+; End of asm_is_hypervisor

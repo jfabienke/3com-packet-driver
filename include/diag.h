@@ -25,6 +25,8 @@
 #define ALERT_TYPE_API_ERROR            5
 #define ALERT_TYPE_PERFORMANCE_DEGRADED 6
 #define ALERT_TYPE_BOTTLENECK_DETECTED  7
+#define ALERT_TYPE_HARDWARE_FAILURE     8
+#define ALERT_TYPE_NETWORK_DOWN         9
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,10 +35,21 @@ extern "C" {
 /* Includes */
 #include "common.h"
 #include "hardware.h"
+#include "packet.h"      /* For packet_buffer_t */
+
+/* Open Watcom compatibility for standard C macros */
+#if defined(__WATCOMC__)
+    /* Watcom supports __FILE__ and __LINE__ but not __FUNCTION__ */
+    #ifndef __FUNCTION__
+        #define __FUNCTION__ "?"
+    #endif
+#elif !defined(__FUNCTION__)
+    #define __FUNCTION__ "?"
+#endif
 
 /* Diagnostic levels */
 typedef enum {
-    DIAG_LEVEL_NONE = 0,                    /* No diagnostics */
+    DIAG_LEVEL_NONE,                        /* No diagnostics */
     DIAG_LEVEL_ERROR,                       /* Errors only */
     DIAG_LEVEL_WARNING,                     /* Warnings and errors */
     DIAG_LEVEL_INFO,                        /* Information, warnings, errors */
@@ -57,7 +70,7 @@ typedef enum {
 
 /* Diagnostic test types */
 typedef enum {
-    DIAG_TEST_NONE = 0,
+    DIAG_TEST_NONE,
     DIAG_TEST_HARDWARE,                     /* Hardware self-test */
     DIAG_TEST_MEMORY,                       /* Memory test */
     DIAG_TEST_INTERRUPT,                    /* Interrupt test */
@@ -120,7 +133,7 @@ typedef struct log_config {
     bool network_enabled;                   /* Network output */
     diag_level_t min_level;                 /* Minimum log level */
     uint32_t category_filter;               /* Category filter mask */
-    char file_path[128];                    /* Log file path */
+    char file_path[64];                     /* Log file path (DOS 8.3) */
     uint16_t ring_buffer_size;              /* Ring buffer size */
 } log_config_t;
 

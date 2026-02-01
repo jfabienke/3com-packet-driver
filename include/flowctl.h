@@ -36,6 +36,8 @@
 #ifndef _FLOW_CONTROL_H_
 #define _FLOW_CONTROL_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,50 +81,67 @@ extern "C" {
 
 /**
  * @brief 802.3x PAUSE frame structure
- * 
+ *
  * Standard PAUSE frame format according to IEEE 802.3x specification.
  * Total frame size is 64 bytes including Ethernet header and CRC.
  */
-typedef struct __attribute__((packed)) {
+#ifdef __WATCOMC__
+#pragma pack(push, 1)
+#endif
+typedef struct {
     /* Ethernet header (14 bytes) */
     uint8_t dest_mac[6];        /* Destination MAC: 01:80:C2:00:00:01 */
     uint8_t src_mac[6];         /* Source MAC address */
     uint16_t ethertype;         /* EtherType: 0x8808 (MAC Control) */
-    
+
     /* MAC Control payload (46 bytes) */
     uint16_t opcode;            /* Control opcode: 0x0001 (PAUSE) */
     uint16_t pause_time;        /* Pause time in quanta (0-65535) */
     uint8_t padding[42];        /* Padding bytes (all zeros) */
-    
+
     /* CRC is added by hardware/software layer */
 } pause_frame_t;
+#ifdef __WATCOMC__
+#pragma pack(pop)
+#endif
 
 /**
  * @brief Flow control state enumeration
  */
 typedef enum {
-    FLOW_CONTROL_STATE_DISABLED = 0,    /* Flow control disabled */
-    FLOW_CONTROL_STATE_IDLE,            /* No flow control active */
-    FLOW_CONTROL_STATE_PAUSE_REQUESTED, /* PAUSE frame received, throttling TX */
-    FLOW_CONTROL_STATE_PAUSE_ACTIVE,    /* Actively pausing transmission */
-    FLOW_CONTROL_STATE_RESUME_PENDING,  /* Waiting to resume transmission */
-    FLOW_CONTROL_STATE_ERROR            /* Error state requiring reset */
+    FLOW_CONTROL_STATE_DISABLED,        /* 0: Flow control disabled */
+    FLOW_CONTROL_STATE_IDLE,            /* 1: No flow control active */
+    FLOW_CONTROL_STATE_PAUSE_REQUESTED, /* 2: PAUSE frame received, throttling TX */
+    FLOW_CONTROL_STATE_PAUSE_ACTIVE,    /* 3: Actively pausing transmission */
+    FLOW_CONTROL_STATE_RESUME_PENDING,  /* 4: Waiting to resume transmission */
+    FLOW_CONTROL_STATE_ERROR            /* 5: Error state requiring reset */
 } flow_control_state_t;
 
 /**
  * @brief Flow control capability flags
  */
 typedef enum {
-    FLOW_CONTROL_CAP_NONE           = 0x0000,  /* No flow control support */
-    FLOW_CONTROL_CAP_RX_PAUSE       = 0x0001,  /* Can process received PAUSE frames */
-    FLOW_CONTROL_CAP_TX_PAUSE       = 0x0002,  /* Can send PAUSE frames */
-    FLOW_CONTROL_CAP_SYMMETRIC      = 0x0003,  /* Full symmetric flow control */
-    FLOW_CONTROL_CAP_ASYMMETRIC     = 0x0004,  /* Asymmetric flow control */
-    FLOW_CONTROL_CAP_AUTO_NEGOTIATE = 0x0008,  /* Auto-negotiation support */
-    FLOW_CONTROL_CAP_PRIORITY_PAUSE = 0x0010,  /* Priority-based PAUSE support */
-    FLOW_CONTROL_CAP_HW_DETECTION   = 0x0020,  /* Hardware PAUSE frame detection */
-    FLOW_CONTROL_CAP_HW_GENERATION  = 0x0040   /* Hardware PAUSE frame generation */
+    FLOW_CONTROL_CAP_NONE,           /* 0: No flow control support */
+    FLOW_CONTROL_CAP_RX_PAUSE,       /* 1: Can process received PAUSE frames */
+    FLOW_CONTROL_CAP_TX_PAUSE,       /* 2: Can send PAUSE frames */
+    FLOW_CONTROL_CAP_SYMMETRIC,      /* 3: Full symmetric flow control */
+    FLOW_CONTROL_CAP_ASYMMETRIC,     /* 4: Asymmetric flow control */
+    FLOW_CONTROL_CAP_AUTO_NEGOTIATE, /* 5: Auto-negotiation support */
+    FLOW_CONTROL_CAP_PRIORITY_PAUSE, /* 6: Priority-based PAUSE support */
+    FLOW_CONTROL_CAP_HW_DETECTION,   /* 7: Hardware PAUSE frame detection */
+    FLOW_CONTROL_CAP_HW_GENERATION   /* 8: Hardware PAUSE frame generation */
 } flow_control_capabilities_t;
+
+/* Flow control capability bitmask values for flag operations */
+#define FLOW_CONTROL_CAP_FLAG_NONE           0x0000
+#define FLOW_CONTROL_CAP_FLAG_RX_PAUSE       0x0001
+#define FLOW_CONTROL_CAP_FLAG_TX_PAUSE       0x0002
+#define FLOW_CONTROL_CAP_FLAG_SYMMETRIC      0x0003
+#define FLOW_CONTROL_CAP_FLAG_ASYMMETRIC     0x0004
+#define FLOW_CONTROL_CAP_FLAG_AUTO_NEGOTIATE 0x0008
+#define FLOW_CONTROL_CAP_FLAG_PRIORITY_PAUSE 0x0010
+#define FLOW_CONTROL_CAP_FLAG_HW_DETECTION   0x0020
+#define FLOW_CONTROL_CAP_FLAG_HW_GENERATION  0x0040
 
 /**
  * @brief Flow control configuration structure
@@ -597,34 +616,31 @@ int flow_control_self_test(void);
     .capabilities = FLOW_CONTROL_CAP_RX_PAUSE | FLOW_CONTROL_CAP_TX_PAUSE \
 }
 
+/* -------------------------------------------------------------------------- */
+/* Lightweight NIC-index-based API (used by flowctl.c / packet_ops.c)         */
+/* These provide DOS real-mode flow control without per-NIC heap allocations. */
+/* -------------------------------------------------------------------------- */
+
+/* Initialize software flow control (global/per-NIC state) */
+int fc_simple_init(void);
+
+/* RX path: detect and process PAUSE frame; returns 1 if handled */
+int fc_simple_process_rx(int nic_index, const uint8_t *packet, uint16_t length);
+
+/* TX path: check if transmission should be paused for NIC */
+bool fc_simple_should_pause(int nic_index);
+
+/* TX path: remaining pause time in milliseconds (0 if none) */
+uint32_t fc_simple_get_pause_duration(int nic_index);
+
+/* Busy-wait resume helper (bounded, DOS-safe) */
+void fc_simple_wait_for_resume(int nic_index, uint32_t pause_ms);
+
+/* Update buffer usage percentage to drive high/low watermarks */
+void fc_simple_update_buffer_status(int nic_index, uint16_t usage_percent);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* _FLOW_CONTROL_H_ */
-
-/* -------------------------------------------------------------------------- */
-/* Compatibility wrappers used by packet_ops.c (software PAUSE implementation) */
-/* These lightweight APIs provide NIC-index based flow control suitable for    */
-/* DOS real-mode drivers without per-NIC heap allocations.                     */
-/* -------------------------------------------------------------------------- */
-
-/* Initialize software flow control (global/per-NIC state) */
-int flow_control_init(void);
-
-/* RX path: detect and process PAUSE frame; returns 1 if handled */
-int flow_control_process_received_packet(int nic_index,
-                                         const uint8_t *packet,
-                                         uint16_t length);
-
-/* TX path: check if transmission should be paused for NIC */
-bool flow_control_should_pause_transmission(int nic_index);
-
-/* TX path: remaining pause time in milliseconds (0 if none) */
-uint32_t flow_control_get_pause_duration(int nic_index);
-
-/* Busy-wait resume helper (bounded, DOS-safe) */
-void flow_control_wait_for_resume(int nic_index, uint32_t pause_ms);
-
-/* Update buffer usage percentage to drive high/low watermarks */
-void flow_control_update_buffer_status(int nic_index, uint16_t usage_percent);

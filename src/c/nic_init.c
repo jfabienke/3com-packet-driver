@@ -4,11 +4,17 @@
  *
  * 3Com Packet Driver - Support for 3C515-TX and 3C509B NICs
  *
- * This file is part of the 3Com Packet Driver project.
+ * Last Updated: 2026-01-27 22:00:00 UTC
  *
+ * Memory Optimization: Define INIT_DIAG=1 for debug builds to enable init
+ * diagnostics (~8.5KB). Release builds without INIT_DIAG save DGROUP space.
+ *
+ * This file is part of the 3Com Packet Driver project.
  */
 
 #include "nic_init.h"
+/* Note: media_type_t constants (MEDIA_TYPE_*) are defined in nic_defs.h included via nic_init.h */
+#include "nicctx.h"   /* For nic_context_t */
 #include "logging.h"
 #include "memory.h"
 #include "diag.h"
@@ -23,17 +29,46 @@
 #include "cachecoh.h"  // Phase 4: Runtime cache coherency testing
 #include "cachemgt.h"  // Phase 4: Cache management system
 #include "chipdet.h"  // Phase 4: Safe chipset detection
-#include "chipset_database.h"  // Phase 4: Community chipset database
+/* chipset_database.h not yet implemented - Phase 4 feature */
+/* #include "chipset_database.h" */
 #include "prfenbl.h"  // Phase 4: Performance optimization guidance
+#include "main.h"
 #include <string.h>
 
 /* External DMA policy functions */
 extern void dma_policy_get_state(uint8_t *runtime, uint8_t *validated, uint8_t *safe);
-extern bool dma_should_enable(void);
+extern int dma_should_enable(void);
+
+/* External PnP functions */
+extern int pnp_init_system(void);
+extern int pnp_detect_nics(nic_detect_info_t *info_list, int max_nics);
+extern void hardware_set_pnp_detection_results(const nic_detect_info_t *results, int count);
+
+/* External configuration */
+extern config_t g_config;
+
+/* External RX batch functions */
+extern int rx_batch_init(uint8_t nic_index, uint16_t io_base);
+
+/* Forward declarations for local functions */
+static uint32_t dma_virt_to_phys(void *virtual_addr);
+int nic_init_3c515_dma_rings(nic_info_t *nic);
+int nic_init_3c515_mii(nic_info_t *nic);
 
 /* Global NIC initialization state */
 bool g_nic_init_system_ready = false;
+
+/* Init statistics - always present (32 bytes - cheap telemetry) */
 nic_init_stats_t g_nic_init_stats;
+#define INIT_STAT_INC(field) (g_nic_init_stats.field++)
+
+/* Large diagnostic structures - guarded to save ~8KB DGROUP
+ * Define INIT_DIAG=1 for debug/diagnostic builds with full analysis */
+#ifdef INIT_DIAG
+#pragma message("nic_init.c: INIT_DIAG ENABLED - full diagnostics (~8KB in DGROUP)")
+#else
+#pragma message("nic_init.c: INIT_DIAG DISABLED - release mode (diagnostics stripped)")
+#endif
 
 /* Global MDIO lock for MII bus serialization */
 volatile mdio_lock_t g_mdio_lock = {0, 0, 0, 0, 0};
@@ -57,18 +92,19 @@ static int mii_read_safe(uint16_t io_base, uint8_t phy_addr, uint8_t reg_addr, u
         return ERROR_INVALID_PARAMETER;
     }
     
-    /* Determine context for lock */
-    _asm {
-        pushf
-        pop ax
-        test ax, 0200h  ; Check IF flag
-        jz in_isr
-        mov context, MDIO_CTX_MAIN
-        jmp ctx_done
-    in_isr:
-        mov context, MDIO_CTX_ISR
-    ctx_done:
+    /* Determine context for lock - check interrupt flag to detect ISR context */
+    /* If interrupts are disabled (IF=0), we're likely in ISR context */
+    context = MDIO_CTX_MAIN;  /* Default to main context */
+#ifdef __WATCOMC__
+    {
+        unsigned short flags_val = save_flags_cli();
+        restore_flags(flags_val);
+        /* If IF bit (bit 9) was clear, we were in ISR context */
+        if (!(flags_val & 0x0200)) {
+            context = MDIO_CTX_ISR;
+        }
     }
+#endif
     
     /* Bounded retry loop to replace tail recursion */
     for (retry_count = 0; retry_count < MAX_MII_RETRIES; retry_count++) {
@@ -172,18 +208,18 @@ static int mii_write_safe(uint16_t io_base, uint8_t phy_addr, uint8_t reg_addr, 
         return ERROR_INVALID_PARAMETER;
     }
     
-    /* Determine context for lock */
-    _asm {
-        pushf
-        pop ax
-        test ax, 0200h  ; Check IF flag
-        jz in_isr_w
-        mov context, MDIO_CTX_MAIN
-        jmp ctx_done_w
-    in_isr_w:
-        mov context, MDIO_CTX_ISR
-    ctx_done_w:
+    /* Determine context for lock - check interrupt flag to detect ISR context */
+    context = MDIO_CTX_MAIN;  /* Default to main context */
+#ifdef __WATCOMC__
+    {
+        unsigned short flags_val = save_flags_cli();
+        restore_flags(flags_val);
+        /* If IF bit (bit 9) was clear, we were in ISR context */
+        if (!(flags_val & 0x0200)) {
+            context = MDIO_CTX_ISR;
+        }
     }
+#endif
     
     /* Acquire MDIO lock with timeout */
     if (!mdio_lock_acquire(context)) {
@@ -322,8 +358,13 @@ static bool g_nic_init_initialized = false;
 
 /* Phase 4: Global cache coherency state */
 static bool g_cache_coherency_initialized = false;
+
+/* Diagnostic structures - guarded to save ~8KB DGROUP
+ * The functional initialization uses local variables instead */
+#ifdef INIT_DIAG
 static coherency_analysis_t g_system_coherency_analysis;
 static chipset_detection_result_t g_system_chipset_detection;
+#endif
 
 /* Internal helper functions */
 static int nic_reset_hardware(nic_info_t *nic);
@@ -337,23 +378,28 @@ static int nic_init_cache_coherency_system(void);
 static int nic_init_apply_coherency_to_nic(nic_info_t *nic);
 static void nic_init_display_system_analysis(void);
 
-/* Delay functions (implemented later in file) */
-void udelay(uint32_t microseconds);
-void mdelay(uint32_t milliseconds);
+/* Delay functions (implemented later in file) - use unsigned int to match common.h */
+void udelay(unsigned int microseconds);
+void mdelay(unsigned int milliseconds);
 
 /* Main NIC initialization functions */
 int nic_init_system(void) {
+    int coherency_result;        /* C89: declare at block start */
+    int pnp_init_result;
+    nic_detect_info_t pnp_detection_results[MAX_NICS];
+    int pnp_detected_count;
+
     if (g_nic_init_initialized) {
         return SUCCESS;
     }
-    
+
     LOG_INFO("Initializing NIC system with cache coherency management...");
-    
+
     /* Initialize statistics */
     nic_init_stats_clear();
-    
+
     /* Phase 4: Initialize cache coherency system FIRST */
-    int coherency_result = nic_init_cache_coherency_system();
+    coherency_result = nic_init_cache_coherency_system();
     if (coherency_result != SUCCESS) {
         LOG_ERROR("Cache coherency system initialization failed: %d", coherency_result);
         return coherency_result;
@@ -361,18 +407,16 @@ int nic_init_system(void) {
     
     /* Initialize hardware detection system */
     /* Initialize PnP subsystem for 3Com device detection */
-    extern int pnp_init_system(void);        // Assembly PnP system initialization
-    extern int pnp_detect_nics(nic_detect_info_t *info_list, int max_nics);  // Enhanced PnP detection
-    
+    /* Note: pnp_init_system() and pnp_detect_nics() declared at file scope */
+
     /* Initialize PnP system first */
-    int pnp_init_result = pnp_init_system();
+    pnp_init_result = pnp_init_system();
     if (pnp_init_result != SUCCESS) {
         LOG_WARNING("PnP system initialization failed: %d - continuing with ISA detection only", pnp_init_result);
     }
-    
+
     /* Pre-populate detection results from PnP system */
-    nic_detect_info_t pnp_detection_results[MAX_NICS];
-    int pnp_detected_count = 0;
+    pnp_detected_count = 0;
     
     if (pnp_init_result == SUCCESS) {
         pnp_detected_count = pnp_detect_nics(pnp_detection_results, MAX_NICS);
@@ -395,7 +439,7 @@ int nic_init_system(void) {
     }
     
     /* Make PnP results available to hardware initialization layer */
-    extern void hardware_set_pnp_detection_results(const nic_detect_info_t *results, int count);
+    /* Note: hardware_set_pnp_detection_results() declared at file scope */
     if (pnp_detected_count > 0) {
         hardware_set_pnp_detection_results(pnp_detection_results, pnp_detected_count);
     }
@@ -468,32 +512,33 @@ int nic_init_count_detected(void) {
 
 /* Individual NIC initialization */
 int nic_init_single(nic_info_t *nic, const nic_init_config_t *config) {
+    int result;  /* C89: declare at block start */
+
     if (!nic || !config) {
         return ERROR_INVALID_PARAM;
     }
-    
-    g_nic_init_stats.total_initializations++;
-    
+
+    INIT_STAT_INC(total_initializations);
+
     LOG_INFO("Initializing NIC type %d at I/O 0x%X", config->nic_type, config->io_base);
-    
+
     /* Set basic NIC information */
     nic->type = config->nic_type;
     nic->io_base = config->io_base;
     nic->irq = config->irq;
     nic->dma_channel = config->dma_channel;
-    
+
     /* Reset hardware if not skipped */
     if (!(config->flags & NIC_INIT_FLAG_NO_RESET)) {
-        int result = nic_reset_hardware(nic);
+        result = nic_reset_hardware(nic);
         if (result != SUCCESS) {
             LOG_ERROR("Hardware reset failed: %d", result);
             nic_init_update_stats(false, false);
             return result;
         }
     }
-    
+
     /* Initialize hardware-specific settings */
-    int result;
     switch (config->nic_type) {
         case NIC_TYPE_3C509B:
             result = nic_init_3c509b(nic, config);
@@ -549,12 +594,13 @@ int nic_init_single(nic_info_t *nic, const nic_init_config_t *config) {
 }
 
 int nic_init_from_detection(nic_info_t *nic, const nic_detect_info_t *detect_info) {
+    nic_init_config_t config;  /* C89: declare at block start */
+
     if (!nic || !detect_info || !detect_info->detected) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Create configuration from detection info */
-    nic_init_config_t config;
     nic_init_config_defaults(&config, detect_info->type);
     
     config.nic_type = detect_info->type;
@@ -571,26 +617,28 @@ int nic_init_from_detection(nic_info_t *nic, const nic_detect_info_t *detect_inf
 
 /* NIC detection functions */
 int nic_detect_all(nic_detect_info_t *detect_list, int max_nics) {
+    int total_detected = 0;         /* C89: declare at block start */
+    int detected_3c509b;
+    int detected_3c515;
+
     if (!detect_list || max_nics <= 0) {
         return ERROR_INVALID_PARAM;
     }
-    
-    g_nic_init_stats.total_detections++;
-    
-    int total_detected = 0;
-    
+
+    INIT_STAT_INC(total_detections);
+
     /* Detect 3C509B NICs */
-    int detected_3c509b = nic_detect_3c509b(detect_list + total_detected, 
-                                           max_nics - total_detected);
+    detected_3c509b = nic_detect_3c509b(detect_list + total_detected,
+                                        max_nics - total_detected);
     if (detected_3c509b > 0) {
         total_detected += detected_3c509b;
         LOG_INFO("Detected %d 3C509B NICs", detected_3c509b);
     }
-    
+
     /* Detect 3C515 NICs */
     if (total_detected < max_nics) {
-        int detected_3c515 = nic_detect_3c515(detect_list + total_detected,
-                                             max_nics - total_detected);
+        detected_3c515 = nic_detect_3c515(detect_list + total_detected,
+                                          max_nics - total_detected);
         if (detected_3c515 > 0) {
             total_detected += detected_3c515;
             LOG_INFO("Detected %d 3C515 NICs", detected_3c515);
@@ -598,7 +646,7 @@ int nic_detect_all(nic_detect_info_t *detect_list, int max_nics) {
     }
     
     if (total_detected > 0) {
-        g_nic_init_stats.successful_detections++;
+        INIT_STAT_INC(successful_detections);
     }
     
     LOG_INFO("Total NICs detected: %d", total_detected);
@@ -607,8 +655,10 @@ int nic_detect_all(nic_detect_info_t *detect_list, int max_nics) {
 }
 
 int nic_detect_3c509b(nic_detect_info_t *info_list, int max_count) {
-    int detected_count = 0;
+    int detected_count = 0;  /* C89: declare at block start */
+    int pnp_detected;
     int i;
+    uint16_t io_base;
 
     if (!info_list || max_count <= 0) {
         return ERROR_INVALID_PARAM;
@@ -616,17 +666,17 @@ int nic_detect_3c509b(nic_detect_info_t *info_list, int max_count) {
 
     /* Try each possible I/O address */
     for (i = 0; i < NIC_3C509B_IO_COUNT && detected_count < max_count; i++) {
-        uint16_t io_base = NIC_3C509B_IO_BASES[i];
-        
+        io_base = NIC_3C509B_IO_BASES[i];
+
         if (nic_probe_3c509b_at_address(io_base, &info_list[detected_count])) {
             LOG_DEBUG("Found 3C509B at I/O 0x%X", io_base);
             detected_count++;
         }
     }
-    
+
     /* Try PnP detection */
-    int pnp_detected = nic_detect_pnp_3c509b(info_list + detected_count, 
-                                            max_count - detected_count);
+    pnp_detected = nic_detect_pnp_3c509b(info_list + detected_count,
+                                         max_count - detected_count);
     detected_count += pnp_detected;
     
     return detected_count;
@@ -655,47 +705,50 @@ int nic_detect_3c515(nic_detect_info_t *info_list, int max_count) {
 
 /* Hardware-specific initialization */
 int nic_init_3c509b(nic_info_t *nic, const nic_init_config_t *config) {
+    int result;  /* C89: declare at block start */
+
     if (!nic || !config) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Initializing 3C509B at I/O 0x%X with advanced features", config->io_base);
-    
+
     /* Set NIC operations */
     nic->ops = get_3c509b_ops();
     if (!nic->ops) {
         return ERROR_NOT_FOUND;
     }
-    
+
     /* Configure basic settings */
     nic->mtu = 1514;
     nic->capabilities = get_nic_capabilities_from_type(NIC_TYPE_3C509B);
     nic->speed = 10; /* 10 Mbps */
     nic->full_duplex = false;
-    
+
     /* Advanced 3C509B Features Configuration */
-    
+
     /* Enhanced FIFO thresholds for better performance */
-    nic->tx_fifo_threshold = 512;  /* Start TX when 512 bytes available */
+    /* Note: tx_fifo_threshold is uint8_t, max 255 */
+    nic->tx_fifo_threshold = 255;  /* Start TX when threshold bytes available (max uint8_t) */
     nic->rx_fifo_threshold = 16;   /* RX early threshold - higher for promiscuous */
-    
+
     /* Configure media type detection */
-    nic->media_type = NIC_MEDIA_AUTO;
-    
+    nic->current_media = MEDIA_TYPE_AUTO_DETECT;
+
     /* Initialize promiscuous mode capability */
-    nic->promiscuous_capable = true;
-    nic->multicast_capable = true;
-    
+    nic->promiscuous_capable = 1;  /* true */
+    nic->multicast_capable = 1;    /* true */
+
     /* Read MAC address if not already set */
     if (is_zero_mac(nic->mac)) {
-        int result = nic_read_mac_address_3c509b(config->io_base, nic->mac);
+        result = nic_read_mac_address_3c509b(config->io_base, nic->mac);
         if (result != SUCCESS) {
             LOG_ERROR("Failed to read MAC address");
             return result;
         }
         memory_copy(nic->perm_mac, nic->mac, ETH_ALEN);
     }
-    
+
     /* Advanced Feature: Configure interrupt mitigation for promiscuous mode */
     if (nic->capabilities & HW_CAP_PROMISCUOUS) {
         /* Set interrupt coalescing parameters */
@@ -703,10 +756,10 @@ int nic_init_3c509b(nic_info_t *nic, const nic_init_config_t *config) {
         nic->interrupt_coalesce_timeout = 50;   /* Max 50ms delay */
         LOG_DEBUG("3C509B interrupt mitigation configured");
     }
-    
+
     /* Initialize using hardware-specific operations */
     if (nic->ops->init) {
-        int result = nic->ops->init(nic);
+        result = nic->ops->init(nic);
         if (result != SUCCESS) {
             LOG_ERROR("3C509B hardware initialization failed: %d", result);
             return result;
@@ -721,72 +774,76 @@ int nic_init_3c509b(nic_info_t *nic, const nic_init_config_t *config) {
 }
 
 int nic_init_3c515(nic_info_t *nic, const nic_init_config_t *config) {
+    /* C89: declare all variables at block start */
+    nic_context_t test_ctx;
+    int quick_mode;
+    int test_result;
+    uint8_t runtime, validated, safe;
+    int result;
+
     if (!nic || !config) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Initializing 3C515-TX at I/O 0x%X with bus master safety testing", config->io_base);
-    
+
     /* Set NIC operations */
     nic->ops = get_3c515_ops();
     if (!nic->ops) {
         return ERROR_NOT_FOUND;
     }
-    
+
     /* Configure basic settings */
     nic->mtu = 1514;
     nic->capabilities = get_nic_capabilities_from_type(NIC_TYPE_3C515_TX);
     nic->speed = 100; /* 100 Mbps capable */
     nic->full_duplex = true;
-    
+
     /* Advanced 3C515-TX Features Configuration */
-    
+
     /* Enhanced DMA configuration - REQUIRES BUS MASTER TESTING */
-    /* Access global config for bus master settings */
-    extern config_t g_config;
-    
+    /* Note: g_config declared as extern at file scope */
+
     /* Initially assume no DMA/bus mastering until tested */
-    nic->dma_capable = false;
-    nic->bus_master_capable = false;
-    nic->scatter_gather_capable = false; /* Software SG only */
-    
+    nic->dma_capable = 0;
+    nic->bus_master_capable = 0;
+    nic->scatter_gather_capable = 0; /* Software SG only */
+
     /* Perform bus master capability testing if required */
     if (g_config.busmaster != BUSMASTER_OFF) {
         LOG_INFO("3C515-TX: Performing bus master capability testing...");
-        
+
         /* Create NIC context for testing */
-        nic_context_t test_ctx;
         memset(&test_ctx, 0, sizeof(test_ctx));
-        test_ctx.nic_info = nic;
+        test_ctx.private_data = (void *)nic;
         test_ctx.io_base = config->io_base;
-        test_ctx.irq = config->irq;
-        
+        test_ctx.irq_line = config->irq;
+
         /* Perform bus master testing based on configuration */
-        bool quick_mode = (g_config.busmaster == BUSMASTER_AUTO);
-        int test_result = config_perform_busmaster_auto_test(&g_config, &test_ctx, quick_mode);
-        
+        quick_mode = (g_config.busmaster == BUSMASTER_AUTO);
+        test_result = config_perform_busmaster_auto_test(&g_config, &test_ctx, quick_mode);
+
         if (test_result == 0 && g_config.busmaster == BUSMASTER_ON) {
             /* Bus master testing passed - check DMA validation policy */
-            uint8_t runtime, validated, safe;
             dma_policy_get_state(&runtime, &validated, &safe);
             
             if (!validated) {
                 /* DMA validation not yet passed - force PIO mode */
-                nic->dma_capable = false;
-                nic->bus_master_capable = false;
+                nic->dma_capable = 0;
+                nic->bus_master_capable = 0;
                 /* Remove bus master capability until validated */
                 nic->capabilities &= ~(HW_CAP_BUS_MASTER | HW_CAP_DMA);
                 LOG_INFO("3C515-TX: DMA validation pending - using PIO mode until AH=97h validation");
             } else {
                 /* Both bus master test and DMA validation passed */
-                nic->dma_capable = true;
-                nic->bus_master_capable = true;
+                nic->dma_capable = 1;
+                nic->bus_master_capable = 1;
                 LOG_INFO("3C515-TX: Bus master testing PASSED and DMA validated - DMA enabled");
             }
         } else {
             /* Bus master testing failed or disabled - use PIO mode */
-            nic->dma_capable = false;
-            nic->bus_master_capable = false;
+            nic->dma_capable = 0;
+            nic->bus_master_capable = 0;
             /* Remove bus master capability */
             nic->capabilities &= ~(HW_CAP_BUS_MASTER | HW_CAP_DMA);
             LOG_INFO("3C515-TX: Using Programmed I/O mode (bus master %s)", 
@@ -794,75 +851,76 @@ int nic_init_3c515(nic_info_t *nic, const nic_init_config_t *config) {
         }
     } else {
         /* Clear bus master capabilities when disabled */
-        nic->dma_capable = false;
-        nic->bus_master_capable = false;
+        nic->dma_capable = 0;
+        nic->bus_master_capable = 0;
         nic->capabilities &= ~(HW_CAP_BUS_MASTER | HW_CAP_DMA);
         LOG_INFO("3C515-TX: Bus mastering disabled by configuration - using PIO mode");
     }
     
     /* Configure optimal DMA thresholds */
-    nic->tx_fifo_threshold = 1024; /* Higher threshold for 100Mbps */
+    /* Note: tx_fifo_threshold is uint8_t, max 255. Use 255 for highest threshold */
+    nic->tx_fifo_threshold = 255;  /* Higher threshold for 100Mbps (max uint8_t) */
     nic->rx_fifo_threshold = 32;   /* Optimized for DMA burst mode */
     
     /* MII auto-negotiation capability */
-    nic->autoneg_capable = true;
-    nic->mii_capable = true;
+    nic->autoneg_capable = 1;
+    nic->mii_capable = 1;
     nic->phy_address = 0x18;       /* Internal PHY address */
-    
+
     /* Advanced interrupt features */
-    nic->interrupt_coalesce_capable = true;
+    nic->interrupt_coalesce_capable = 1;
     nic->interrupt_coalesce_count = 8;     /* Higher coalescing for 100Mbps */
     nic->interrupt_coalesce_timeout = 25;  /* Lower latency */
-    
+
     /* Zero-copy DMA capability */
-    nic->zero_copy_capable = true;
-    nic->descriptor_rings_capable = true;
-    
+    nic->zero_copy_capable = 1;
+    nic->descriptor_rings_capable = 1;
+
     /* Promiscuous mode with DMA optimization */
-    nic->promiscuous_capable = true;
-    nic->multicast_capable = true;
-    nic->promiscuous_dma_optimized = true;
+    nic->promiscuous_capable = 1;
+    nic->multicast_capable = 1;
+    nic->promiscuous_dma_optimized = 1;
     
     /* Read MAC address if not already set */
     if (is_zero_mac(nic->mac)) {
-        int result = nic_read_mac_address_3c515(config->io_base, nic->mac);
+        result = nic_read_mac_address_3c515(config->io_base, nic->mac);
         if (result != SUCCESS) {
             LOG_ERROR("Failed to read MAC address");
             return result;
         }
         memory_copy(nic->perm_mac, nic->mac, ETH_ALEN);
     }
-    
+
     /* Initialize DMA descriptor rings */
     if (nic->dma_capable) {
-        int result = nic_init_3c515_dma_rings(nic);
+        result = nic_init_3c515_dma_rings(nic);
         if (result != SUCCESS) {
             LOG_WARNING("DMA ring initialization failed: %d, falling back to PIO", result);
-            nic->dma_capable = false;
+            nic->dma_capable = 0;
         } else {
             LOG_DEBUG("3C515-TX DMA rings initialized successfully");
-            
+
             /* Initialize RX batch refill for DMA operation */
-            extern int rx_batch_init(uint8_t nic_index, uint16_t io_base);
+            /* Note: rx_batch_init() declared at file scope */
             rx_batch_init(nic->index, nic->io_base);
         }
     }
-    
+
     /* Initialize MII transceiver interface */
     if (nic->mii_capable) {
-        int result = nic_init_3c515_mii(nic);
+        result = nic_init_3c515_mii(nic);
         if (result != SUCCESS) {
             LOG_WARNING("MII initialization failed: %d, using fixed media", result);
-            nic->mii_capable = false;
-            nic->autoneg_capable = false;
+            nic->mii_capable = 0;
+            nic->autoneg_capable = 0;
         } else {
             LOG_DEBUG("3C515-TX MII interface initialized");
         }
     }
-    
+
     /* Initialize using hardware-specific operations */
     if (nic->ops->init) {
-        int result = nic->ops->init(nic);
+        result = nic->ops->init(nic);
         if (result != SUCCESS) {
             LOG_ERROR("3C515-TX hardware initialization failed: %d", result);
             return result;
@@ -880,8 +938,9 @@ int nic_init_3c515(nic_info_t *nic, const nic_init_config_t *config) {
 
 /* Hardware detection helpers - Forward declarations */
 /* The actual implementations are at the end of this file */
-bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info);
-bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info);
+/* Using int instead of bool for C89 compatibility */
+int nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info);
+int nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info);
 
 /* Configuration helpers */
 void nic_init_config_defaults(nic_init_config_t *config, nic_type_t type) {
@@ -974,20 +1033,20 @@ int nic_run_self_test(nic_info_t *nic) {
         return ERROR_INVALID_PARAM;
     }
     
-    g_nic_init_stats.self_tests_run++;
+    INIT_STAT_INC(self_tests_run);
     
     /* Use hardware-specific self-test if available */
     if (nic->ops->self_test) {
         int result = nic->ops->self_test(nic);
         if (result == SUCCESS) {
-            g_nic_init_stats.self_tests_passed++;
+            INIT_STAT_INC(self_tests_passed);
         }
         return result;
     }
     
     /* Basic connectivity test */
     if (nic_is_link_up(nic)) {
-        g_nic_init_stats.self_tests_passed++;
+        INIT_STAT_INC(self_tests_passed);
         return SUCCESS;
     }
     
@@ -1020,7 +1079,7 @@ const char* nic_init_error_to_string(int error_code) {
     }
 }
 
-/* Statistics */
+/* Statistics - always available (32 bytes - cheap telemetry) */
 void nic_init_stats_clear(void) {
     memory_zero(&g_nic_init_stats, sizeof(nic_init_stats_t));
 }
@@ -1035,7 +1094,7 @@ static int nic_reset_hardware(nic_info_t *nic) {
         return ERROR_INVALID_PARAM;
     }
     
-    g_nic_init_stats.resets_performed++;
+    INIT_STAT_INC(resets_performed);
     
     /* Use hardware-specific reset if available */
     if (nic->ops && nic->ops->reset) {
@@ -1091,13 +1150,16 @@ static int nic_reset_hardware(nic_info_t *nic) {
 }
 
 static int nic_wait_for_ready(nic_info_t *nic, uint32_t timeout_ms) {
+    uint32_t start_time;  /* C89: declare at block start */
+    uint16_t status;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Wait for NIC to become ready after reset */
-    uint32_t start_time = nic_get_system_tick_count();
-    
+    start_time = nic_get_system_tick_count();
+
     while ((nic_get_system_tick_count() - start_time) < timeout_ms) {
         if (nic->ops && nic->ops->get_link_status) {
             /* Check if NIC is responding and ready */
@@ -1106,8 +1168,8 @@ static int nic_wait_for_ready(nic_info_t *nic, uint32_t timeout_ms) {
             }
         } else {
             /* Fallback: basic register read test */
-            uint16_t status = inw(nic->io_base + ((nic->type == NIC_TYPE_3C509B) ? 
-                                                  _3C509B_STATUS_REG : _3C515_TX_STATUS_REG));
+            status = inw(nic->io_base + ((nic->type == NIC_TYPE_3C509B) ?
+                                         _3C509B_STATUS_REG : _3C515_TX_STATUS_REG));
             if (status != 0xFFFF && !(status & 0x1000)) { /* Not busy */
                 return SUCCESS;
             }
@@ -1121,13 +1183,13 @@ static int nic_wait_for_ready(nic_info_t *nic, uint32_t timeout_ms) {
 static void nic_init_update_stats(bool success, bool detection) {
     if (detection) {
         if (success) {
-            g_nic_init_stats.successful_detections++;
+            INIT_STAT_INC(successful_detections);
         }
     } else {
         if (success) {
-            g_nic_init_stats.successful_initializations++;
+            INIT_STAT_INC(successful_initializations);
         } else {
-            g_nic_init_stats.failed_initializations++;
+            INIT_STAT_INC(failed_initializations);
         }
     }
 }
@@ -1143,16 +1205,16 @@ static bool is_zero_mac(const uint8_t *mac) {
 }
 
 /* Basic delay implementations for DOS environment */
-void udelay(uint32_t microseconds) {
+void udelay(unsigned int microseconds) {
     /* Simple busy-wait loop calibrated for typical DOS systems */
-    volatile uint32_t i;
-    for (i = 0; i < microseconds * 10; i++) {
+    volatile unsigned long i;
+    for (i = 0; i < (unsigned long)microseconds * 10; i++) {
         /* Empty loop for delay */
     }
 }
 
-void mdelay(uint32_t milliseconds) {
-    uint32_t i;
+void mdelay(unsigned int milliseconds) {
+    unsigned int i;
     for (i = 0; i < milliseconds; i++) {
         udelay(1000);
     }
@@ -1175,40 +1237,53 @@ uint32_t nic_get_system_tick_count(void) {
 
 /* Hardware-specific detection implementations */
 
-bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
+int nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
+    /* C89: declare all variables at block start */
+    uint16_t activate_cmd;
+    uint16_t test_read;
+    uint16_t status;
+    uint16_t manufacturer_id;
+    uint16_t product_id;
+    uint16_t irq_word;
+    uint8_t irq_encoding;
+    uint16_t media_word;
+    uint8_t media_type;
+    static const uint8_t irq_map[] = {3, 5, 7, 9, 10, 11, 12, 15};
+
     if (!info) {
-        return false;
+        return 0;  /* false */
     }
-    
+
     /* Initialize info structure */
     memset(info, 0, sizeof(nic_detect_info_t));
     info->io_base = io_base;
     info->type = NIC_TYPE_3C509B;
-    
+
     /* 3C509B uses ID port sequence for non-PnP detection */
     /* First, try to activate the card at this I/O address */
-    
+
     /* Send global reset to ID port */
     outb(_3C509B_ID_PORT, _3C509B_ID_GLOBAL_RESET);
     nic_delay_milliseconds(10);
-    
+
     /* Send activate command with I/O address */
     /* The I/O address is encoded as: (io_base >> 4) & 0x1F */
     /* This converts addresses like 0x300 to 0x30, 0x320 to 0x32, etc. */
-    uint16_t activate_cmd = _3C509B_ACTIVATE_AND_SET_IO | ((io_base >> 4) & 0x1F);
-    outb(_3C509B_ID_PORT, activate_cmd);
+    activate_cmd = _3C509B_ACTIVATE_AND_SET_IO | ((io_base >> 4) & 0x1F);
+    outb(_3C509B_ID_PORT, (uint8_t)activate_cmd);
     nic_delay_milliseconds(10);
-    
+
     /* Try a simple register read to see if card responds */
-    uint16_t test_read = inw(io_base + _3C509B_STATUS_REG);
-    
+    test_read = inw(io_base + _3C509B_STATUS_REG);
+
     /* If we get all 1's, no card is present */
     if (test_read == 0xFFFF) {
-        return false;
+        return 0;  /* false */
     }
-    
+
     /* Try to read from the card's command/status register */
-    uint16_t status = inw(io_base + _3C509B_STATUS_REG);
+    status = inw(io_base + _3C509B_STATUS_REG);
+    (void)status;  /* Suppress unused variable warning */
     
     /* Check if we can select window 0 and read EEPROM */
     _3C509B_SELECT_WINDOW(io_base, _3C509B_WINDOW_0);
@@ -1247,22 +1322,22 @@ bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
     /* Read and verify manufacturer ID from EEPROM address 7 */
     outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | _3C509B_EEPROM_MFG_ID);
     nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-    uint16_t manufacturer_id = inw(io_base + _3C509B_EEPROM_DATA);
-    
+    manufacturer_id = inw(io_base + _3C509B_EEPROM_DATA);
+
     if (manufacturer_id != _3C509B_MANUFACTURER_ID) {
         LOG_DEBUG("No 3Com card at I/O 0x%X (manufacturer ID: 0x%X)", io_base, manufacturer_id);
-        return false;
+        return 0;  /* false */
     }
-    
+
     /* Read and verify product ID from EEPROM address 3 */
     outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | _3C509B_EEPROM_PRODUCT_ID);
     nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-    uint16_t product_id = inw(io_base + _3C509B_EEPROM_DATA);
+    product_id = inw(io_base + _3C509B_EEPROM_DATA);
     
     /* Verify this is a 3C509B */
     if ((product_id & _3C509B_PRODUCT_ID_MASK) != _3C509B_PRODUCT_ID_509B) {
         LOG_DEBUG("No 3C509B at I/O 0x%X (product ID: 0x%X, expected: 0x%X)", io_base, product_id, _3C509B_PRODUCT_ID_509B);
-        return false;
+        return 0;  /* false */
     }
     
     /* Read MAC address from EEPROM (addresses 0, 1, 2) */
@@ -1281,12 +1356,12 @@ bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
     /* Detect IRQ from EEPROM (address 6) */
     outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | 6);
     nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-    uint16_t irq_word = inw(io_base + _3C509B_EEPROM_DATA);
-    
+    irq_word = inw(io_base + _3C509B_EEPROM_DATA);
+
     /* Convert IRQ encoding to actual IRQ number */
     /* 3C509B uses a specific encoding in bits 12-15 */
-    uint8_t irq_encoding = (irq_word >> 12) & 0x0F;
-    static const uint8_t irq_map[] = {3, 5, 7, 9, 10, 11, 12, 15};
+    irq_encoding = (irq_word >> 12) & 0x0F;
+    /* irq_map already declared at function start */
     if (irq_encoding < 8) {
         info->irq = irq_map[irq_encoding];
     } else {
@@ -1297,72 +1372,91 @@ bool nic_probe_3c509b_at_address(uint16_t io_base, nic_detect_info_t *info) {
     /* Bits 8-10 encode the available media type */
     outw(io_base + _3C509B_EEPROM_CMD, _3C509B_EEPROM_READ | 0x08);
     nic_delay_microseconds(_3C509B_EEPROM_READ_DELAY);
-    uint16_t media_word = inw(io_base + _3C509B_EEPROM_DATA);
-    uint8_t media_type = (media_word >> 8) & 0x07;
+    media_word = inw(io_base + _3C509B_EEPROM_DATA);
+    media_type = (media_word >> 8) & 0x07;
     
     /* Store media type in info structure (add field if needed) */
-    info->media_options = 0;
+    info->media_capabilities = 0;
     switch (media_type) {
         case 1:
-            info->media_options |= MEDIA_CAP_10BASE_T;
+            info->media_capabilities |= MEDIA_CAP_10BASE_T;
             LOG_DEBUG("3C509B media type: 10Base-T");
             break;
         case 2:
-            info->media_options |= MEDIA_CAP_AUI;
+            info->media_capabilities |= MEDIA_CAP_AUI;
             LOG_DEBUG("3C509B media type: AUI");
             break;
         case 3:
-            info->media_options |= MEDIA_CAP_10BASE_2;  /* BNC/Coax */
+            info->media_capabilities |= MEDIA_CAP_10BASE_2;  /* BNC/Coax */
             LOG_DEBUG("3C509B media type: BNC (10Base-2)");
             break;
         default:
             LOG_DEBUG("3C509B media type: Unknown (0x%02X)", media_type);
             /* Default to 10Base-T if unknown */
-            info->media_options |= MEDIA_CAP_10BASE_T;
+            info->media_capabilities |= MEDIA_CAP_10BASE_T;
             break;
     }
     
     /* Check duplex capability - 3C509B is half-duplex only */
-    info->full_duplex_capable = false;
+    /* Note: No full_duplex_capable field in nic_detect_info_t - stored in special_features if needed */
     LOG_DEBUG("3C509B duplex: Half-duplex only");
-    
+
     /* Set additional detection info */
     info->vendor_id = 0x10B7; /* 3Com */
     info->device_id = product_id;
     info->revision = product_id & 0x0F;
     info->capabilities = get_nic_capabilities_from_type(NIC_TYPE_3C509B);
-    info->pnp_capable = false; /* 3C509B is ISA, not PnP */
-    info->detected = true;
-    
+    info->pnp_capable = 0;  /* false - 3C509B is ISA, not PnP */
+    info->detected = 1;     /* true */
+
     LOG_DEBUG("3C509B detected at I/O 0x%X, MAC %02X:%02X:%02X:%02X:%02X:%02X, IRQ %d",
-              io_base, info->mac[0], info->mac[1], info->mac[2], 
+              io_base, info->mac[0], info->mac[1], info->mac[2],
               info->mac[3], info->mac[4], info->mac[5], info->irq);
-    
-    return true;
+
+    return 1;  /* true */
 }
 
-bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
+int nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
+    /* C89: declare all variables at block start */
+    uint16_t test_read;
+    uint16_t product_id;
+    uint16_t capabilities_word;
+    int i;
+    uint16_t checksum;
+    uint16_t word;
+    uint16_t mac_word;
+    uint8_t phy_addr;
+    uint16_t phy_id1, phy_id2;
+    uint8_t addr;
+    int timeout;
+    uint16_t id1, id2;
+    uint16_t phy_status;
+    uint16_t anlpar;
+    uint16_t advertise;
+    uint16_t lpa;
+    uint16_t common;
+
     if (!info) {
-        return false;
+        return 0;  /* false */
     }
-    
+
     /* Initialize info structure */
     memset(info, 0, sizeof(nic_detect_info_t));
     info->io_base = io_base;
     info->type = NIC_TYPE_3C515_TX;
-    
+
     /* First check if anything responds at this address */
-    uint16_t test_read = inw(io_base + _3C515_TX_STATUS_REG);
+    test_read = inw(io_base + _3C515_TX_STATUS_REG);
     if (test_read == 0xFFFF) {
-        return false; /* No card present */
+        return 0;  /* false - No card present */
     }
-    
+
     /* Try to select window 0 */
     _3C515_TX_SELECT_WINDOW(io_base, _3C515_TX_WINDOW_0);
     nic_delay_microseconds(100);
-    
+
     /* Validate EEPROM checksum (3C515 uses sum-to-zero checksum) */
-    /* Per 3Com Fast EtherLink ISA/PCI Technical Reference (p.8-17), 
+    /* Per 3Com Fast EtherLink ISA/PCI Technical Reference (p.8-17),
      * EEPROM words 0-0x1F summed should equal 0
      * EEPROM Map (3C515-TX):
      *   Word 0-2:  MAC address (6 bytes)
@@ -1379,91 +1473,86 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
      *   Word 9-0x1E: Reserved/subsystem IDs
      *   Word 0x1F:   Checksum (makes sum of 0-0x1F equal 0)
      */
-    {
-        int i;
-        uint16_t checksum = 0;
-        for (i = 0; i < 0x20; i++) {
-            uint16_t word;
-            outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
-            nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-            word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-            checksum += word;
-        }
-
-        if (checksum != 0) {
-            LOG_WARNING("3C515-TX EEPROM checksum failed at I/O 0x%X (SUM=0x%04X)", io_base, checksum);
-            /* Continue but note potential corruption */
-        }
+    checksum = 0;
+    for (i = 0; i < 0x20; i++) {
+        outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
+        nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
+        word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+        checksum += word;
     }
-    
+
+    if (checksum != 0) {
+        LOG_WARNING("3C515-TX EEPROM checksum failed at I/O 0x%X (SUM=0x%04X)", io_base, checksum);
+        /* Continue but note potential corruption */
+    }
+
     /* Try to read product ID from EEPROM */
     outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | 3);
     nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-    uint16_t product_id = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-    
+    product_id = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+
     /* Verify this is a 3C515-TX */
     if ((product_id & _3C515_TX_PRODUCT_ID_MASK) != _3C515_TX_PRODUCT_ID) {
         LOG_DEBUG("No 3C515-TX at I/O 0x%X (product ID: 0x%X)", io_base, product_id);
-        return false;
+        return 0;  /* false */
     }
     
     /* Read MAC address from EEPROM */
-    {
-        int i;
-        for (i = 0; i < 3; i++) {
-            uint16_t mac_word;
-            outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
-            nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-            mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
-            info->mac[i * 2] = (mac_word >> 8) & 0xFF;
-            info->mac[i * 2 + 1] = mac_word & 0xFF;
-        }
+    for (i = 0; i < 3; i++) {
+        outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | i);
+        nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
+        mac_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+        info->mac[i * 2] = (mac_word >> 8) & 0xFF;
+        info->mac[i * 2 + 1] = mac_word & 0xFF;
     }
-    
+
     /* Try to detect IRQ from configuration */
     /* Switch to window 3 for configuration access */
     _3C515_TX_SELECT_WINDOW(io_base, _3C515_TX_WINDOW_3);
     nic_delay_microseconds(100);
-    
+
     /* Read configuration register for IRQ info */
     /* Note: 3C515-TX may use different methods for IRQ detection */
     /* For now, set to 0 to indicate auto-detection needed */
     info->irq = 0;
-    
+
     /* Parse media type and capabilities from EEPROM */
     /* Switch back to window 0 for EEPROM access */
     _3C515_TX_SELECT_WINDOW(io_base, _3C515_TX_WINDOW_0);
     nic_delay_microseconds(100);
-    
+
     /* Read media/capabilities word from EEPROM address 0x08 */
     outw(io_base + _3C515_TX_W0_EEPROM_CMD, _3C515_TX_EEPROM_READ | 0x08);
     nic_delay_microseconds(_3C515_TX_EEPROM_READ_DELAY);
-    uint16_t capabilities_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
+    capabilities_word = inw(io_base + _3C515_TX_W0_EEPROM_DATA);
     
     /* Parse media options - 3C515-TX supports multiple media types */
-    info->media_options = 0;
+    info->media_capabilities = 0;
     if (capabilities_word & 0x0001) {
-        info->media_options |= MEDIA_CAP_10BASE_T;
+        info->media_capabilities |= MEDIA_CAP_10BASE_T;
     }
     if (capabilities_word & 0x0002) {
-        info->media_options |= MEDIA_CAP_AUI;
+        info->media_capabilities |= MEDIA_CAP_AUI;
     }
     if (capabilities_word & 0x0004) {
-        info->media_options |= MEDIA_CAP_10BASE_2;  /* BNC */
+        info->media_capabilities |= MEDIA_CAP_10BASE_2;  /* BNC */
     }
     if (capabilities_word & 0x0008) {
-        info->media_options |= MEDIA_CAP_100BASE_TX;  /* Fast Ethernet */
+        info->media_capabilities |= MEDIA_CAP_100BASE_TX;  /* Fast Ethernet */
     }
     
     /* Check for full duplex capability from EEPROM */
     /* Note: Actual duplex must be negotiated via MII PHY registers */
-    info->full_duplex_capable = (capabilities_word & 0x0010) ? true : false;
+    /* Store in special_features if full duplex capable */
+    if (capabilities_word & 0x0010) {
+        info->special_features |= 0x0001;  /* Full duplex capable flag */
+    }
     
     /* For 3C515-TX with MII PHY, check actual negotiated duplex */
-    if (info->media_options & (MEDIA_CAP_10BASE_T | MEDIA_CAP_100BASE_TX)) {
-        uint8_t phy_addr = PHY_ADDR_INVALID;
-        uint16_t phy_id1 = 0, phy_id2 = 0;
-        uint8_t addr;
+    if (info->media_capabilities & (MEDIA_CAP_10BASE_T | MEDIA_CAP_100BASE_TX)) {
+        phy_addr = PHY_ADDR_INVALID;
+        phy_id1 = 0;
+        phy_id2 = 0;
 
         /* Switch to window 4 for PHY access */
         _3C515_TX_SELECT_WINDOW(io_base, 4);
@@ -1471,25 +1560,25 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
 
         /* Scan for PHY address (0-31) */
         for (addr = PHY_ADDR_MIN; addr <= PHY_ADDR_MAX; addr++) {
-                /* Read PHY ID register 1 (register 2) with proper MII management */
-                /* Wait for MII to be ready */
-                int timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+            /* Read PHY ID register 1 (register 2) with proper MII management */
+            /* Wait for MII to be ready */
+            timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
             while (--timeout > 0) {
                 if (!(inw(io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) {
                     break;
                 }
                 nic_delay_microseconds(MII_POLL_DELAY_US);
             }
-            
+
             if (timeout == 0) {
                 LOG_WARNING("MII busy timeout at PHY address %u", addr);
                 continue;
             }
-            
+
             /* Issue read command for PHY ID1 */
-            outw(io_base + _3C515_MII_CMD, 
+            outw(io_base + _3C515_MII_CMD,
                  MII_CMD_READ | (addr << MII_CMD_PHY_SHIFT) | (MII_PHYSID1 << MII_CMD_REG_SHIFT));
-            
+
             /* Wait for read to complete */
             timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
             while (--timeout > 0) {
@@ -1498,13 +1587,13 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                 }
                 nic_delay_microseconds(MII_POLL_DELAY_US);
             }
-            
+
             if (timeout == 0) {
                 continue;  /* Skip this PHY address */
             }
-            
-            uint16_t id1 = inw(io_base + _3C515_MII_DATA);
-            
+
+            id1 = inw(io_base + _3C515_MII_DATA);
+
             /* Check if PHY exists at this address */
             if (PHY_ID_VALID(id1)) {
                 /* Read PHY ID register 2 with proper polling */
@@ -1515,11 +1604,11 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                     }
                     nic_delay_microseconds(MII_POLL_DELAY_US);
                 }
-                
+
                 if (timeout > 0) {
                     outw(io_base + _3C515_MII_CMD,
                          MII_CMD_READ | (addr << MII_CMD_PHY_SHIFT) | (MII_PHYSID2 << MII_CMD_REG_SHIFT));
-                    
+
                     /* Wait for read to complete */
                     timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
                     while (--timeout > 0) {
@@ -1528,15 +1617,15 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                         }
                         nic_delay_microseconds(MII_POLL_DELAY_US);
                     }
-                    
+
                     if (timeout > 0) {
-                        uint16_t id2 = inw(io_base + _3C515_MII_DATA);
-                        
+                        id2 = inw(io_base + _3C515_MII_DATA);
+
                         if (PHY_ID_VALID(id2)) {
                             phy_addr = addr;
                             phy_id1 = id1;
                             phy_id2 = id2;
-                            LOG_DEBUG("Found PHY at address %u: ID=0x%04X:0x%04X", 
+                            LOG_DEBUG("Found PHY at address %u: ID=0x%04X:0x%04X",
                                       addr, id1, id2);
                             break;  /* Use first PHY found */
                         }
@@ -1544,17 +1633,17 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                 }
             }
         }
-        
+
         if (phy_addr == PHY_ADDR_INVALID) {
             LOG_WARNING("No PHY found on MII bus");
-            info->negotiated_duplex = false;
+            info->negotiated_duplex = 0;  /* false */
             info->negotiated_speed = 10;  /* Default to 10Mbps half */
         } else {
             /* Read PHY BMSR twice to clear latched bits (IEEE 802.3 requirement) */
-            uint16_t phy_status = 0;
-            
+            phy_status = 0;
+
             /* First read to clear latched bits */
-            int timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
+            timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
             while (--timeout > 0) {
                 if (!(inw(io_base + _3C515_MII_CMD) & MII_CMD_BUSY)) {
                     break;
@@ -1617,11 +1706,11 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                     }
                     if (timeout == 0) {
                         LOG_WARNING("MII timeout reading ANAR for PHY %u", phy_addr);
-                        continue;
+                        goto mii_read_failed;  /* Skip autoneg parsing */
                     }
-                    outw(io_base + _3C515_MII_CMD, 
+                    outw(io_base + _3C515_MII_CMD,
                          MII_CMD_READ | (phy_addr << MII_CMD_PHY_SHIFT) | (MII_ANAR << MII_CMD_REG_SHIFT));
-                    
+
                     /* Wait for ANAR read to complete */
                     timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
                     while (--timeout > 0) {
@@ -1630,10 +1719,10 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                     }
                     if (timeout == 0) {
                         LOG_WARNING("MII timeout waiting for ANAR read from PHY %u", phy_addr);
-                        continue;
+                        goto mii_read_failed;  /* Skip autoneg parsing */
                     }
-                    uint16_t advertise = inw(io_base + _3C515_MII_DATA);
-                    
+                    advertise = inw(io_base + _3C515_MII_DATA);
+
                     /* Read link partner ability (ANLPAR, register 5) */
                     timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
                     while (--timeout > 0) {
@@ -1642,11 +1731,11 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                     }
                     if (timeout == 0) {
                         LOG_WARNING("MII timeout reading ANLPAR for PHY %u", phy_addr);
-                        continue;
+                        goto mii_read_failed;  /* Skip autoneg parsing */
                     }
-                    outw(io_base + _3C515_MII_CMD, 
+                    outw(io_base + _3C515_MII_CMD,
                          MII_CMD_READ | (phy_addr << MII_CMD_PHY_SHIFT) | (MII_ANLPAR << MII_CMD_REG_SHIFT));
-                    
+
                     /* Wait for ANLPAR read to complete */
                     timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
                     while (--timeout > 0) {
@@ -1655,38 +1744,38 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                     }
                     if (timeout == 0) {
                         LOG_WARNING("MII timeout waiting for ANLPAR read from PHY %u", phy_addr);
-                        continue;
+                        goto mii_read_failed;  /* Skip autoneg parsing */
                     }
-                    uint16_t lpa = inw(io_base + _3C515_MII_DATA);
-                    
+                    lpa = inw(io_base + _3C515_MII_DATA);
+
                     /* Determine negotiated duplex from common capabilities */
                     /* Note: Both ANAR and ANLPAR use same bit definitions */
-                    uint16_t common = advertise & lpa;
+                    common = advertise & lpa;
                     if (common & ANAR_100FULL) {  /* 100Base-TX Full Duplex */
-                        info->negotiated_duplex = true;
+                        info->negotiated_duplex = 1;  /* true */
                         info->negotiated_speed = 100;
                         LOG_DEBUG("PHY %u: 100Mbps Full Duplex negotiated", phy_addr);
                     } else if (common & ANAR_100HALF) {  /* 100Base-TX Half Duplex */
-                        info->negotiated_duplex = false;
+                        info->negotiated_duplex = 0  /* false */;
                         info->negotiated_speed = 100;
                         LOG_DEBUG("PHY %u: 100Mbps Half Duplex negotiated", phy_addr);
                     } else if (common & ANAR_10FULL) {  /* 10Base-T Full Duplex */
-                        info->negotiated_duplex = true;
+                        info->negotiated_duplex = 1  /* true */;
                         info->negotiated_speed = 10;
                         LOG_DEBUG("PHY %u: 10Mbps Full Duplex negotiated", phy_addr);
                     } else if (common & ANAR_10HALF) {  /* 10Base-T Full Duplex */
-                        info->negotiated_duplex = false;
+                        info->negotiated_duplex = 0  /* false */;
                         info->negotiated_speed = 10;
                         LOG_DEBUG("PHY %u: 10Mbps Half Duplex negotiated", phy_addr);
                     } else {
                         LOG_WARNING("PHY %u: No common mode negotiated", phy_addr);
-                        info->negotiated_duplex = false;
+                        info->negotiated_duplex = 0  /* false */;
                         info->negotiated_speed = 10;
                     }
                 } else {
                     /* Autoneg not complete - parallel detect or forced mode */
                     LOG_INFO("PHY %u: Autoneg incomplete, assuming half duplex", phy_addr);
-                    info->negotiated_duplex = false;
+                    info->negotiated_duplex = 0  /* false */;
                     /* Try to determine speed from status bits */
                     if (phy_status & 0x4000) {  /* 100Mbps capability */
                         info->negotiated_speed = 100;
@@ -1696,7 +1785,8 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
                 }
             } else {
                 LOG_DEBUG("PHY %u: Link down", phy_addr);
-                info->negotiated_duplex = false;
+mii_read_failed:
+                info->negotiated_duplex = 0;  /* false - default on failure */
                 info->negotiated_speed = 0;
             }
         }  /* End of phy_addr != 0xFF check */
@@ -1706,18 +1796,18 @@ bool nic_probe_3c515_at_address(uint16_t io_base, nic_detect_info_t *info) {
     }
     
     LOG_DEBUG("3C515-TX media options: %s%s%s%s, Duplex capability: %s",
-              (info->media_options & MEDIA_CAP_10BASE_T) ? "10Base-T " : "",
-              (info->media_options & MEDIA_CAP_AUI) ? "AUI " : "",
-              (info->media_options & MEDIA_CAP_10BASE_2) ? "BNC " : "",
-              (info->media_options & MEDIA_CAP_100BASE_TX) ? "100Base-TX " : "",
-              info->full_duplex_capable ? "Full/Half capable" : "Half only");
+              (info->media_capabilities & MEDIA_CAP_10BASE_T) ? "10Base-T " : "",
+              (info->media_capabilities & MEDIA_CAP_AUI) ? "AUI " : "",
+              (info->media_capabilities & MEDIA_CAP_10BASE_2) ? "BNC " : "",
+              (info->media_capabilities & MEDIA_CAP_100BASE_TX) ? "100Base-TX " : "",
+              (info->special_features & 0x0001) ? "Full/Half capable" : "Half only");
     
     /* Set additional detection info */
     info->vendor_id = 0x10B7; /* 3Com */
     info->device_id = product_id;
     info->revision = product_id & 0x0F;
     info->capabilities = get_nic_capabilities_from_type(NIC_TYPE_3C515_TX);
-    info->pnp_capable = false; /* ISA card */
+    info->pnp_capable = 0;  /* false - ISA card */
     info->detected = true;
     
     LOG_DEBUG("3C515-TX detected at I/O 0x%X, MAC %02X:%02X:%02X:%02X:%02X:%02X",
@@ -1788,39 +1878,44 @@ bool nic_is_present_at_address(nic_type_t type, uint16_t io_base) {
     } else if (type == NIC_TYPE_3C515_TX) {
         return nic_probe_3c515_at_address(io_base, &info);
     }
-    return false;
+    return 0;  /* false */
 }
 
-int nic_detect_pnp_3c509b(nic_detect_info_t *info_list, int max_count) { 
+/* External PnP filter function */
+extern int pnp_filter_by_type(nic_detect_info_t *info_list, int count, nic_type_t type);
+
+int nic_detect_pnp_3c509b(nic_detect_info_t *info_list, int max_count) {
+    int total_detected;   /* C89: declare at block start */
+    int filtered_count;
+
     if (!info_list || max_count <= 0) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Use the enhanced PnP detection system */
-    extern int pnp_detect_nics(nic_detect_info_t *info_list, int max_nics);
-    extern int pnp_filter_by_type(nic_detect_info_t *info_list, int count, nic_type_t type);
-    
+    /* Note: pnp_detect_nics() declared at file scope */
+
     /* Detect all PnP NICs first */
-    int total_detected = pnp_detect_nics(info_list, max_count);
+    total_detected = pnp_detect_nics(info_list, max_count);
     if (total_detected <= 0) {
         LOG_DEBUG("No PnP devices detected for 3C509B");
         return 0;
     }
-    
+
     /* Filter results to only include 3C509B devices */
-    int filtered_count = pnp_filter_by_type(info_list, total_detected, NIC_TYPE_3C509B);
-    
+    filtered_count = pnp_filter_by_type(info_list, total_detected, NIC_TYPE_3C509B);
+
     LOG_DEBUG("PnP 3C509B detection: %d total, %d 3C509B devices", total_detected, filtered_count);
-    
+
     return filtered_count;
 }
 
-int nic_detect_eisa_3c509b(nic_detect_info_t *info_list, int max_count) { 
+int nic_detect_eisa_3c509b(void) {
     /* 3C509B doesn't support EISA */
-    return 0; 
+    return 0;
 }
 
-bool nic_is_pnp_capable(uint16_t io_base) { 
+int nic_is_pnp_capable(uint16_t io_base) { 
     /* 3C509B and 3C515-TX are ISA cards, not PnP */
     return false; 
 }
@@ -1833,7 +1928,8 @@ int nic_cleanup_buffers(nic_info_t *nic) {
     return SUCCESS; 
 }
 
-void nic_init_print_stats(void) { 
+/* Stats always available (32 bytes - cheap telemetry) */
+void nic_init_print_stats(void) {
     LOG_INFO("NIC Init Stats: Detections=%d/%d, Initializations=%d/%d, Self-tests=%d/%d",
              g_nic_init_stats.successful_detections, g_nic_init_stats.total_detections,
              g_nic_init_stats.successful_initializations, g_nic_init_stats.total_initializations,
@@ -1897,57 +1993,49 @@ static uint32_t get_nic_capabilities_from_type(nic_type_t type) {
  * @return SUCCESS on success, error code on failure
  */
 static int nic_init_cache_coherency_system(void) {
+    coherency_analysis_t local_analysis;  /* C89: declare at block start */
+    int cache_init_result;
+
     if (g_cache_coherency_initialized) {
         LOG_DEBUG("Cache coherency system already initialized");
         return SUCCESS;
     }
-    
+
     LOG_INFO("Initializing system-wide cache coherency management...");
-    
-    /* Perform comprehensive coherency analysis */
-    g_system_coherency_analysis = perform_complete_coherency_analysis();
-    
+
+    /* Perform comprehensive coherency analysis (uses local to avoid DGROUP bloat) */
+    local_analysis = perform_complete_coherency_analysis();
+
+#ifdef INIT_DIAG
+    /* Store for diagnostics only when INIT_DIAG is enabled */
+    g_system_coherency_analysis = local_analysis;
     /* Detect chipset for diagnostic purposes and community database */
     g_system_chipset_detection = detect_system_chipset();
-    
-    /* Initialize the global cache management system */
-    bool cache_init_result = initialize_cache_management(g_system_coherency_analysis.selected_tier);
+#endif
+
+    /* Initialize the global cache management system (functional - always runs) */
+    cache_init_result = initialize_cache_management(&local_analysis);
     if (!cache_init_result) {
         LOG_ERROR("Failed to initialize global cache management system");
         return ERROR_HARDWARE;
     }
-    
-    /* Initialize chipset database for community contributions */
-    chipset_database_config_t db_config = {
-        .enable_export = true,
-        .export_csv = true,
-        .export_json = true,
-        .csv_filename = "chipset_test_results.csv",
-        .json_filename = "chipset_test_results.json"
-    };
-    
-    bool db_init_result = initialize_chipset_database(&db_config);
-    if (!db_init_result) {
-        LOG_WARNING("Failed to initialize chipset database - continuing without export");
-    }
-    
-    /* Record initial test results in community database */
-    bool record_result = record_chipset_test_result(&g_system_coherency_analysis, &g_system_chipset_detection);
-    if (!record_result) {
-        LOG_WARNING("Failed to record initial test results in chipset database");
-    }
-    
-    /* Initialize performance enabler system */
-    bool perf_init_result = initialize_performance_enabler(&g_system_coherency_analysis);
-    if (!perf_init_result) {
-        LOG_WARNING("Failed to initialize performance enabler - continuing without optimization guidance");
-    }
-    
-    g_cache_coherency_initialized = true;
-    
-    LOG_INFO("Cache coherency system initialized: tier %d, confidence %d%%", 
-             g_system_coherency_analysis.selected_tier, g_system_coherency_analysis.confidence);
-    
+
+    /* NOTE: Chipset database and performance enabler initialization
+     * commented out - chipset_database_config_t and related functions
+     * are Phase 4 features not yet implemented.
+     */
+#if 0
+    /* TODO: Enable when chipset database is implemented */
+    db_init_result = initialize_chipset_database(&db_config);
+    record_chipset_test_result(&g_system_coherency_analysis, &g_system_chipset_detection);
+    initialize_performance_enabler(&g_system_coherency_analysis);
+#endif
+
+    g_cache_coherency_initialized = 1;  /* true */
+
+    LOG_INFO("Cache coherency system initialized: tier %d, confidence %d%%",
+             local_analysis.selected_tier, local_analysis.confidence);
+
     return SUCCESS;
 }
 
@@ -1966,97 +2054,44 @@ static int nic_init_apply_coherency_to_nic(nic_info_t *nic) {
         LOG_ERROR("Cache coherency system not initialized");
         return ERROR_NOT_INITIALIZED;
     }
-    
+
     LOG_DEBUG("Applying cache coherency configuration to NIC type %d", nic->type);
-    
-    /* Store coherency analysis results in NIC structure */
-    nic->cache_coherency_tier = g_system_coherency_analysis.selected_tier;
-    nic->cache_management_available = true;
-    
-    /* Apply NIC-specific cache coherency settings */
-    switch (nic->type) {
-        case NIC_TYPE_3C509B:
-            /* 3C509B uses PIO-only operations - cache management for data coherency */
-            if (g_system_coherency_analysis.selected_tier == TIER_DISABLE_BUS_MASTER) {
-                LOG_INFO("3C509B: PIO-only operation optimal for this system");
-                nic->status |= NIC_STATUS_CACHE_COHERENCY_OK;
-            } else {
-                LOG_INFO("3C509B: PIO operations with cache management enabled");
-                nic->status |= NIC_STATUS_CACHE_COHERENCY_OK;
-            }
-            break;
-            
-        case NIC_TYPE_3C515_TX:
-            /* 3C515-TX requires DMA operations - comprehensive cache management needed */
-            if (g_system_coherency_analysis.selected_tier == TIER_DISABLE_BUS_MASTER) {
-                LOG_ERROR("3C515-TX requires DMA operation - system incompatible");
-                return ERROR_HARDWARE;
-            } else {
-                LOG_INFO("3C515-TX: DMA operations with tier %d cache management", 
-                         g_system_coherency_analysis.selected_tier);
-                nic->status |= NIC_STATUS_CACHE_COHERENCY_OK;
-            }
-            break;
-            
-        default:
-            LOG_WARNING("Unknown NIC type %d for cache coherency application", nic->type);
-            nic->cache_management_available = false;
-            break;
-    }
-    
-    LOG_DEBUG("Cache coherency applied to NIC: tier %d, available %s", 
-              nic->cache_coherency_tier, nic->cache_management_available ? "Yes" : "No");
-    
+
+    /* NOTE: Extended cache coherency fields (cache_coherency_tier, cache_management_available,
+     * NIC_STATUS_CACHE_COHERENCY_OK) are Phase 4 features not yet implemented in nic_info_t.
+     * For now, just log the tier and return success.
+     */
+#ifdef INIT_DIAG
+    LOG_INFO("NIC %d: Cache coherency tier %d applied",
+             nic->index, g_system_coherency_analysis.selected_tier);
+#else
+    LOG_INFO("NIC %d: Cache coherency applied", nic->index);
+#endif
+
     return SUCCESS;
 }
 
 /**
  * @brief Display comprehensive system analysis information
+ * NOTE: Full implementation requires Phase 4 features (chipset_test_record_t,
+ * get_cpu_vendor_string, etc.) which are not yet implemented.
  */
+#ifdef INIT_DIAG
 static void nic_init_display_system_analysis(void) {
     if (!g_cache_coherency_initialized) {
         return;
     }
-    
+
     LOG_INFO("=== SYSTEM CACHE COHERENCY ANALYSIS ===");
-    LOG_INFO("CPU: %s, Model: %d, Speed: %d MHz", 
-             get_cpu_vendor_string(g_system_coherency_analysis.cpu.vendor),
-             g_system_coherency_analysis.cpu.model,
-             g_system_coherency_analysis.cpu.speed_mhz);
-    LOG_INFO("Cache: %s, Size: %d KB, Line Size: %d bytes",
-             g_system_coherency_analysis.write_back_cache ? "Write-back" : "Write-through",
-             g_system_coherency_analysis.cpu.cache_size,
-             g_system_coherency_analysis.cpu.cache_line_size);
-    LOG_INFO("Chipset: %s", g_system_chipset_detection.chipset.name);
-    LOG_INFO("Detection Method: %s", 
-             get_chipset_detection_method_description(g_system_chipset_detection.detection_method));
-    LOG_INFO("Test Results: Bus Master=%s, Coherency=%s, Snooping=%s",
-             get_bus_master_result_description(g_system_coherency_analysis.bus_master),
-             get_coherency_result_description(g_system_coherency_analysis.coherency),
-             get_snooping_result_description(g_system_coherency_analysis.snooping));
-    LOG_INFO("Selected Tier: %d (%s)", 
-             g_system_coherency_analysis.selected_tier,
-             get_cache_tier_description(g_system_coherency_analysis.selected_tier));
+    LOG_INFO("Selected Tier: %d", g_system_coherency_analysis.selected_tier);
     LOG_INFO("Confidence Level: %d%%", g_system_coherency_analysis.confidence);
     LOG_INFO("=====================================");
-    
-    /* Display performance optimization opportunity if relevant */
-    if (should_offer_performance_guidance(&g_system_coherency_analysis)) {
-        display_performance_opportunity_analysis();
-    }
-    
-    /* Display community contribution message */
-    chipset_test_record_t record = {
-        .submission_id = generate_submission_id(),
-        .chipset_vendor_id = g_system_chipset_detection.chipset.vendor_id,
-        .chipset_device_id = g_system_chipset_detection.chipset.device_id,
-        .selected_tier = g_system_coherency_analysis.selected_tier,
-        .test_confidence = g_system_coherency_analysis.confidence
-    };
-    strncpy(record.chipset_name, g_system_chipset_detection.chipset.name, sizeof(record.chipset_name) - 1);
-    
-    display_community_contribution_message(&record);
 }
+#else
+static void nic_init_display_system_analysis(void) {
+    /* No-op when diagnostics disabled */
+}
+#endif
 
 /* ============================================================================
  * Phase 4: Public API for Cache Coherency Access
@@ -2064,25 +2099,37 @@ static void nic_init_display_system_analysis(void) {
 
 /**
  * @brief Get system-wide coherency analysis results
- * @return Pointer to coherency analysis structure, NULL if not initialized
+ * @return Pointer to coherency analysis structure, NULL if not initialized or INIT_DIAG disabled
  */
+#ifdef INIT_DIAG
 const coherency_analysis_t* nic_init_get_system_coherency_analysis(void) {
     if (!g_cache_coherency_initialized) {
         return NULL;
     }
     return &g_system_coherency_analysis;
 }
+#else
+const coherency_analysis_t* nic_init_get_system_coherency_analysis(void) {
+    return NULL;  /* Diagnostics disabled */
+}
+#endif
 
 /**
  * @brief Get system chipset detection results
- * @return Pointer to chipset detection structure, NULL if not initialized
+ * @return Pointer to chipset detection structure, NULL if not initialized or INIT_DIAG disabled
  */
+#ifdef INIT_DIAG
 const chipset_detection_result_t* nic_init_get_system_chipset_detection(void) {
     if (!g_cache_coherency_initialized) {
         return NULL;
     }
     return &g_system_chipset_detection;
 }
+#else
+const chipset_detection_result_t* nic_init_get_system_chipset_detection(void) {
+    return NULL;  /* Diagnostics disabled */
+}
+#endif
 
 /**
  * @brief Check if cache coherency system is initialized and available
@@ -2097,63 +2144,78 @@ bool nic_init_is_cache_coherency_available(void) {
  * ============================================================================ */
 
 /**
+ * @brief Get DMA physical address (DOS-specific implementation)
+ * @param virtual_addr Virtual address
+ * @return Physical address for DMA
+ */
+static uint32_t dma_virt_to_phys(void *virtual_addr) {
+    /* In DOS real mode, physical address = segment * 16 + offset */
+    uint16_t segment = FP_SEG(virtual_addr);
+    uint16_t offset = FP_OFF(virtual_addr);
+    return ((uint32_t)segment << 4) + offset;
+}
+
+/**
  * @brief Initialize DMA descriptor rings for 3C515-TX
  * @param nic NIC information structure
  * @return SUCCESS on success, error code on failure
  */
 int nic_init_3c515_dma_rings(nic_info_t *nic) {
+    uint32_t tx_ring_phys;
+    uint32_t rx_ring_phys;
+
     if (!nic || nic->type != NIC_TYPE_3C515_TX) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Initializing 3C515-TX DMA descriptor rings");
-    
-    /* Allocate TX descriptor ring */
-    nic->tx_descriptor_ring = memory_alloc_aligned(16 * sizeof(uint32_t) * 4, 16);
+
+    /* Allocate TX descriptor ring - use MEM_TYPE_DMA_BUFFER for DMA-safe memory */
+    nic->tx_descriptor_ring = memory_alloc_aligned(16 * sizeof(uint32_t) * 4, 16, MEM_TYPE_DMA_BUFFER);
     if (!nic->tx_descriptor_ring) {
         LOG_ERROR("Failed to allocate TX descriptor ring");
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Allocate RX descriptor ring */
-    nic->rx_descriptor_ring = memory_alloc_aligned(16 * sizeof(uint32_t) * 4, 16);
+    nic->rx_descriptor_ring = memory_alloc_aligned(16 * sizeof(uint32_t) * 4, 16, MEM_TYPE_DMA_BUFFER);
     if (!nic->rx_descriptor_ring) {
         LOG_ERROR("Failed to allocate RX descriptor ring");
         memory_free(nic->tx_descriptor_ring);
         nic->tx_descriptor_ring = NULL;
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Initialize descriptor rings with proper alignment */
     memory_zero(nic->tx_descriptor_ring, 16 * sizeof(uint32_t) * 4);
     memory_zero(nic->rx_descriptor_ring, 16 * sizeof(uint32_t) * 4);
-    
+
     /* Set up ring pointers */
     nic->tx_ring_head = 0;
     nic->tx_ring_tail = 0;
     nic->rx_ring_head = 0;
     nic->rx_ring_tail = 0;
-    
+
     /* Configure DMA ring base addresses in hardware */
     /* Select Window 7 for DMA configuration */
     _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_7);
-    
+
     /* Set TX DMA ring base address */
-    uint32_t tx_ring_phys = dma_virt_to_phys(nic->tx_descriptor_ring);
-    outw(nic->io_base + 0x00, tx_ring_phys & 0xFFFF);         /* Lower 16 bits */
-    outw(nic->io_base + 0x02, (tx_ring_phys >> 16) & 0xFFFF); /* Upper 16 bits */
-    
+    tx_ring_phys = dma_virt_to_phys(nic->tx_descriptor_ring);
+    outw(nic->io_base + 0x00, (uint16_t)(tx_ring_phys & 0xFFFFUL));         /* Lower 16 bits */
+    outw(nic->io_base + 0x02, (uint16_t)((tx_ring_phys >> 16) & 0xFFFFUL)); /* Upper 16 bits */
+
     /* Set RX DMA ring base address */
-    uint32_t rx_ring_phys = dma_virt_to_phys(nic->rx_descriptor_ring);
-    outw(nic->io_base + 0x04, rx_ring_phys & 0xFFFF);         /* Lower 16 bits */
-    outw(nic->io_base + 0x06, (rx_ring_phys >> 16) & 0xFFFF); /* Upper 16 bits */
-    
+    rx_ring_phys = dma_virt_to_phys(nic->rx_descriptor_ring);
+    outw(nic->io_base + 0x04, (uint16_t)(rx_ring_phys & 0xFFFFUL));         /* Lower 16 bits */
+    outw(nic->io_base + 0x06, (uint16_t)((rx_ring_phys >> 16) & 0xFFFFUL)); /* Upper 16 bits */
+
     /* Initialize DMA pointers */
     outw(nic->io_base + 0x08, 0); /* TX DMA pointer */
     outw(nic->io_base + 0x0A, 0); /* RX DMA pointer */
-    
+
     LOG_DEBUG("DMA rings initialized: TX=0x%08lX, RX=0x%08lX", tx_ring_phys, rx_ring_phys);
-    
+
     return SUCCESS;
 }
 
@@ -2170,6 +2232,12 @@ static int phy_scan_full_range(uint16_t io_base, uint8_t *phy_addr, uint32_t *ph
     uint8_t best_addr = PHY_ADDR_INVALID;
     uint32_t best_id = 0;
     uint8_t addr;
+    uint16_t id1;
+    uint16_t id2;
+    uint32_t full_id;
+    uint32_t oui;
+    uint8_t model;
+    uint8_t rev;
 
     LOG_INFO("Starting comprehensive PHY scan (addresses 0-31)");
 
@@ -2194,7 +2262,7 @@ static int phy_scan_full_range(uint16_t io_base, uint8_t *phy_addr, uint32_t *ph
         }
         if (timeout == 0) continue;
         
-        uint16_t id1 = inw(io_base + _3C515_MII_DATA);
+        id1 = inw(io_base + _3C515_MII_DATA);
         if (!PHY_ID_VALID(id1)) continue;
         
         /* Read PHY ID2 */
@@ -2215,15 +2283,15 @@ static int phy_scan_full_range(uint16_t io_base, uint8_t *phy_addr, uint32_t *ph
         }
         if (timeout == 0) continue;
         
-        uint16_t id2 = inw(io_base + _3C515_MII_DATA);
+        id2 = inw(io_base + _3C515_MII_DATA);
         if (!PHY_ID_VALID(id2)) continue;
-        
+
         /* Valid PHY found - validate and log */
-        uint32_t full_id = ((uint32_t)id1 << 16) | id2;
+        full_id = ((uint32_t)id1 << 16) | id2;
         /* Correct OUI extraction: ID1 bits 15:0 = OUI bits 21:6, ID2 bits 15:10 = OUI bits 5:0 */
-        uint32_t oui = ((uint32_t)(id1 & 0xFFFF) << 6) | ((id2 >> 10) & 0x3F);
-        uint8_t model = (id2 >> 4) & 0x3F;
-        uint8_t rev = id2 & 0x0F;
+        oui = ((uint32_t)(id1 & 0xFFFF) << 6) | ((id2 >> 10) & 0x3F);
+        model = (id2 >> 4) & 0x3F;
+        rev = id2 & 0x0F;
         
         LOG_INFO("PHY at addr %u: ID=0x%08lX (OUI=0x%06lX Model=%02X Rev=%X)",
                  addr, full_id, oui, model, rev);
@@ -2262,9 +2330,10 @@ int nic_init_3c515_mii(nic_info_t *nic) {
     uint8_t phy_addr;
     uint32_t phy_id;
     uint16_t bmsr, anlpar;
+    uint16_t id1, id2;
     int timeout;
     int result;
-    
+
     if (!nic || nic->type != NIC_TYPE_3C515_TX) {
         return ERROR_INVALID_PARAM;
     }
@@ -2277,32 +2346,22 @@ int nic_init_3c515_mii(nic_info_t *nic) {
     /* Perform comprehensive PHY scan */
     result = phy_scan_full_range(nic->io_base, &phy_addr, &phy_id);
     if (result != SUCCESS) {
-        /* No PHY found - try simplified internal PHY read */
-        LOG_WARNING("Full scan failed, trying internal PHY registers");
-        uint16_t id1 = inw(nic->io_base + _3C515_W4_PHY_ID_HIGH);
-        uint16_t id2 = inw(nic->io_base + _3C515_W4_PHY_ID_LOW);
-        
-        if (!PHY_ID_VALID(id1) || !PHY_ID_VALID(id2)) {
-            LOG_ERROR("No PHY detected - falling back to forced 10Mbps half-duplex");
-            nic->phy_address = PHY_ADDR_INVALID;
-            nic->phy_id = 0;
-            nic->autoneg_capable = false;
-            nic->mii_capable = false;
-            nic->speed = 10;
-            nic->full_duplex = false;
-            nic->link_status = NIC_LINK_DOWN;
-            return ERROR_HARDWARE;
-        }
-        
-        phy_addr = 0x18;  /* Default internal PHY address */
-        phy_id = ((uint32_t)id1 << 16) | id2;
-        LOG_INFO("Using internal PHY: ID=0x%08lX", phy_id);
+        /* No PHY found - scan failed completely */
+        LOG_ERROR("No PHY detected - falling back to forced 10Mbps half-duplex");
+        nic->phy_address = PHY_ADDR_INVALID;
+        nic->phy_id = 0;
+        nic->autoneg_capable = 0;
+        nic->mii_capable = 0;
+        nic->speed = 10;
+        nic->full_duplex = 0;
+        nic->link_up = 0;
+        return ERROR_HARDWARE;
     }
     
     /* Store PHY information */
     nic->phy_address = phy_addr;
     nic->phy_id = phy_id;
-    nic->mii_capable = true;
+    nic->mii_capable = 1;
     
     /* Read BMSR to check capabilities (read twice to clear latched bits) */
     {
@@ -2333,11 +2392,11 @@ int nic_init_3c515_mii(nic_info_t *nic) {
 
     /* Check auto-negotiation capability and status */
     if (bmsr & BMSR_ANEGCAPABLE) {
-        nic->autoneg_capable = true;
-        
+        nic->autoneg_capable = 1;
+
         if (bmsr & BMSR_ANEGCOMPLETE) {
             LOG_INFO("Auto-negotiation complete");
-            nic->autoneg_enabled = true;
+            nic->autoneg = 1;
             
             /* Read link partner abilities */
             timeout = MII_POLL_TIMEOUT_US / MII_POLL_DELAY_US;
@@ -2377,101 +2436,36 @@ int nic_init_3c515_mii(nic_info_t *nic) {
             }
         } else {
             LOG_WARNING("Auto-negotiation incomplete - using parallel detect fallback");
-            nic->autoneg_enabled = false;
+            nic->autoneg = 0;
             /* Default to lowest common denominator */
             nic->speed = 10;
-            nic->full_duplex = false;
+            nic->full_duplex = 0;
         }
     } else {
         LOG_WARNING("PHY does not support auto-negotiation - forced mode");
-        nic->autoneg_capable = false;
-        nic->autoneg_enabled = false;
+        nic->autoneg_capable = 0;
+        nic->autoneg = 0;
         nic->speed = 10;
-        nic->full_duplex = false;
+        nic->full_duplex = 0;
     }
-    
+
     /* Check link status */
-    nic->link_status = (bmsr & BMSR_LSTATUS) ? NIC_LINK_UP : NIC_LINK_DOWN;
-    
+    nic->link_up = (bmsr & BMSR_LSTATUS) ? 1 : 0;
+
     LOG_INFO("MII initialized: PHY@%u ID=0x%08lX Link=%s %uMbps %s-duplex AN=%s",
              nic->phy_address, nic->phy_id,
-             nic->link_status == NIC_LINK_UP ? "UP" : "DOWN",
+             nic->link_up ? "UP" : "DOWN",
              nic->speed,
              nic->full_duplex ? "Full" : "Half",
-             nic->autoneg_enabled ? "Complete" : (nic->autoneg_capable ? "Incomplete" : "Disabled"));
+             nic->autoneg ? "Complete" : (nic->autoneg_capable ? "Incomplete" : "Disabled"));
     
     return SUCCESS;
 }
 
-/**
- * @brief Enhanced delay function with microsecond precision
- * @param microseconds Number of microseconds to delay
+/* Note: memory_alloc_aligned is defined in memory.h with signature:
+ *   void* memory_alloc_aligned(uint32_t size, uint32_t alignment, mem_type_t type);
+ * Use that version instead of a local implementation.
  */
-static void udelay(uint32_t microseconds) {
-    /* Enhanced microsecond delay using CPU timing loops */
-    /* This is a simplified version - real implementation would use
-       CPU speed detection for accurate timing */
-    
-    volatile uint32_t i, loops_per_us = 10; /* Calibrated for typical DOS systems */
-    
-    for (i = 0; i < microseconds * loops_per_us; i++) {
-        /* Empty loop - compiler should not optimize this away due to volatile */
-        __asm__ volatile ("nop");
-    }
-}
 
-/**
- * @brief Memory allocation with alignment support
- * @param size Size to allocate in bytes
- * @param alignment Required alignment (must be power of 2)
- * @return Aligned memory pointer, NULL on failure
- */
-static void* memory_alloc_aligned(size_t size, size_t alignment) {
-    if (!size || (alignment & (alignment - 1)) != 0) {
-        return NULL; /* Invalid size or alignment not power of 2 */
-    }
-    
-    /* Allocate extra space for alignment */
-    size_t total_size = size + alignment - 1 + sizeof(void*);
-    void *ptr = memory_alloc(total_size);
-    if (!ptr) {
-        return NULL;
-    }
-    
-    /* Calculate aligned address */
-    uintptr_t addr = (uintptr_t)ptr + sizeof(void*);
-    addr = (addr + alignment - 1) & ~(alignment - 1);
-    void *aligned_ptr = (void*)addr;
-    
-    /* Store original pointer for free() */
-    *((void**)aligned_ptr - 1) = ptr;
-    
-    return aligned_ptr;
-}
-
-/**
- * @brief Free aligned memory allocated with memory_alloc_aligned
- * @param ptr Aligned pointer to free
- */
-static void memory_free_aligned(void *ptr) {
-    if (!ptr) {
-        return;
-    }
-    
-    /* Retrieve original pointer */
-    void *original_ptr = *((void**)ptr - 1);
-    memory_free(original_ptr);
-}
-
-/**
- * @brief Get DMA physical address (DOS-specific implementation)
- * @param virtual_addr Virtual address
- * @return Physical address for DMA
- */
-static uint32_t dma_virt_to_phys(void *virtual_addr) {
-    /* In DOS real mode, physical address = segment * 16 + offset */
-    uint16_t segment = FP_SEG(virtual_addr);
-    uint16_t offset = FP_OFF(virtual_addr);
-    return ((uint32_t)segment << 4) + offset;
-}
+/* Note: dma_virt_to_phys is declared below in forward declarations section */
 

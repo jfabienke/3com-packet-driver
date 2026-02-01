@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
 #include "vds.h"
 
 /**
@@ -35,9 +35,18 @@ typedef struct vds_mapping {
     uint32_t size;              /* Size of mapped region in bytes */
     uint8_t is_locked;          /* Non-zero if region is locked for DMA */
     uint8_t is_contiguous;      /* Non-zero if region is physically contiguous */
+    uint8_t needs_unlock;       /* Non-zero if unlock is needed on release */
     uint8_t flags;              /* Additional flags from VDS */
-    uint8_t reserved;           /* Padding for alignment */
 } vds_mapping_t;
+
+/* VDS direction flags for lock operations */
+#define VDS_TX_FLAGS    0x01    /* TX direction (CPU to device) */
+#define VDS_RX_FLAGS    0x02    /* RX direction (device to CPU) */
+
+/* VDS helper function prototypes */
+bool vds_lock_region_mapped(void *addr, uint32_t size, uint16_t flags, vds_mapping_t *mapping);
+bool vds_unlock_region_mapped(vds_mapping_t *mapping);
+bool vds_is_isa_compatible(uint32_t physical_addr, uint32_t size);
 
 /**
  * @brief Initialize a VDS mapping structure
@@ -56,8 +65,8 @@ static void vds_mapping_init(vds_mapping_t *mapping) {
         mapping->size = 0;
         mapping->is_locked = 0;
         mapping->is_contiguous = 0;
+        mapping->needs_unlock = 0;
         mapping->flags = 0;
-        mapping->reserved = 0;
     }
 }
 

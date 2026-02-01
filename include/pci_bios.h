@@ -9,8 +9,16 @@
 #ifndef _PCI_BIOS_H_
 #define _PCI_BIOS_H_
 
+/* C89 compatibility - include portability header first */
+#include "portabl.h"
+
+/* Try standard headers, fallback to portabl.h types */
+#ifdef __WATCOMC__
+/* Watcom C89 mode: portabl.h provides types */
+#else
 #include <stdint.h>
 #include <stdbool.h>
+#endif
 
 /* Standard PCI configuration register offsets */
 #define PCI_VENDOR_ID           0x00    /* 16-bit Vendor ID */
@@ -83,6 +91,33 @@
 /* 3Com specific vendor ID */
 #define PCI_VENDOR_3COM         0x10B7  /* 3Com Corporation */
 
+/* Command register bits (alternative naming) */
+#define PCI_CMD_IO              0x0001
+#define PCI_CMD_MEMORY          0x0002
+#define PCI_CMD_MASTER          0x0004
+#define PCI_CMD_PARITY          0x0040
+#define PCI_CMD_SERR            0x0100
+
+/* Status register bits (alternative naming) */
+#define PCI_STATUS_CAP_LIST         0x0010
+#define PCI_STATUS_PARITY           0x0100
+#define PCI_STATUS_SIG_TARGET_ABORT 0x0800
+#define PCI_STATUS_REC_TARGET_ABORT 0x1000
+#define PCI_STATUS_REC_MASTER_ABORT 0x2000
+#define PCI_STATUS_SIG_SYSTEM_ERROR 0x4000
+#define PCI_STATUS_DETECTED_PARITY  0x8000
+
+/* Capability registers */
+#define PCI_CAPABILITY_LIST     0x34
+#define PCI_CAP_LIST_ID         0x00
+#define PCI_CAP_LIST_NEXT       0x01
+
+/* Power states */
+#define PCI_POWER_D0            0
+#define PCI_POWER_D1            1
+#define PCI_POWER_D2            2
+#define PCI_POWER_D3HOT         3
+
 /* Function prototypes */
 
 /* Basic PCI BIOS detection */
@@ -119,19 +154,19 @@ bool pci_set_latency_timer(uint8_t bus, uint8_t device, uint8_t function, uint8_
 bool pci_device_setup(uint8_t bus, uint8_t device, uint8_t function,
                      bool enable_io, bool enable_mem, bool enable_master);
 
-/* Inline helper macros for common operations */
+/* Helper functions for common operations (C89 compatible - no inline keyword) */
 
 /**
  * @brief Check if device exists at given BDF
  */
-static inline bool pci_device_exists(uint8_t bus, uint8_t device, uint8_t function) {
+static bool pci_device_exists(uint8_t bus, uint8_t device, uint8_t function) {
     return (pci_read_config_word(bus, device, function, PCI_VENDOR_ID) != 0xFFFF);
 }
 
 /**
  * @brief Check if device is multi-function
  */
-static inline bool pci_is_multi_function(uint8_t bus, uint8_t device) {
+static bool pci_is_multi_function(uint8_t bus, uint8_t device) {
     uint8_t header = pci_read_config_byte(bus, device, 0, PCI_HEADER_TYPE);
     return (header & PCI_HEADER_MULTI_FUNC) ? true : false;
 }
@@ -139,21 +174,21 @@ static inline bool pci_is_multi_function(uint8_t bus, uint8_t device) {
 /**
  * @brief Build BDF (Bus/Device/Function) byte for BIOS calls
  */
-static inline uint8_t pci_make_bdf(uint8_t device, uint8_t function) {
+static uint8_t pci_make_bdf(uint8_t device, uint8_t function) {
     return ((device & 0x1F) << 3) | (function & 0x07);
 }
 
 /**
  * @brief Extract device number from BDF byte
  */
-static inline uint8_t pci_get_device(uint8_t bdf) {
+static uint8_t pci_get_device(uint8_t bdf) {
     return (bdf >> 3) & 0x1F;
 }
 
 /**
  * @brief Extract function number from BDF byte
  */
-static inline uint8_t pci_get_function(uint8_t bdf) {
+static uint8_t pci_get_function(uint8_t bdf) {
     return bdf & 0x07;
 }
 

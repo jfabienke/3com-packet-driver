@@ -21,7 +21,10 @@ extern "C" {
 
 /* Network address structure for IPv4 */
 typedef struct ip_addr {
-    uint8_t addr[4];                            /* IPv4 address bytes */
+    union {
+        uint8_t addr[4];                        /* IPv4 address bytes */
+        uint8_t octets[4];                      /* Alias for compatibility */
+    };
 } ip_addr_t;
 
 /* Subnet structure */

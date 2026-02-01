@@ -18,11 +18,19 @@ extern "C" {
 /* Includes */
 #include "common.h"
 #include "memory.h"
-#include "nicbufp.h"
+#include "nic_defs.h"  /* For nic_type_t */
+/* Note: nicbufp.h removed to break circular dependency */
+/* Define nic_id_t locally instead of including nicbufp.h */
+typedef uint8_t nic_id_t;
+#define INVALID_NIC_ID          0xFF
+
+/* Forward declaration for buffer_pool_stats_t (full definition in nicbufp.h) */
+struct buffer_pool_stats;
+typedef struct buffer_pool_stats buffer_pool_stats_t;
 
 /* Buffer types */
 typedef enum {
-    BUFFER_TYPE_TX = 0,                     /* Transmit buffer */
+    BUFFER_TYPE_TX,                         /* Transmit buffer */
     BUFFER_TYPE_RX,                         /* Receive buffer */
     BUFFER_TYPE_DMA_TX,                     /* DMA transmit buffer */
     BUFFER_TYPE_DMA_RX,                     /* DMA receive buffer */
@@ -32,7 +40,7 @@ typedef enum {
 
 /* Buffer states */
 typedef enum {
-    BUFFER_STATE_FREE = 0,                  /* Buffer is free */
+    BUFFER_STATE_FREE,                      /* Buffer is free */
     BUFFER_STATE_ALLOCATED,                 /* Buffer is allocated */
     BUFFER_STATE_IN_USE,                    /* Buffer is in use */
     BUFFER_STATE_PENDING,                   /* Buffer is pending */
@@ -131,7 +139,17 @@ typedef struct staging_buffer {
 } staging_buffer_t;
 
 /* Compiler barrier for single-core x86 ordering */
-#define compiler_barrier() __asm__ volatile("" : : : "memory")
+#ifdef __WATCOMC__
+    /* Open Watcom - use volatile memory access as compiler barrier */
+    static volatile uint8_t __bufaloc_barrier_dummy = 0;
+    #define compiler_barrier() do { (void)__bufaloc_barrier_dummy; } while(0)
+#elif defined(__GNUC__)
+    #define compiler_barrier() __asm__ volatile("" : : : "memory")
+#else
+    /* Fallback - volatile access */
+    static volatile uint8_t __bufaloc_barrier_dummy = 0;
+    #define compiler_barrier() do { (void)__bufaloc_barrier_dummy; } while(0)
+#endif
 
 /* SPSC (Single Producer Single Consumer) ring buffer for ISR safety */
 #define SPSC_QUEUE_SIZE 32  /* Must be power of 2 */
@@ -286,7 +304,7 @@ void buffer_clear_tracking(void);
 
 /* Buffer error handling */
 typedef enum {
-    BUFFER_ERROR_NONE = 0,
+    BUFFER_ERROR_NONE,
     BUFFER_ERROR_INVALID_PARAM,
     BUFFER_ERROR_OUT_OF_MEMORY,
     BUFFER_ERROR_POOL_FULL,
@@ -345,14 +363,15 @@ void spsc_queue_cleanup(spsc_queue_t *queue);
 int spsc_queue_enqueue(spsc_queue_t *queue, staging_buffer_t *buffer);
 staging_buffer_t* spsc_queue_dequeue(spsc_queue_t *queue);
 
-/* Helper functions */
-static inline int spsc_queue_is_empty(spsc_queue_t *queue) {
+/* Helper functions - Note: no inline for C89 compatibility */
+static int spsc_queue_is_empty(spsc_queue_t *queue) {
     return (!queue || queue->head == queue->tail);
 }
 
-static inline int spsc_queue_is_full(spsc_queue_t *queue) {
+static int spsc_queue_is_full(spsc_queue_t *queue) {
+    uint8_t next_tail;  /* C89: declarations at block start */
     if (!queue) return 1;
-    uint8_t next_tail = (queue->tail + 1) & SPSC_QUEUE_MASK;
+    next_tail = (queue->tail + 1) & SPSC_QUEUE_MASK;
     return (next_tail == queue->head);
 }
 
@@ -380,6 +399,35 @@ int buffer_rebalance_resources(void);
 int buffer_get_nic_stats(nic_id_t nic_id, buffer_pool_stats_t* stats);
 void buffer_print_comprehensive_stats(void);
 void buffer_monitor_and_rebalance(void);
+
+/* === VDS Common Buffer Functions === */
+
+/* Forward declaration for vds_buffer_t (defined in vds.h) */
+struct vds_buffer;
+
+/**
+ * @brief Check if VDS common buffers are available
+ * @return true if VDS buffers initialized and available
+ */
+bool buffer_vds_available(void);
+
+/**
+ * @brief Get VDS TX descriptor ring buffer
+ * @return Pointer to TX ring VDS buffer, NULL if unavailable
+ */
+const struct vds_buffer* buffer_get_vds_tx_ring(void);
+
+/**
+ * @brief Get VDS RX descriptor ring buffer
+ * @return Pointer to RX ring VDS buffer, NULL if unavailable
+ */
+const struct vds_buffer* buffer_get_vds_rx_ring(void);
+
+/**
+ * @brief Get VDS RX data buffer
+ * @return Pointer to RX data VDS buffer, NULL if unavailable
+ */
+const struct vds_buffer* buffer_get_vds_rx_data(void);
 
 #ifdef __cplusplus
 }

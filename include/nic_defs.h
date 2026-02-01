@@ -29,14 +29,20 @@
 #ifdef NIC_TYPE_3C515
 #undef NIC_TYPE_3C515
 #endif
+#ifdef NIC_TYPE_3C515_TX
+#undef NIC_TYPE_3C515_TX
+#endif
+#ifdef NIC_TYPE_UNKNOWN
+#undef NIC_TYPE_UNKNOWN
+#endif
 
 /* --- Common Definitions --- */
 
 /**
- * @brief NIC type enumeration
+ * @brief NIC type enumeration - C89 compatible (no explicit initializers)
  */
 typedef enum {
-    NIC_TYPE_UNKNOWN = 0,
+    NIC_TYPE_UNKNOWN,       /* 0: Unknown/undetected */
     NIC_TYPE_3C509B,
     NIC_TYPE_3C515_TX,
     
@@ -65,9 +71,9 @@ typedef enum {
  * - 3c515 (Fast Ethernet with media selection)
  */
 typedef enum {
-    /* Unknown/undetected media */
-    MEDIA_TYPE_UNKNOWN = 0,
-    
+    /* Unknown/undetected media - C89 compatible (no explicit initializers) */
+    MEDIA_TYPE_UNKNOWN,         /* 0: Unknown/undetected */
+
     /* Standard Ethernet media types */
     MEDIA_TYPE_10BASE_T,        /* RJ45 twisted pair */
     MEDIA_TYPE_10BASE_2,        /* BNC coaxial (thin Ethernet) */
@@ -500,11 +506,12 @@ int is_media_supported(media_type_t media, uint16_t caps);
 uint16_t get_default_media_caps(nic_type_t nic_type);
 
 /**
- * @brief Auto-detect available media types on a NIC
- * @param nic Pointer to NIC information structure
+ * @brief Auto-detect available media types on a NIC (legacy version)
+ * @param nic Pointer to NIC media information structure
  * @return Detected media type or MEDIA_TYPE_UNKNOWN if detection fails
+ * @note Use auto_detect_media() from medictl.h for full functionality
  */
-media_type_t auto_detect_media(nic_media_info_t* nic);
+media_type_t auto_detect_media_simple(nic_media_info_t* nic);
 
 /**
  * @brief Validate media configuration for a specific NIC

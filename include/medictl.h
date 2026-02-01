@@ -31,6 +31,7 @@
 
 #include "common.h"
 #include "nic_defs.h"
+#include "hardware.h"  /* For nic_info_t definition */
 #include "medityp.h"
 #include "3c509b.h"
 
@@ -411,26 +412,29 @@ uint8_t get_media_detection_priority(media_type_t media_type, uint8_t nic_varian
 
 /**
  * @brief Default media detection configuration
+ * C89 compatible positional initialization:
+ * { flags, timeout_ms, retry_count, test_duration_ms, preferred_media, media_priority_mask }
  */
 #define MEDIA_DETECT_CONFIG_DEFAULT { \
-    .flags = 0, \
-    .timeout_ms = MEDIA_DETECT_TIMEOUT_MS, \
-    .retry_count = AUTO_DETECT_RETRY_COUNT, \
-    .test_duration_ms = MEDIA_TEST_DURATION_10BASET_MS, \
-    .preferred_media = MEDIA_TYPE_UNKNOWN, \
-    .media_priority_mask = 0xFFFF \
+    0, \
+    MEDIA_DETECT_TIMEOUT_MS, \
+    AUTO_DETECT_RETRY_COUNT, \
+    MEDIA_TEST_DURATION_10BASET_MS, \
+    MEDIA_TYPE_UNKNOWN, \
+    0xFFFF \
 }
 
 /**
  * @brief Quick media detection configuration for faster detection
+ * C89 compatible positional initialization
  */
 #define MEDIA_DETECT_CONFIG_QUICK { \
-    .flags = MEDIA_CTRL_FLAG_QUICK_TEST, \
-    .timeout_ms = 2000, \
-    .retry_count = 1, \
-    .test_duration_ms = 500, \
-    .preferred_media = MEDIA_TYPE_UNKNOWN, \
-    .media_priority_mask = 0xFFFF \
+    MEDIA_CTRL_FLAG_QUICK_TEST, \
+    2000, \
+    1, \
+    500, \
+    MEDIA_TYPE_UNKNOWN, \
+    0xFFFF \
 }
 
 #ifdef __cplusplus

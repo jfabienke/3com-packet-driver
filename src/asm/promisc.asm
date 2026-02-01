@@ -6,16 +6,23 @@
 ; This file is part of the 3Com Packet Driver project.
 ;
 
-.MODEL SMALL
-.386
+bits 16
+cpu 386
 
-; External C functions and variables
-EXTERN _g_promisc_buffer_tail:DWORD
-EXTERN _g_promisc_buffers:BYTE
-EXTERN _promisc_capture_packet:PROC
+; C symbol naming bridge (maps C symbols to symbol_)
+%include "csym.inc"
+
+; External C functions and variables (csym.inc maps to trailing underscore)
+extern g_promisc_buffer_tail
+; NOTE: g_promisc_buffers removed - now uses XMS allocation on 386+ systems.
+; Assembly routines now call C functions for buffer management.
+extern promisc_capture_packet
+
+; promisc_add_buffer_packet_asm is defined in linkasm.asm (ASM-to-ASM, no mapping)
+extern promisc_add_buffer_packet_asm
 
 ; External CPU optimization level from packet_ops.asm
-EXTRN current_cpu_opt:BYTE
+extern current_cpu_opt
 
 ; CPU optimization level constants (must match packet_ops.asm)
 OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
@@ -33,18 +40,17 @@ OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
 ; On 8086/8088, uses explicit push/pop sequences.
 ;==============================================================================
 
-SAVE_ALL_REGS_32 MACRO
-        LOCAL use_pushad, use_pusha, done
+%macro SAVE_ALL_REGS_32 0
         push ax
         mov al, [current_cpu_opt]
         cmp al, OPT_32BIT
         pop ax
-        jae use_pushad
+        jae %%use_pushad
         push ax
         mov al, [current_cpu_opt]
         test al, OPT_16BIT
         pop ax
-        jnz use_pusha
+        jnz %%use_pusha
         ;; 8086 path: explicit push sequence (pushes same regs as PUSHA)
         push ax
         push cx
@@ -54,31 +60,30 @@ SAVE_ALL_REGS_32 MACRO
         push bp
         push si
         push di
-        jmp short done
-use_pusha:
+        jmp short %%done
+%%use_pusha:
         ;; 286 path: use PUSHA (16-bit)
         pusha
-        jmp short done
-use_pushad:
+        jmp short %%done
+%%use_pushad:
         ;; 386+ path: use PUSHAD (32-bit)
         pushad
-done:
-ENDM
+%%done:
+%endmacro
 
-RESTORE_ALL_REGS_32 MACRO
-        LOCAL use_popad, use_popa, done
+%macro RESTORE_ALL_REGS_32 0
         ;; Must determine CPU type without corrupting registers being restored
         ;; Use stack to preserve test value
         push ax
         mov al, [current_cpu_opt]
         cmp al, OPT_32BIT
         pop ax
-        jae use_popad
+        jae %%use_popad
         push ax
         mov al, [current_cpu_opt]
         test al, OPT_16BIT
         pop ax
-        jnz use_popa
+        jnz %%use_popa
         ;; 8086 path: explicit pop sequence (reverse of push)
         pop di
         pop si
@@ -88,43 +93,41 @@ RESTORE_ALL_REGS_32 MACRO
         pop dx
         pop cx
         pop ax
-        jmp short done
-use_popa:
+        jmp short %%done
+%%use_popa:
         ;; 286 path: use POPA (16-bit)
         popa
-        jmp short done
-use_popad:
+        jmp short %%done
+%%use_popad:
         ;; 386+ path: use POPAD (32-bit)
         popad
-done:
-ENDM
+%%done:
+%endmacro
 
 ; Constants
 PROMISC_BUFFER_SIZE     EQU     1600
 PROMISC_BUFFER_COUNT    EQU     64
 
 ; Data segment
-_DATA SEGMENT
+segment _DATA class=DATA
         ; Capture state variables
         capture_enabled         db      0
         capture_timestamp       dd      0
         capture_buffer_ptr      dd      0
-        
+
         ; Performance counters
         asm_packets_captured    dd      0
         asm_capture_errors      dd      0
-        
-_DATA ENDS
+
 
 ; Code segment
-_TEXT SEGMENT
-        ASSUME  CS:_TEXT, DS:_DATA
+segment _TEXT class=CODE
 
 ; Export functions for C
-PUBLIC _promisc_asm_capture_packet
-PUBLIC _promisc_asm_enable_capture
-PUBLIC _promisc_asm_disable_capture
-PUBLIC _promisc_asm_get_timestamp
+global _promisc_asm_capture_packet
+global _promisc_asm_enable_capture
+global _promisc_asm_disable_capture
+global _promisc_asm_get_timestamp
 
 ;==============================================================================
 ; promisc_asm_capture_packet - High-speed packet capture
@@ -136,7 +139,7 @@ PUBLIC _promisc_asm_get_timestamp
 ; Returns:
 ;   AX = 0 on success, error code on failure
 ;==============================================================================
-_promisc_asm_capture_packet PROC FAR
+_promisc_asm_capture_packet:
         push    bp
         mov     bp, sp
         push    bx
@@ -146,53 +149,53 @@ _promisc_asm_capture_packet PROC FAR
         push    di
         push    es
         push    ds
-        
+
         ; Check if capture is enabled
-        cmp     capture_enabled, 0
+        cmp     byte [capture_enabled], 0
         je      capture_disabled
-        
+
         ; Get packet parameters
-        les     si, dword ptr [bp+6]   ; ES:SI = packet pointer
-        mov     cx, word ptr [bp+10]   ; CX = packet length
-        
+        les     si, [bp+6]              ; ES:SI = packet pointer
+        mov     cx, word [bp+10]        ; CX = packet length
+
         ; Validate parameters
         test    cx, cx
         jz      invalid_length
         cmp     cx, PROMISC_BUFFER_SIZE
         ja      packet_too_large
-        
+
         ; Get current timestamp
         call    get_high_precision_timestamp
-        mov     capture_timestamp, eax
-        
+        mov     [capture_timestamp], eax
+
         ; Fast memcpy for packet data
         call    fast_packet_copy
         jc      copy_error
-        
+
         ; Update counters
-        inc     asm_packets_captured
-        
+        inc     dword [asm_packets_captured]
+
         ; Success
         xor     ax, ax
         jmp     capture_exit
-        
+
 capture_disabled:
         mov     ax, 1               ; ERROR_NOT_ENABLED
         jmp     capture_exit
-        
+
 invalid_length:
         mov     ax, 2               ; ERROR_INVALID_PARAM
         jmp     capture_exit
-        
+
 packet_too_large:
         mov     ax, 3               ; ERROR_BUFFER_TOO_SMALL
         jmp     capture_exit
-        
+
 copy_error:
-        inc     asm_capture_errors
+        inc     dword [asm_capture_errors]
         mov     ax, 4               ; ERROR_COPY_FAILED
         jmp     capture_exit
-        
+
 capture_exit:
         pop     ds
         pop     es
@@ -203,7 +206,6 @@ capture_exit:
         pop     bx
         pop     bp
         ret
-_promisc_asm_capture_packet ENDP
 
 ;==============================================================================
 ; promisc_asm_enable_capture - Enable high-speed capture mode
@@ -211,26 +213,25 @@ _promisc_asm_capture_packet ENDP
 ; Returns:
 ;   AX = 0 on success
 ;==============================================================================
-_promisc_asm_enable_capture PROC FAR
+_promisc_asm_enable_capture:
         push    bp
         mov     bp, sp
-        
+
         ; Enable capture
-        mov     capture_enabled, 1
-        
+        mov     byte [capture_enabled], 1
+
         ; Reset counters
-        mov     asm_packets_captured, 0
-        mov     asm_capture_errors, 0
-        
+        mov     dword [asm_packets_captured], 0
+        mov     dword [asm_capture_errors], 0
+
         ; Initialize timestamp
         call    get_high_precision_timestamp
-        mov     capture_timestamp, eax
-        
+        mov     [capture_timestamp], eax
+
         xor     ax, ax              ; Success
-        
+
         pop     bp
         ret
-_promisc_asm_enable_capture ENDP
 
 ;==============================================================================
 ; promisc_asm_disable_capture - Disable high-speed capture mode
@@ -238,18 +239,17 @@ _promisc_asm_enable_capture ENDP
 ; Returns:
 ;   AX = 0 on success
 ;==============================================================================
-_promisc_asm_disable_capture PROC FAR
+_promisc_asm_disable_capture:
         push    bp
         mov     bp, sp
-        
+
         ; Disable capture
-        mov     capture_enabled, 0
-        
+        mov     byte [capture_enabled], 0
+
         xor     ax, ax              ; Success
-        
+
         pop     bp
         ret
-_promisc_asm_disable_capture ENDP
 
 ;==============================================================================
 ; promisc_asm_get_timestamp - Get high-precision timestamp
@@ -257,20 +257,20 @@ _promisc_asm_disable_capture ENDP
 ; Returns:
 ;   DX:AX = 32-bit timestamp
 ;==============================================================================
-_promisc_asm_get_timestamp PROC FAR
+_promisc_asm_get_timestamp:
         push    bp
         mov     bp, sp
-        
+
         call    get_high_precision_timestamp
-        
+
         ; Return value in DX:AX
-        mov     dx, eax
-        shr     dx, 16
+        mov     dx, ax
+        shr     eax, 16
+        xchg    ax, dx
         ; AX already contains low 16 bits
-        
+
         pop     bp
         ret
-_promisc_asm_get_timestamp ENDP
 
 ;==============================================================================
 ; Internal helper functions
@@ -282,24 +282,23 @@ _promisc_asm_get_timestamp ENDP
 ; Returns:
 ;   EAX = 32-bit timestamp
 ;------------------------------------------------------------------------------
-get_high_precision_timestamp PROC NEAR
+get_high_precision_timestamp:
         push    dx
         push    cx
-        
+
         ; Use BIOS timer tick count for now
         ; In real implementation, could use RTC or other high-precision timer
         mov     ah, 00h
         int     1Ah                 ; Get timer tick count
-        
+
         ; CX:DX contains tick count
         mov     eax, ecx
         shl     eax, 16
         mov     ax, dx
-        
+
         pop     cx
         pop     dx
         ret
-get_high_precision_timestamp ENDP
 
 ;------------------------------------------------------------------------------
 ; fast_packet_copy - Optimized packet copying with CPU detection
@@ -311,142 +310,52 @@ get_high_precision_timestamp ENDP
 ; Returns:
 ;   CF = 0 on success, 1 on error
 ;------------------------------------------------------------------------------
-fast_packet_copy PROC NEAR
+fast_packet_copy:
+        ; XMS OPTIMIZATION NOTE:
+        ; The promiscuous capture buffers are now allocated from XMS on 386+ systems.
+        ; Direct buffer access from assembly is no longer possible.
+        ; This function now calls the C-level buffer management function.
+        ;
+        ; Input:
+        ;   ES:SI = source packet
+        ;   CX = length
+        ;
+        ; Returns:
+        ;   CF = 0 on success, 1 on error
+
         push    ax
         push    bx
         push    dx
-        push    di
-        push    ds
-        
-        ; Set up destination (current buffer)
-        mov     ax, _DATA
-        mov     ds, ax
-        
-        ; Get buffer tail index
-        mov     eax, _g_promisc_buffer_tail
-        
-        ; Calculate buffer address
-        ; Each buffer is PROMISC_BUFFER_SIZE + metadata
-        mov     ebx, PROMISC_BUFFER_SIZE + 16   ; Buffer size + metadata
-        mul     ebx
-        
-        ; Add base address of buffers
-        add     eax, offset _g_promisc_buffers
-        mov     di, ax                  ; DI = destination offset
-        
-        ; Enhanced copy with CPU-specific optimizations
-        push    cx                      ; Save original length
-        
-        ; Check CPU type for optimization selection
-        call    detect_cpu_for_copy
-        cmp     al, 3                   ; 386+ ?
-        jae     copy_386_optimized
-        cmp     al, 2                   ; 286 ?
-        je      copy_286_optimized
-        jmp     copy_8086_compatible    ; 8086/8088 fallback
-        
-copy_386_optimized:
-        ; 386+ optimized copy using 32-bit operations
-        pop     cx                      ; Restore length
-        push    cx
-        
-        ; Check if length is large enough for burst copy
-        cmp     cx, 32
-        jb      copy_dwords_standard
-        
-        ; Use REP MOVSD for large packets (burst mode)
-        push    ecx
-        shr     ecx, 2                  ; Convert to dwords
-        cld                             ; Clear direction flag
-        rep     movsd                   ; Fast 32-bit copy
-        pop     ecx
-        and     ecx, 3                  ; Handle remaining bytes
-        rep     movsb
-        jmp     copy_done
-        
-copy_dwords_standard:
-        shr     cx, 2                   ; Convert to dwords
-        jz      copy_remaining_bytes
-        
-copy_dwords_loop:
-        mov     eax, es:[si]
-        mov     [di], eax
-        add     si, 4
-        add     di, 4
-        dec     cx
-        jnz     copy_dwords_loop
-        jmp     copy_remaining_bytes
-        
-copy_286_optimized:
-        ; 286 optimized copy using 16-bit operations
-        pop     cx                      ; Restore length
-        push    cx
-        
-        ; Use REP MOVSW for 286 systems
-        cmp     cx, 16
-        jb      copy_words_standard
-        
-        push    cx
-        shr     cx, 1                   ; Convert to words
-        cld
-        rep     movsw                   ; Fast 16-bit copy
-        pop     cx
-        and     cx, 1                   ; Handle odd byte
-        rep     movsb
-        jmp     copy_done
-        
-copy_words_standard:
-        shr     cx, 1                   ; Convert to words
-        jz      copy_remaining_bytes
-        
-copy_words_loop:
-        mov     ax, es:[si]
-        mov     [di], ax
-        add     si, 2
-        add     di, 2
-        dec     cx
-        jnz     copy_words_loop
-        jmp     copy_remaining_bytes
-        
-copy_8086_compatible:
-        ; 8086/8088 compatible byte copy
-        pop     cx                      ; Restore length
-        push    cx
-        
-        ; Use REP MOVSB for maximum compatibility
-        cld
-        rep     movsb
-        jmp     copy_done
-        
-copy_remaining_bytes:
-        pop     cx
-        and     cx, 3                   ; Remaining bytes (0-3)
-        jz      copy_done
-        
-        ; Copy remaining bytes
-copy_bytes:
-        mov     al, es:[si]
-        mov     [di], al
-        inc     si
-        inc     di
-        dec     cx
-        jnz     copy_bytes
-        
-copy_done:
+
+        ; Call C function: promisc_add_buffer_packet_asm(packet, length, nic_index, filter)
+        ; Push parameters in reverse order (C calling convention)
+        push    word 0                  ; filter_matched = 0
+        push    word 0                  ; nic_index = 0
+        push    cx                      ; length
+        push    es                      ; packet segment
+        push    si                      ; packet offset
+
+        ; Call C function to handle buffer management (including XMS copy)
+        call    promisc_add_buffer_packet_asm
+
+        ; Clean up stack (5 words = 10 bytes)
+        add     sp, 10
+
+        ; Check return value
+        test    ax, ax
+        jnz     .copy_error
+
         clc                             ; Clear carry (success)
-        jmp     copy_exit
-        
-copy_error:
+        jmp     .copy_exit
+
+.copy_error:
         stc                             ; Set carry (error)
-        
-copy_exit:
-        pop     ds
-        pop     di
+
+.copy_exit:
         pop     dx
         pop     bx
         pop     ax
         ret
-fast_packet_copy ENDP
 
 ;------------------------------------------------------------------------------
 ; detect_cpu_for_copy - Detect CPU type for optimal copy routine selection
@@ -454,21 +363,21 @@ fast_packet_copy ENDP
 ; Returns:
 ;   AL = CPU type (0=8086, 1=8088, 2=286, 3=386, 4=486+)
 ;------------------------------------------------------------------------------
-detect_cpu_for_copy PROC NEAR
+detect_cpu_for_copy:
         push    bx
         push    cx
         push    dx
-        
+
         ; Simple CPU detection for copy optimization
         ; Test for 386+ by checking if we can set/clear AC flag
         pushfd                          ; Try to push 32-bit flags
-        jc      cpu_286_or_less         ; If carry set, not 386+
-        
+        jc      .cpu_286_or_less        ; If carry set, not 386+
+
         ; We have 386+
         mov     al, 3
-        jmp     cpu_detect_done
-        
-cpu_286_or_less:
+        jmp     .cpu_detect_done
+
+.cpu_286_or_less:
         ; Test for 286 by checking protected mode capability
         pushf                           ; Push 16-bit flags
         pop     bx                      ; Get flags in BX
@@ -481,23 +390,22 @@ cpu_286_or_less:
         and     bx, 7000h              ; Check if bits stayed set
         push    cx
         popf                            ; Restore original flags
-        
+
         cmp     bx, 7000h
-        je      cpu_is_286              ; If bits set, it's 286+
-        
+        je      .cpu_is_286             ; If bits set, it's 286+
+
         ; It's 8086/8088
         mov     al, 0
-        jmp     cpu_detect_done
-        
-cpu_is_286:
+        jmp     .cpu_detect_done
+
+.cpu_is_286:
         mov     al, 2
-        
-cpu_detect_done:
+
+.cpu_detect_done:
         pop     dx
         pop     cx
         pop     bx
         ret
-detect_cpu_for_copy ENDP
 
 ;------------------------------------------------------------------------------
 ; promisc_asm_interrupt_handler - High-speed interrupt handler for promiscuous mode
@@ -510,14 +418,14 @@ detect_cpu_for_copy ENDP
 ;   - 80286: PUSHA/POPA (16-bit)
 ;   - 80386+: PUSHAD/POPAD (32-bit)
 ;------------------------------------------------------------------------------
-promisc_asm_interrupt_handler PROC NEAR
+promisc_asm_interrupt_handler:
         SAVE_ALL_REGS_32        ; CPU-adaptive: PUSHAD (386+), PUSHA (286), explicit (8086)
         push    es
         push    ds
 
         ; Check if capture enabled
-        cmp     capture_enabled, 0
-        je      interrupt_exit
+        cmp     byte [capture_enabled], 0
+        je      .interrupt_exit
 
         ; Enhanced interrupt handling with error packet detection
         ; Get packet status from NIC-specific registers
@@ -527,30 +435,29 @@ promisc_asm_interrupt_handler PROC NEAR
 
         ; Fast path: check for common error conditions
         call    check_packet_errors
-        jc      handle_error_packet
+        jc      .handle_error_packet
 
         ; Fast packet processing for valid packets
         call    fast_packet_reception
-        jnc     update_counters
+        jnc     .update_counters
 
-handle_error_packet:
+.handle_error_packet:
         ; Handle error packets in promiscuous mode
         ; Even error packets should be captured for network analysis
-        inc     asm_capture_errors
+        inc     dword [asm_capture_errors]
 
         ; Check if we should still capture error packets
         ; (promiscuous mode typically wants ALL packets)
         call    capture_error_packet
 
-update_counters:
-        inc     asm_packets_captured
+.update_counters:
+        inc     dword [asm_packets_captured]
 
-interrupt_exit:
+.interrupt_exit:
         pop     ds
         pop     es
         RESTORE_ALL_REGS_32     ; CPU-adaptive: POPAD (386+), POPA (286), explicit (8086)
         ret
-promisc_asm_interrupt_handler ENDP
 
 ;------------------------------------------------------------------------------
 ; check_packet_errors - Check for common packet errors
@@ -558,18 +465,17 @@ promisc_asm_interrupt_handler ENDP
 ; Returns:
 ;   CF = 0 if packet is valid, CF = 1 if error detected
 ;------------------------------------------------------------------------------
-check_packet_errors PROC NEAR
+check_packet_errors:
         push    ax
         push    dx
-        
+
         ; This would be NIC-specific error checking
         ; For now, assume packet is valid
         clc                             ; Clear carry (no error)
-        
+
         pop     dx
         pop     ax
         ret
-check_packet_errors ENDP
 
 ;------------------------------------------------------------------------------
 ; fast_packet_reception - Optimized packet reception using REP INSW
@@ -577,26 +483,25 @@ check_packet_errors ENDP
 ; Returns:
 ;   CF = 0 on success, CF = 1 on error
 ;------------------------------------------------------------------------------
-fast_packet_reception PROC NEAR
+fast_packet_reception:
         push    ax
         push    cx
         push    dx
         push    di
-        
+
         ; This is a placeholder for NIC-specific fast reception
         ; Real implementation would use:
         ; - REP INSW for 3C509B (PIO mode)
         ; - DMA descriptor processing for 3C515-TX
-        
+
         ; For demonstration, simulate successful reception
         clc                             ; Clear carry (success)
-        
+
         pop     di
         pop     dx
         pop     cx
         pop     ax
         ret
-fast_packet_reception ENDP
 
 ;------------------------------------------------------------------------------
 ; capture_error_packet - Capture error packet for analysis
@@ -604,47 +509,45 @@ fast_packet_reception ENDP
 ; Returns:
 ;   CF = 0 on success, CF = 1 on error
 ;------------------------------------------------------------------------------
-capture_error_packet PROC NEAR
+capture_error_packet:
         push    ax
-        
+
         ; In promiscuous mode, we often want to capture error packets
         ; for network troubleshooting and analysis
         ; This would copy the error packet to the capture buffer
         ; with appropriate error flags set
-        
+
         clc                             ; Clear carry (success)
-        
+
         pop     ax
         ret
-capture_error_packet ENDP
 
 ;------------------------------------------------------------------------------
 ; promisc_asm_buffer_management - Optimized buffer management
 ;
 ; Manages the circular buffer for captured packets
 ;------------------------------------------------------------------------------
-promisc_asm_buffer_management PROC NEAR
+promisc_asm_buffer_management:
         push    eax
         push    ebx
-        
+
         ; Check buffer space
-        mov     eax, _g_promisc_buffer_tail
+        mov     eax, [g_promisc_buffer_tail]
         inc     eax
         cmp     eax, PROMISC_BUFFER_COUNT
-        jb      no_wrap
+        jb      .no_wrap
         xor     eax, eax                ; Wrap to 0
-        
-no_wrap:
+
+.no_wrap:
         ; Check if buffer would be full
         ; (implementation depends on head pointer)
-        
+
         ; Update tail pointer
-        mov     _g_promisc_buffer_tail, eax
-        
+        mov     [g_promisc_buffer_tail], eax
+
         pop     ebx
         pop     eax
         ret
-promisc_asm_buffer_management ENDP
 
 ;------------------------------------------------------------------------------
 ; CPU-specific optimizations
@@ -653,58 +556,56 @@ promisc_asm_buffer_management ENDP
 ;------------------------------------------------------------------------------
 ; promisc_asm_386_copy - 386+ optimized copy routine
 ;------------------------------------------------------------------------------
-promisc_asm_386_copy PROC NEAR
+promisc_asm_386_copy:
         ; Use 32-bit registers and instructions for faster copying
         ; This routine is called when CPU detection shows 386+
-        
+
         push    eax
         push    ecx
         push    esi
         push    edi
-        
+
         ; Convert 16-bit pointers to 32-bit
         movzx   esi, si
         movzx   edi, di
         movzx   ecx, cx
-        
+
         ; Copy using 32-bit moves
         shr     ecx, 2              ; Convert to dwords
-        
-copy_386_dwords:
-        mov     eax, es:[esi]
-        mov     ds:[edi], eax
+
+.copy_386_dwords:
+        mov     eax, [es:esi]
+        mov     [ds:edi], eax
         add     esi, 4
         add     edi, 4
-        loop    copy_386_dwords
-        
+        loop    .copy_386_dwords
+
         pop     edi
         pop     esi
         pop     ecx
         pop     eax
         ret
-promisc_asm_386_copy ENDP
 
 ;------------------------------------------------------------------------------
 ; promisc_asm_286_copy - 286 optimized copy routine
 ;------------------------------------------------------------------------------
-promisc_asm_286_copy PROC NEAR
+promisc_asm_286_copy:
         ; Use 16-bit optimized copy for 286 systems
         push    ax
         push    cx
-        
+
         shr     cx, 1               ; Convert to words
-        
-copy_286_words:
-        mov     ax, es:[si]
-        mov     ds:[di], ax
+
+.copy_286_words:
+        mov     ax, [es:si]
+        mov     [ds:di], ax
         add     si, 2
         add     di, 2
-        loop    copy_286_words
-        
+        loop    .copy_286_words
+
         pop     cx
         pop     ax
         ret
-promisc_asm_286_copy ENDP
 
 ;------------------------------------------------------------------------------
 ; Statistics and monitoring functions
@@ -715,26 +616,21 @@ promisc_asm_286_copy ENDP
 ;
 ; Returns performance counters for ASM-level operations
 ;------------------------------------------------------------------------------
-promisc_asm_get_stats PROC NEAR
+promisc_asm_get_stats:
         push    bx
-        
+
         ; Return stats in registers
-        mov     eax, asm_packets_captured
-        mov     ebx, asm_capture_errors
-        
+        mov     eax, [asm_packets_captured]
+        mov     ebx, [asm_capture_errors]
+
         pop     bx
         ret
-promisc_asm_get_stats ENDP
 
 ;------------------------------------------------------------------------------
 ; promisc_asm_reset_stats - Reset ASM-level statistics
 ;------------------------------------------------------------------------------
-promisc_asm_reset_stats PROC NEAR
-        mov     asm_packets_captured, 0
-        mov     asm_capture_errors, 0
+promisc_asm_reset_stats:
+        mov     dword [asm_packets_captured], 0
+        mov     dword [asm_capture_errors], 0
         ret
-promisc_asm_reset_stats ENDP
 
-_TEXT ENDS
-
-END

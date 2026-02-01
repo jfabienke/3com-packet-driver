@@ -5,9 +5,10 @@
 ;
 ; This file is part of the 3Com Packet Driver project.
 ;
+; Converted to NASM syntax - 2026-01-23
 
-.MODEL SMALL
-.386
+bits 16
+cpu 386
 
 ; Packet operation constants
 MIN_PACKET_SIZE     EQU 60      ; Minimum Ethernet frame size
@@ -43,18 +44,21 @@ CHECKSUM_UDP        EQU 1       ; UDP checksum
 CHECKSUM_TCP        EQU 2       ; TCP checksum
 
 ; Data segment
-_DATA SEGMENT
-        ASSUME  DS:_DATA
+segment _DATA class=DATA
 
 ; CPU optimization settings
-current_cpu_opt     db OPT_NONE     ; Current optimization level
+; Export both names so ASM (no underscore) and C (underscore) can reference it
+global current_cpu_opt
+global _current_cpu_opt
+current_cpu_opt:
+_current_cpu_opt:   db OPT_NONE     ; Current optimization level
 patch_enabled       db 0            ; Code patching enabled flag
 cpu_family          db 0            ; CPU family (0=8086, 1=286, 2=386, 3=486, 4=Pentium)
 
 ; Function pointer tables for CPU-specific routines
-copy_func_table     dw 5 dup(0)     ; Copy function pointers
-checksum_func_table dw 5 dup(0)     ; Checksum function pointers
-memset_func_table   dw 5 dup(0)     ; Memory set function pointers
+copy_func_table     times 5 dw 0    ; Copy function pointers
+checksum_func_table times 5 dw 0    ; Checksum function pointers
+memset_func_table   times 5 dw 0    ; Memory set function pointers
 
 ; Performance measurement
 tsc_available       db 0            ; TSC (Time Stamp Counter) available flag
@@ -92,39 +96,37 @@ memory_ops_optimized dd 0           ; Counter for optimized memory operations
 PERF_32BIT_THRESHOLD    EQU 32      ; Minimum bytes for 32-bit optimization
 PERF_PIPELINE_THRESHOLD EQU 64      ; Minimum bytes for pipeline optimization
 
-_DATA ENDS
-
 ; Code segment
-_TEXT SEGMENT
-        ASSUME  CS:_TEXT, DS:_DATA
+segment _TEXT class=CODE
 
-; Public function exports  
-PUBLIC packet_ops_init
-PUBLIC packet_copy_fast
-PUBLIC packet_copy_optimized
-PUBLIC packet_copy_64_bytes
-PUBLIC packet_copy_128_bytes 
-PUBLIC packet_copy_512_bytes
-PUBLIC packet_copy_1518_bytes
-PUBLIC packet_checksum_ip
-PUBLIC packet_checksum_tcp_udp
-PUBLIC packet_ops_receive
-PUBLIC packet_ops_patch_32bit
-PUBLIC set_packet_optimization
-PUBLIC get_performance_cycles
-PUBLIC read_timestamp_counter
-PUBLIC init_function_tables
-PUBLIC packet_memset_optimized
-PUBLIC packet_copy_aligned_dma
-PUBLIC analyze_copy_parameters
-PUBLIC packet_copy_32bit_optimized
-PUBLIC packet_copy_pipeline_optimized
-PUBLIC packet_copy_cache_optimized
-PUBLIC packet_copy_pentium_agi_aware
+; Public function exports
+global packet_ops_init
+global packet_copy_fast
+global packet_copy_optimized
+global packet_copy_64_bytes
+global packet_copy_128_bytes
+global packet_copy_512_bytes
+global packet_copy_1518_bytes
+global packet_checksum_ip
+global packet_checksum_tcp_udp
+global packet_ops_receive
+global packet_ops_patch_32bit
+global set_packet_optimization
+global get_performance_cycles
+global read_timestamp_counter
+global init_function_tables
+global packet_memset_optimized
+global packet_copy_aligned_dma
+global analyze_copy_parameters
+global packet_copy_32bit_optimized
+global packet_copy_pipeline_optimized
+global packet_copy_cache_optimized
+global packet_copy_pentium_agi_aware
 
 ; External references
-EXTRN get_cpu_features:PROC         ; From cpu_detect.asm
-EXTRN hardware_read_packet:PROC     ; From hardware.asm
+extern get_cpu_features             ; From cpu_detect.asm
+extern hardware_read_packet         ; From hardware.asm
+extern packet_receive_process       ; From C code (api.c)
 ; perf_copy_* functions implemented locally below (no longer external)
 
 ;-----------------------------------------------------------------------------
@@ -134,7 +136,7 @@ EXTRN hardware_read_packet:PROC     ; From hardware.asm
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX, BX, CX, DX
 ;-----------------------------------------------------------------------------
-packet_ops_init PROC
+packet_ops_init:
         push    bp
         mov     bp, sp
         push    bx
@@ -150,20 +152,20 @@ packet_ops_init PROC
 
         ; Determine CPU family and optimization level
         mov     al, OPT_NONE
-        mov     byte ptr [cpu_family], 0    ; Assume 8086
-        
+        mov     byte [cpu_family], 0    ; Assume 8086
+
         ; Check for 286+ features (PUSHA/POPA)
         test    bx, 1
         jz      init_check_32bit
-        or      al, OPT_PUSHA or OPT_16BIT
-        mov     byte ptr [cpu_family], 1    ; 286
+        or      al, OPT_PUSHA | OPT_16BIT
+        mov     byte [cpu_family], 1    ; 286
 
 init_check_32bit:
         ; Check for 386+ features (32-bit operations)
         test    bx, 2
         jz      init_check_486
         or      al, OPT_32BIT
-        mov     byte ptr [cpu_family], 2    ; 386
+        mov     byte [cpu_family], 2    ; 386
 
         ; Apply 32-bit optimizations
         call    packet_ops_patch_32bit
@@ -173,58 +175,58 @@ init_check_486:
         test    bx, 4
         jz      init_check_pentium
         or      al, OPT_486_ENHANCED
-        mov     byte ptr [cpu_family], 3    ; 486
+        mov     byte [cpu_family], 3    ; 486
 
 init_check_pentium:
         ; Check for Pentium features (TSC)
         test    bx, 0100h               ; TSC feature from CPUID
         jz      init_no_tsc
         or      al, OPT_PENTIUM
-        mov     byte ptr [cpu_family], 4    ; Pentium
-        mov     byte ptr [tsc_available], 1
+        mov     byte [cpu_family], 4    ; Pentium
+        mov     byte [tsc_available], 1
 
 init_no_tsc:
         mov     [current_cpu_opt], al
 
         ; Initialize 386+ performance optimization flags
-        mov     byte ptr [use_66_prefix], 0
-        mov     byte ptr [pipeline_enabled], 0
-        mov     byte ptr [agi_avoidance], 0
-        mov     dword ptr [memory_ops_optimized], 0
+        mov     byte [use_66_prefix], 0
+        mov     byte [pipeline_enabled], 0
+        mov     byte [agi_avoidance], 0
+        mov     dword [memory_ops_optimized], 0
 
         ; Enable 32-bit optimizations on 386+
         test    al, OPT_32BIT
-        jz      .init_func_tables
-        mov     byte ptr [use_66_prefix], 1
+        jz      init_func_tables
+        mov     byte [use_66_prefix], 1
 
         ; Enable pipeline optimizations on 486+
         test    al, OPT_486_ENHANCED
-        jz      .init_func_tables
-        mov     byte ptr [pipeline_enabled], 1
+        jz      init_func_tables
+        mov     byte [pipeline_enabled], 1
 
         ; Enable AGI avoidance on Pentium
         test    al, OPT_PENTIUM
         jz      init_func_tables
-        mov     byte ptr [agi_avoidance], 1
+        mov     byte [agi_avoidance], 1
 
 init_func_tables:
         ; Initialize function tables based on CPU capabilities
         call    init_function_tables
 
         ; Clear all statistics
-        mov     dword ptr [packets_copied], 0
-        mov     dword ptr [bytes_copied], 0
-        mov     word ptr [checksum_errors], 0
-        mov     word ptr [alignment_fixes], 0
-        mov     dword ptr [packets_64], 0
-        mov     dword ptr [packets_128], 0
-        mov     dword ptr [packets_512], 0
-        mov     dword ptr [packets_1518], 0
-        mov     dword ptr [fast_path_hits], 0
-        mov     dword ptr [performance_cycles], 0
+        mov     dword [packets_copied], 0
+        mov     dword [bytes_copied], 0
+        mov     word [checksum_errors], 0
+        mov     word [alignment_fixes], 0
+        mov     dword [packets_64], 0
+        mov     dword [packets_128], 0
+        mov     dword [packets_512], 0
+        mov     dword [packets_1518], 0
+        mov     dword [fast_path_hits], 0
+        mov     dword [performance_cycles], 0
 
         ; Initialize TSC baseline if available
-        cmp     byte ptr [tsc_available], 1
+        cmp     byte [tsc_available], 1
         jne     init_no_tsc_init
         call    read_timestamp_counter  ; Sets last_tsc_high/low
 
@@ -239,7 +241,6 @@ init_no_tsc_init:
         pop     bx
         pop     bp
         ret
-packet_ops_init ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_fast - Fast packet copying routine
@@ -249,7 +250,7 @@ packet_ops_init ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX, BX, CX, DX, SI, DI
 ;-----------------------------------------------------------------------------
-packet_copy_fast PROC
+packet_copy_fast:
         push    bp
         mov     bp, sp
         push    bx
@@ -334,9 +335,9 @@ pcf_invalid_size:
 
 pcf_success:
         ; Update statistics
-        inc     dword ptr [packets_copied]
+        inc     dword [packets_copied]
         mov     ax, [bp+8]          ; Original CX value from stack
-        add     dword ptr [bytes_copied], eax
+        add     dword [bytes_copied], eax
         mov     ax, 0
 
 pcf_exit:
@@ -346,7 +347,6 @@ pcf_exit:
         pop     bx
         pop     bp
         ret
-packet_copy_fast ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_optimized - Optimized packet copy with alignment
@@ -356,7 +356,7 @@ packet_copy_fast ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-packet_copy_optimized PROC
+packet_copy_optimized:
         push    bp
         mov     bp, sp
         push    bx
@@ -414,7 +414,6 @@ pco_copy_complete:
         pop     bx
         pop     bp
         ret
-packet_copy_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_checksum_ip - Calculate IP header checksum
@@ -424,7 +423,7 @@ packet_copy_optimized ENDP
 ; Output: AX = checksum (0 = valid, non-zero = invalid)
 ; Uses:   AX, BX, CX, DX, SI
 ;-----------------------------------------------------------------------------
-packet_checksum_ip PROC
+packet_checksum_ip:
         push    bp
         mov     bp, sp
         push    bx
@@ -435,7 +434,7 @@ packet_checksum_ip PROC
 
         ; Implement Internet checksum algorithm per RFC 1071
         ; DS:SI = data pointer, CX = length in bytes
-        
+
         ; Initialize checksum accumulator
         xor     dx, dx              ; DX = 16-bit checksum accumulator
         xor     di, di              ; DI = high 16 bits for 32-bit operations
@@ -453,7 +452,7 @@ packet_checksum_ip PROC
         ; Process pairs of bytes as 16-bit words
         shr     cx, 1               ; Convert to word count
         jnc     cksum_checksum_16_loop   ; No odd byte
-        
+
         ; Handle odd byte at the end
         push    cx
         mov     cx, [bp+4]          ; Get original length
@@ -558,17 +557,16 @@ cksum_fold_done:
         pop     bx
         pop     bp
         ret
-packet_checksum_ip ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_checksum_tcp_udp - Calculate TCP/UDP checksum with pseudo-header
 ;
-; Input:  DS:SI = packet data, CX = data length, 
+; Input:  DS:SI = packet data, CX = data length,
 ;         ES:DI = pseudo-header (12 bytes)
 ; Output: AX = checksum
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-packet_checksum_tcp_udp PROC
+packet_checksum_tcp_udp:
         push    bp
         mov     bp, sp
         push    bx
@@ -609,7 +607,6 @@ packet_checksum_tcp_udp PROC
         pop     bx
         pop     bp
         ret
-packet_checksum_tcp_udp ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_ops_receive - Handle received packet processing
@@ -619,7 +616,7 @@ packet_checksum_tcp_udp ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-packet_ops_receive PROC
+packet_ops_receive:
         push    bp
         mov     bp, sp
         push    bx
@@ -632,9 +629,9 @@ packet_ops_receive PROC
         ; Enhanced packet receive processing
         ; AL = NIC index
         ; Returns: AX = 0 for success, non-zero for error
-        
+
         mov     bl, al              ; Save NIC index
-        
+
         ; Call hardware layer to read packet
         call    hardware_read_packet
         cmp     ax, 0
@@ -659,7 +656,7 @@ packet_ops_receive PROC
         ; Extract EtherType from frame (bytes 12-13)
         mov     si, di              ; Point to frame data
         add     si, 12              ; Point to EtherType field
-        mov     ax, es:[si]         ; Load EtherType (network byte order)
+        mov     ax, [es:si]         ; Load EtherType (network byte order)
 
         ; Convert from network to host byte order
         xchg    ah, al              ; Swap bytes
@@ -693,22 +690,22 @@ por_valid_protocol:
         jmp     por_exit
 
 por_frame_too_small:
-        inc     word ptr [checksum_errors]
+        inc     word [checksum_errors]
         mov     ax, 2
         jmp     por_exit
 
 por_frame_too_large:
-        inc     word ptr [checksum_errors]
+        inc     word [checksum_errors]
         mov     ax, 3
         jmp     por_exit
 
 por_invalid_header:
-        inc     word ptr [checksum_errors]
+        inc     word [checksum_errors]
         mov     ax, 4
         jmp     por_exit
 
 por_read_error:
-        inc     word ptr [checksum_errors]
+        inc     word [checksum_errors]
         mov     ax, 1
         jmp     por_exit
 
@@ -721,7 +718,6 @@ por_exit:
         pop     bx
         pop     bp
         ret
-packet_ops_receive ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_ops_patch_32bit - Apply 32-bit optimizations to packet operations
@@ -731,7 +727,7 @@ packet_ops_receive ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX, BX, CX, DX, SI, DI, ES
 ;-----------------------------------------------------------------------------
-packet_ops_patch_32bit PROC
+packet_ops_patch_32bit:
         push    bp
         mov     bp, sp
         push    bx
@@ -743,9 +739,9 @@ packet_ops_patch_32bit PROC
 
         ; Apply 32-bit optimizations for 386+ processors
         ; This enables 0x66 prefix usage for 32-bit operations in real mode
-        
+
         ; Check if already patched
-        cmp     byte ptr [patch_enabled], 1
+        cmp     byte [patch_enabled], 1
         je      pop32_already_patched
 
         ; Verify we're on a 386+ processor
@@ -754,11 +750,11 @@ packet_ops_patch_32bit PROC
         jz      pop32_not_386
 
         ; Enable 32-bit optimization flag
-        or      byte ptr [current_cpu_opt], OPT_32BIT
+        or      byte [current_cpu_opt], OPT_32BIT
 
         ; Store patch locations for debugging/verification
-        mov     word ptr [patch_copy_32], OFFSET patch_copy_32_location
-        mov     word ptr [patch_checksum_32], OFFSET patch_checksum_32_location
+        mov     word [patch_copy_32], patch_copy_32_location
+        mov     word [patch_checksum_32], patch_checksum_32_location
 
         ; The actual patches are already in place using db 66h directives
         ; These enable 32-bit operand size in real mode for 386+
@@ -772,7 +768,7 @@ packet_ops_patch_32bit PROC
         jne     pop32_patch_failed
 
         ; Mark as patched and optimized
-        mov     byte ptr [patch_enabled], 1
+        mov     byte [patch_enabled], 1
 
         ; Success
         mov     ax, 0
@@ -785,7 +781,7 @@ pop32_not_386:
 
 pop32_patch_failed:
         ; 32-bit test failed
-        and     byte ptr [current_cpu_opt], NOT OPT_32BIT
+        and     byte [current_cpu_opt], ~OPT_32BIT
         mov     ax, 3
         jmp     pop32_exit
 
@@ -802,7 +798,6 @@ pop32_exit:
         pop     bx
         pop     bp
         ret
-packet_ops_patch_32bit ENDP
 
 ;-----------------------------------------------------------------------------
 ; set_packet_optimization - Set packet operation optimization level
@@ -811,14 +806,14 @@ packet_ops_patch_32bit ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   AX
 ;-----------------------------------------------------------------------------
-set_packet_optimization PROC
+set_packet_optimization:
         push    bp
         mov     bp, sp
         push    bx
 
         ; Validate and apply new optimization settings
         ; AL = new optimization flags
-        
+
         ; Validate optimization flags
         mov     bl, al
         and     bl, 0F8h            ; Check for invalid bits (should be 0)
@@ -861,7 +856,6 @@ spo_exit:
         pop     bx
         pop     bp
         ret
-set_packet_optimization ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_aligned - Aligned packet copy for maximum performance
@@ -871,19 +865,19 @@ set_packet_optimization ENDP
 ; Output: AX = 0 for success, non-zero for error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-packet_copy_aligned PROC
+packet_copy_aligned:
         push    bp
         mov     bp, sp
         push    bx
         push    dx
-        
+
         ; Save original parameters
         mov     bx, cx              ; Save count
-        
+
         ; Check alignment of source and destination
         mov     ax, si
         or      ax, di
-        
+
         ; Check CPU optimization level
         mov     dl, [current_cpu_opt]
         test    dl, OPT_32BIT
@@ -972,7 +966,6 @@ pca_align_32_loop:
 pca_align_32_done:
         ret
 
-packet_copy_aligned ENDP
 
 ;-----------------------------------------------------------------------------
 ; Optimized packet copy routines for specific sizes (fast paths)
@@ -984,14 +977,14 @@ packet_copy_aligned ENDP
 ; Output: AX = 0 for success
 ; Uses:   AX, CX, SI, DI
 ;-----------------------------------------------------------------------------
-packet_copy_64_bytes PROC
+packet_copy_64_bytes:
         push    bp
         mov     bp, sp
         push    cx
 
         ; Update statistics
-        inc     dword ptr [packets_64]
-        inc     dword ptr [fast_path_hits]
+        inc     dword [packets_64]
+        inc     dword [fast_path_hits]
 
         ; Check CPU optimization level
         mov     al, [current_cpu_opt]
@@ -1017,7 +1010,6 @@ pc64_copy_done:
         pop     cx
         pop     bp
         ret
-packet_copy_64_bytes ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_128_bytes - Optimized copy for 128-byte packets
@@ -1025,14 +1017,14 @@ packet_copy_64_bytes ENDP
 ; Output: AX = 0 for success
 ; Uses:   AX, CX, SI, DI
 ;-----------------------------------------------------------------------------
-packet_copy_128_bytes PROC
+packet_copy_128_bytes:
         push    bp
         mov     bp, sp
         push    cx
 
         ; Update statistics
-        inc     dword ptr [packets_128]
-        inc     dword ptr [fast_path_hits]
+        inc     dword [packets_128]
+        inc     dword [fast_path_hits]
 
         ; Check CPU optimization level
         mov     al, [current_cpu_opt]
@@ -1058,22 +1050,21 @@ pc128_copy_done:
         pop     cx
         pop     bp
         ret
-packet_copy_128_bytes ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_512_bytes - Optimized copy for 512-byte packets
-; Input:  DS:SI = source, ES:DI = destination  
+; Input:  DS:SI = source, ES:DI = destination
 ; Output: AX = 0 for success
 ; Uses:   AX, CX, SI, DI
 ;-----------------------------------------------------------------------------
-packet_copy_512_bytes PROC
+packet_copy_512_bytes:
         push    bp
         mov     bp, sp
         push    cx
 
         ; Update statistics
-        inc     dword ptr [packets_512]
-        inc     dword ptr [fast_path_hits]
+        inc     dword [packets_512]
+        inc     dword [fast_path_hits]
 
         ; Check CPU optimization and alignment
         mov     al, [current_cpu_opt]
@@ -1128,23 +1119,22 @@ pc512_copy_done:
         pop     cx
         pop     bp
         ret
-packet_copy_512_bytes ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_1518_bytes - Optimized copy for maximum Ethernet frame
 ; Input:  DS:SI = source, ES:DI = destination
-; Output: AX = 0 for success  
+; Output: AX = 0 for success
 ; Uses:   AX, CX, DX, SI, DI
 ;-----------------------------------------------------------------------------
-packet_copy_1518_bytes PROC
+packet_copy_1518_bytes:
         push    bp
         mov     bp, sp
         push    cx
         push    dx
 
         ; Update statistics
-        inc     dword ptr [packets_1518]
-        inc     dword ptr [fast_path_hits]
+        inc     dword [packets_1518]
+        inc     dword [fast_path_hits]
 
         ; Check CPU optimization
         mov     al, [current_cpu_opt]
@@ -1206,7 +1196,6 @@ pc1518_copy_done:
         pop     cx
         pop     bp
         ret
-packet_copy_1518_bytes ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_memset_optimized - CPU-optimized memory set operation
@@ -1214,16 +1203,16 @@ packet_copy_1518_bytes ENDP
 ; Output: AX = 0 for success
 ; Uses:   AX, CX, DI
 ;-----------------------------------------------------------------------------
-packet_memset_optimized PROC
+packet_memset_optimized:
         push    bp
         mov     bp, sp
         push    bx
         push    dx
-        
+
         ; Save fill byte
         mov     ah, al              ; Create word pattern
         mov     bl, [current_cpu_opt]
-        
+
         ; Check for 32-bit optimization
         test    bl, OPT_32BIT
         jz      pms_memset_16bit
@@ -1261,12 +1250,11 @@ pms_memset_16bit:
 
 pms_memset_done:
         mov     ax, 0               ; Success
-        
+
         pop     dx
         pop     bx
         pop     bp
         ret
-packet_memset_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_aligned_dma - DMA-aligned packet copy for 3C515-TX
@@ -1274,12 +1262,12 @@ packet_memset_optimized ENDP
 ; Output: AX = 0 for success, 1 for alignment error
 ; Uses:   All registers
 ;-----------------------------------------------------------------------------
-packet_copy_aligned_dma PROC
+packet_copy_aligned_dma:
         push    bp
         mov     bp, sp
         push    bx
         push    dx
-        
+
         ; Validate DMA alignment requirements
         ; 3C515-TX requires 4-byte alignment for bus mastering
         mov     ax, di
@@ -1287,7 +1275,7 @@ packet_copy_aligned_dma PROC
         jz      dma_aligned
 
         ; Alignment error
-        inc     word ptr [alignment_fixes]
+        inc     word [alignment_fixes]
         mov     ax, 1
         jmp     dma_copy_exit
 
@@ -1360,7 +1348,6 @@ dma_copy_exit:
         pop     bx
         pop     bp
         ret
-packet_copy_aligned_dma ENDP
 
 ;-----------------------------------------------------------------------------
 ; Performance measurement functions
@@ -1371,20 +1358,20 @@ packet_copy_aligned_dma ENDP
 ; Output: EDX:EAX = TSC value, stores in last_tsc_high/low
 ; Uses:   EAX, EDX
 ;-----------------------------------------------------------------------------
-read_timestamp_counter PROC
+read_timestamp_counter:
         push    bp
         mov     bp, sp
 
         ; Check if TSC is available
-        cmp     byte ptr [tsc_available], 1
+        cmp     byte [tsc_available], 1
         jne     rtsc_no_tsc
 
         ; Read Time Stamp Counter (RDTSC instruction)
         db      0fh, 31h            ; RDTSC opcode
 
         ; Store the result
-        mov     dword ptr [last_tsc_low], eax
-        mov     dword ptr [last_tsc_high], edx
+        mov     dword [last_tsc_low], eax
+        mov     dword [last_tsc_high], edx
 
         pop     bp
         ret
@@ -1395,37 +1382,36 @@ rtsc_no_tsc:
         xor     edx, edx
         pop     bp
         ret
-read_timestamp_counter ENDP
 
 ;-----------------------------------------------------------------------------
 ; get_performance_cycles - Calculate cycles elapsed since last measurement
 ; Output: EAX = cycles elapsed (0 if TSC not available)
 ; Uses:   EAX, EDX
 ;-----------------------------------------------------------------------------
-get_performance_cycles PROC
+get_performance_cycles:
         push    bp
         mov     bp, sp
         push    ebx
         push    ecx
 
         ; Check if TSC is available
-        cmp     byte ptr [tsc_available], 1
+        cmp     byte [tsc_available], 1
         jne     gpc_no_perf_tsc
 
         ; Read current TSC
         db      0fh, 31h            ; RDTSC opcode
 
         ; Calculate difference from last reading
-        sub     eax, dword ptr [last_tsc_low]
-        sbb     edx, dword ptr [last_tsc_high]
+        sub     eax, dword [last_tsc_low]
+        sbb     edx, dword [last_tsc_high]
 
         ; For simplicity, only return low 32 bits
         ; (High 32 bits in EDX are usually 0 for short measurements)
-        mov     dword ptr [performance_cycles], eax
+        mov     dword [performance_cycles], eax
 
         ; Update last TSC values for next measurement
-        mov     dword ptr [last_tsc_low], eax
-        mov     dword ptr [last_tsc_high], edx
+        mov     dword [last_tsc_low], eax
+        mov     dword [last_tsc_high], edx
 
         pop     ecx
         pop     ebx
@@ -1438,7 +1424,6 @@ gpc_no_perf_tsc:
         pop     ebx
         pop     bp
         ret
-get_performance_cycles ENDP
 
 ;-----------------------------------------------------------------------------
 ; init_function_tables - Initialize CPU-specific function pointer tables
@@ -1446,60 +1431,58 @@ get_performance_cycles ENDP
 ; Output: AX = 0 for success
 ; Uses:   AX, BX, SI
 ;-----------------------------------------------------------------------------
-init_function_tables PROC
+init_function_tables:
         push    bp
         mov     bp, sp
         push    bx
         push    si
-        
+
         ; Initialize copy function table based on CPU family
-        mov     si, OFFSET copy_func_table
+        mov     si, copy_func_table
         mov     bl, [cpu_family]
-        
+
         ; 8086 functions (index 0)
-        mov     word ptr [si+0], OFFSET copy_8086
-        ; 286 functions (index 1) 
-        mov     word ptr [si+2], OFFSET copy_286
+        mov     word [si+0], copy_8086
+        ; 286 functions (index 1)
+        mov     word [si+2], copy_286
         ; 386 functions (index 2)
-        mov     word ptr [si+4], OFFSET copy_386
+        mov     word [si+4], copy_386
         ; 486 functions (index 3)
-        mov     word ptr [si+6], OFFSET copy_486
+        mov     word [si+6], copy_486
         ; Pentium functions (index 4)
-        mov     word ptr [si+8], OFFSET copy_pentium
-        
+        mov     word [si+8], copy_pentium
+
         ; Initialize checksum function table
-        mov     si, OFFSET checksum_func_table
-        mov     word ptr [si+0], OFFSET checksum_8086
-        mov     word ptr [si+2], OFFSET checksum_286
-        mov     word ptr [si+4], OFFSET checksum_386
-        mov     word ptr [si+6], OFFSET checksum_486
-        mov     word ptr [si+8], OFFSET checksum_pentium
-        
+        mov     si, checksum_func_table
+        mov     word [si+0], checksum_8086
+        mov     word [si+2], checksum_286
+        mov     word [si+4], checksum_386
+        mov     word [si+6], checksum_486
+        mov     word [si+8], checksum_pentium
+
         ; Initialize memset function table
-        mov     si, OFFSET memset_func_table
-        mov     word ptr [si+0], OFFSET memset_8086
-        mov     word ptr [si+2], OFFSET memset_286
-        mov     word ptr [si+4], OFFSET memset_386
-        mov     word ptr [si+6], OFFSET memset_486
-        mov     word ptr [si+8], OFFSET memset_pentium
-        
+        mov     si, memset_func_table
+        mov     word [si+0], memset_8086
+        mov     word [si+2], memset_286
+        mov     word [si+4], memset_386
+        mov     word [si+6], memset_486
+        mov     word [si+8], memset_pentium
+
         mov     ax, 0               ; Success
-        
+
         pop     si
         pop     bx
         pop     bp
         ret
-init_function_tables ENDP
 
 ;-----------------------------------------------------------------------------
 ; CPU-specific implementation stubs (to be filled in with optimal routines)
 ;-----------------------------------------------------------------------------
-copy_8086 PROC
+copy_8086:
         rep     movsb               ; Basic 8-bit copy
         ret
-copy_8086 ENDP
 
-copy_286 PROC
+copy_286:
         ; Use PUSHA/POPA for efficient register save/restore
         pusha
         cld
@@ -1509,9 +1492,8 @@ copy_286 PROC
         rep     movsb
         popa
         ret
-copy_286 ENDP
 
-copy_386 PROC
+copy_386:
         ; 32-bit optimized copy
         cld
         mov     edx, ecx
@@ -1522,60 +1504,50 @@ copy_386 PROC
         and     ecx, 3
         rep     movsb
         ret
-copy_386 ENDP
 
-copy_486 PROC
+copy_486:
         ; 486 optimized with better pipeline usage
         call    copy_386            ; Use 386 routine for now
         ret
-copy_486 ENDP
 
-copy_pentium PROC
+copy_pentium:
         ; Pentium optimized with pairing considerations
         call    copy_386            ; Use 386 routine for now
         ret
-copy_pentium ENDP
 
-checksum_8086 PROC
+checksum_8086:
         ; Basic 8086 checksum
         ret
-checksum_8086 ENDP
 
-checksum_286 PROC
+checksum_286:
         ; 286 optimized checksum
         ret
-checksum_286 ENDP
 
-checksum_386 PROC
+checksum_386:
         ; 386+ optimized checksum
         ret
-checksum_386 ENDP
 
-checksum_486 PROC
-        ; 486+ optimized checksum  
+checksum_486:
+        ; 486+ optimized checksum
         ret
-checksum_486 ENDP
 
-checksum_pentium PROC
+checksum_pentium:
         ; Pentium optimized checksum
         ret
-checksum_pentium ENDP
 
-memset_8086 PROC
+memset_8086:
         rep     stosb
         ret
-memset_8086 ENDP
 
-memset_286 PROC
+memset_286:
         mov     ah, al
         shr     cx, 1
         rep     stosw
         adc     cx, cx
         rep     stosb
         ret
-memset_286 ENDP
 
-memset_386 PROC
+memset_386:
         mov     ah, al
         mov     dx, ax
         shl     eax, 16
@@ -1588,20 +1560,17 @@ memset_386 PROC
         and     ecx, 3
         rep     stosb
         ret
-memset_386 ENDP
 
-memset_486 PROC
+memset_486:
         call    memset_386
         ret
-memset_486 ENDP
 
-memset_pentium PROC
+memset_pentium:
         call    memset_386
         ret
-memset_pentium ENDP
 
 ; Export additional functions
-PUBLIC packet_copy_aligned
+global packet_copy_aligned
 
 ;-----------------------------------------------------------------------------
 ; Enhanced Copy Analysis and Optimization Functions
@@ -1614,12 +1583,12 @@ PUBLIC packet_copy_aligned
 ; Output: AX = optimization strategy (0=none, 1=32bit, 2=pipeline, 3=cache, 4=pentium)
 ; Uses:   AX, BX, DX
 ;-----------------------------------------------------------------------------
-analyze_copy_parameters PROC
+analyze_copy_parameters:
         push    bp
         mov     bp, sp
         push    bx
         push    dx
-        
+
         ; Start with no optimization
         mov     ax, 0
 
@@ -1698,7 +1667,6 @@ acp_analysis_done:
         pop     bx
         pop     bp
         ret
-analyze_copy_parameters ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_32bit_optimized - 32-bit aligned optimized copy
@@ -1707,19 +1675,18 @@ analyze_copy_parameters ENDP
 ; Output: AX = 0 for success
 ; Uses:   All registers (optimized for 386+)
 ;-----------------------------------------------------------------------------
-packet_copy_32bit_optimized PROC
+packet_copy_32bit_optimized:
         push    bp
         mov     bp, sp
-        
+
         ; Use the performance-optimized 32-bit copy with 0x66 prefix
         call    perf_copy_with_66_prefix
-        
+
         ; Update packet-specific statistics
-        inc     dword ptr [memory_ops_optimized]
-        
+        inc     dword [memory_ops_optimized]
+
         pop     bp
         ret
-packet_copy_32bit_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_pipeline_optimized - Pipeline-optimized copy for 486+
@@ -1728,19 +1695,18 @@ packet_copy_32bit_optimized ENDP
 ; Output: AX = 0 for success
 ; Uses:   All registers (optimized for 486+ pipeline)
 ;-----------------------------------------------------------------------------
-packet_copy_pipeline_optimized PROC
+packet_copy_pipeline_optimized:
         push    bp
         mov     bp, sp
-        
+
         ; Use the performance-optimized pipeline copy
         call    perf_copy_pipeline_optimized
-        
+
         ; Update packet-specific statistics
-        inc     dword ptr [memory_ops_optimized]
-        
+        inc     dword [memory_ops_optimized]
+
         pop     bp
         ret
-packet_copy_pipeline_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_cache_optimized - Cache-line optimized copy
@@ -1749,12 +1715,12 @@ packet_copy_pipeline_optimized ENDP
 ; Output: AX = 0 for success
 ; Uses:   All registers (optimized for cache efficiency)
 ;-----------------------------------------------------------------------------
-packet_copy_cache_optimized PROC
+packet_copy_cache_optimized:
         push    bp
         mov     bp, sp
         push    bx
         push    dx
-        
+
         ; Specialized cache-line friendly copy for network packets
         ; Most network packets are either 64, 128, 512, or 1518 bytes
 
@@ -1790,7 +1756,7 @@ pcco_copy_1518_cache:
 
 pcco_cache_copy_done:
         ; Update statistics
-        inc     dword ptr [memory_ops_optimized]
+        inc     dword [memory_ops_optimized]
 
         mov     ax, 0               ; Success
 
@@ -1808,25 +1774,25 @@ general_cache_copy:
 
 gcc_cache_chunk_loop:
         ; Copy 32 bytes with cache-friendly pattern
-        mov     eax, ds:[si]
-        mov     edx, ds:[si+4]
-        mov     es:[di], eax
-        mov     es:[di+4], edx
+        mov     eax, [ds:si]
+        mov     edx, [ds:si+4]
+        mov     [es:di], eax
+        mov     [es:di+4], edx
 
-        mov     eax, ds:[si+8]
-        mov     edx, ds:[si+12]
-        mov     es:[di+8], eax
-        mov     es:[di+12], edx
+        mov     eax, [ds:si+8]
+        mov     edx, [ds:si+12]
+        mov     [es:di+8], eax
+        mov     [es:di+12], edx
 
-        mov     eax, ds:[si+16]
-        mov     edx, ds:[si+20]
-        mov     es:[di+16], eax
-        mov     es:[di+20], edx
+        mov     eax, [ds:si+16]
+        mov     edx, [ds:si+20]
+        mov     [es:di+16], eax
+        mov     [es:di+20], edx
 
-        mov     eax, ds:[si+24]
-        mov     edx, ds:[si+28]
-        mov     es:[di+24], eax
-        mov     es:[di+28], edx
+        mov     eax, [ds:si+24]
+        mov     edx, [ds:si+28]
+        mov     [es:di+24], eax
+        mov     [es:di+28], edx
 
         add     si, 32
         add     di, 32
@@ -1839,7 +1805,6 @@ gcc_cache_remainder:
         rep     movsb
         ret
 
-packet_copy_cache_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_pentium_agi_aware - Pentium-optimized copy with AGI stall avoidance
@@ -1848,33 +1813,32 @@ packet_copy_cache_optimized ENDP
 ; Output: AX = 0 for success
 ; Uses:   All registers (optimized for Pentium dual pipeline + AGI avoidance)
 ;-----------------------------------------------------------------------------
-packet_copy_pentium_agi_aware PROC
+packet_copy_pentium_agi_aware:
         push    bp
         mov     bp, sp
-        
+
         ; Use the performance-optimized Pentium copy with AGI avoidance
         call    perf_copy_pentium_optimized
-        
+
         ; Update packet-specific statistics
-        inc     dword ptr [memory_ops_optimized]
-        
+        inc     dword [memory_ops_optimized]
+
         pop     bp
         ret
-packet_copy_pentium_agi_aware ENDP
 
 ;-----------------------------------------------------------------------------
 ; Enhanced Fast Path Packet Size Optimizations
 ;-----------------------------------------------------------------------------
 
 ; Override the existing packet size functions with cache-aware implementations
-; packet_copy_64_bytes, packet_copy_128_bytes, packet_copy_512_bytes, and 
+; packet_copy_64_bytes, packet_copy_128_bytes, packet_copy_512_bytes, and
 ; packet_copy_1518_bytes are already implemented above, but let's enhance them
 ; with better cache behavior
 
 ;-----------------------------------------------------------------------------
 ; packet_copy_64_bytes_enhanced - Cache-optimized 64-byte copy
 ;-----------------------------------------------------------------------------
-packet_copy_64_bytes_enhanced PROC
+packet_copy_64_bytes_enhanced:
         push    bp
         mov     bp, sp
         push    cx
@@ -1882,8 +1846,8 @@ packet_copy_64_bytes_enhanced PROC
         push    ebx
 
         ; Update statistics
-        inc     dword ptr [packets_64]
-        inc     dword ptr [fast_path_hits]
+        inc     dword [packets_64]
+        inc     dword [fast_path_hits]
 
         ; Check CPU optimization level for best strategy
         mov     al, [current_cpu_opt]
@@ -1912,15 +1876,15 @@ pc64e_copy_486:
         ; 486 pipeline-optimized: unroll for U/V pipe pairing
         cld
         ; Copy 64 bytes as 8x8-byte blocks for optimal pairing
-        mov     eax, ds:[si]        ; U-pipe
-        mov     ebx, ds:[si+4]      ; V-pipe (pairs)
-        mov     es:[di], eax        ; U-pipe
-        mov     es:[di+4], ebx      ; V-pipe (pairs)
+        mov     eax, [ds:si]        ; U-pipe
+        mov     ebx, [ds:si+4]      ; V-pipe (pairs)
+        mov     [es:di], eax        ; U-pipe
+        mov     [es:di+4], ebx      ; V-pipe (pairs)
 
-        mov     eax, ds:[si+8]      ; U-pipe
-        mov     ebx, ds:[si+12]     ; V-pipe (pairs)
-        mov     es:[di+8], eax      ; U-pipe
-        mov     es:[di+12], ebx     ; V-pipe (pairs)
+        mov     eax, [ds:si+8]      ; U-pipe
+        mov     ebx, [ds:si+12]     ; V-pipe (pairs)
+        mov     [es:di+8], eax      ; U-pipe
+        mov     [es:di+12], ebx     ; V-pipe (pairs)
 
         ; Continue pattern for remaining 48 bytes...
         add     si, 16
@@ -1937,23 +1901,23 @@ pc64e_copy_pentium:
         cld
 
         ; Copy 64 bytes as 8x8-byte operations with optimal pairing
-        mov     eax, ds:[si]        ; U-pipe
-        mov     ebx, ds:[si+4]      ; V-pipe (pairs)
+        mov     eax, [ds:si]        ; U-pipe
+        mov     ebx, [ds:si+4]      ; V-pipe (pairs)
         add     si, 8               ; Calculate next address (avoid AGI)
         nop                         ; Fill slot
-        mov     es:[di], eax        ; U-pipe
-        mov     es:[di+4], ebx      ; V-pipe (pairs)
+        mov     [es:di], eax        ; U-pipe
+        mov     [es:di+4], ebx      ; V-pipe (pairs)
         add     di, 8               ; U-pipe
 
         ; Repeat pattern 7 more times...
         mov     cx, 7               ; Remaining 8-byte blocks
 pc64e_pentium_64_loop:
-        mov     eax, ds:[si]        ; U-pipe
-        mov     ebx, ds:[si+4]      ; V-pipe (pairs)
+        mov     eax, [ds:si]        ; U-pipe
+        mov     ebx, [ds:si+4]      ; V-pipe (pairs)
         add     si, 8               ; Avoid AGI
         nop                         ; Fill slot
-        mov     es:[di], eax        ; U-pipe
-        mov     es:[di+4], ebx      ; V-pipe (pairs)
+        mov     [es:di], eax        ; U-pipe
+        mov     [es:di+4], ebx      ; V-pipe (pairs)
         add     di, 8               ; U-pipe
         dec     cx                  ; V-pipe (pairs)
         jnz     pc64e_pentium_64_loop
@@ -1966,7 +1930,6 @@ pc64e_copy_done:
         pop     cx
         pop     bp
         ret
-packet_copy_64_bytes_enhanced ENDP
 
 ;=============================================================================
 ; 386+ PERFORMANCE-OPTIMIZED COPY FUNCTIONS
@@ -1988,12 +1951,12 @@ packet_copy_64_bytes_enhanced ENDP
 ; Output: AX = 0 for success
 ; Uses:   EAX, ECX, ESI, EDI (all preserved via stack)
 ;-----------------------------------------------------------------------------
-perf_copy_with_66_prefix PROC
+perf_copy_with_66_prefix:
         push    bp
         mov     bp, sp
 
         ; Check if 32-bit optimization is enabled
-        cmp     byte ptr [use_66_prefix], 1
+        cmp     byte [use_66_prefix], 1
         jne     p66_fallback_copy
 
         ; Check minimum size threshold (overhead not worth it for small copies)
@@ -2039,7 +2002,7 @@ p66_remainder:
 
 p66_done:
         ; Update statistics
-        inc     dword ptr [memory_ops_optimized]
+        inc     dword [memory_ops_optimized]
 
         ; Restore 32-bit registers
         db      66h
@@ -2071,7 +2034,6 @@ p66_fb_done:
 p66_exit:
         pop     bp
         ret
-perf_copy_with_66_prefix ENDP
 
 ;-----------------------------------------------------------------------------
 ; perf_copy_pipeline_optimized - 486+ pipeline-optimized copy
@@ -2084,12 +2046,12 @@ perf_copy_with_66_prefix ENDP
 ; Output: AX = 0 for success
 ; Uses:   EAX, EBX, ECX, EDX, ESI, EDI
 ;-----------------------------------------------------------------------------
-perf_copy_pipeline_optimized PROC
+perf_copy_pipeline_optimized:
         push    bp
         mov     bp, sp
 
         ; Check if pipeline optimization is enabled
-        cmp     byte ptr [pipeline_enabled], 1
+        cmp     byte [pipeline_enabled], 1
         jne     pp_standard_copy
 
         ; Check size threshold (need enough data to benefit from unrolling)
@@ -2133,13 +2095,13 @@ perf_copy_pipeline_optimized PROC
 pp_pipeline_loop:
         ; U/V pipe pairing for 486+
         db      66h
-        mov     eax, ds:[si]            ; U-pipe: load dword 1
+        mov     eax, [ds:si]            ; U-pipe: load dword 1
         db      66h
-        mov     ebx, ds:[si+4]          ; V-pipe: load dword 2 (pairs)
+        mov     ebx, [ds:si+4]          ; V-pipe: load dword 2 (pairs)
         db      66h
-        mov     es:[di], eax            ; U-pipe: store dword 1
+        mov     [es:di], eax            ; U-pipe: store dword 1
         db      66h
-        mov     es:[di+4], ebx          ; V-pipe: store dword 2 (pairs)
+        mov     [es:di+4], ebx          ; V-pipe: store dword 2 (pairs)
 
         add     si, 8                   ; U-pipe: advance source
         add     di, 8                   ; V-pipe: advance dest (pairs)
@@ -2167,40 +2129,40 @@ pp_cache_aligned_copy:
 pp_cache_loop:
         ; Copy full 32-byte cache line with optimal pairing
         db      66h
-        mov     eax, ds:[si]            ; Bytes 0-3
+        mov     eax, [ds:si]            ; Bytes 0-3
         db      66h
-        mov     ebx, ds:[si+4]          ; Bytes 4-7
+        mov     ebx, [ds:si+4]          ; Bytes 4-7
         db      66h
-        mov     es:[di], eax
+        mov     [es:di], eax
         db      66h
-        mov     es:[di+4], ebx
+        mov     [es:di+4], ebx
 
         db      66h
-        mov     eax, ds:[si+8]          ; Bytes 8-11
+        mov     eax, [ds:si+8]          ; Bytes 8-11
         db      66h
-        mov     ebx, ds:[si+12]         ; Bytes 12-15
+        mov     ebx, [ds:si+12]         ; Bytes 12-15
         db      66h
-        mov     es:[di+8], eax
+        mov     [es:di+8], eax
         db      66h
-        mov     es:[di+12], ebx
+        mov     [es:di+12], ebx
 
         db      66h
-        mov     eax, ds:[si+16]         ; Bytes 16-19
+        mov     eax, [ds:si+16]         ; Bytes 16-19
         db      66h
-        mov     ebx, ds:[si+20]         ; Bytes 20-23
+        mov     ebx, [ds:si+20]         ; Bytes 20-23
         db      66h
-        mov     es:[di+16], eax
+        mov     [es:di+16], eax
         db      66h
-        mov     es:[di+20], ebx
+        mov     [es:di+20], ebx
 
         db      66h
-        mov     eax, ds:[si+24]         ; Bytes 24-27
+        mov     eax, [ds:si+24]         ; Bytes 24-27
         db      66h
-        mov     ebx, ds:[si+28]         ; Bytes 28-31
+        mov     ebx, [ds:si+28]         ; Bytes 28-31
         db      66h
-        mov     es:[di+24], eax
+        mov     [es:di+24], eax
         db      66h
-        mov     es:[di+28], ebx
+        mov     [es:di+28], ebx
 
         add     si, 32
         add     di, 32
@@ -2217,7 +2179,7 @@ pp_cache_remainder:
 
 pp_done:
         ; Update statistics
-        inc     dword ptr [memory_ops_optimized]
+        inc     dword [memory_ops_optimized]
 
         ; Restore 32-bit registers
         db      66h
@@ -2243,7 +2205,6 @@ pp_standard_copy:
 pp_exit:
         pop     bp
         ret
-perf_copy_pipeline_optimized ENDP
 
 ;-----------------------------------------------------------------------------
 ; perf_copy_pentium_optimized - Pentium-specific copy with AGI avoidance
@@ -2259,12 +2220,12 @@ perf_copy_pipeline_optimized ENDP
 ; Output: AX = 0 for success
 ; Uses:   EAX, EBX, ECX, EDX, ESI, EDI
 ;-----------------------------------------------------------------------------
-perf_copy_pentium_optimized PROC
+perf_copy_pentium_optimized:
         push    bp
         mov     bp, sp
 
         ; Check if Pentium AGI avoidance is enabled
-        cmp     byte ptr [agi_avoidance], 1
+        cmp     byte [agi_avoidance], 1
         jne     pent_fallback
 
         ; Save 32-bit registers
@@ -2304,9 +2265,9 @@ perf_copy_pentium_optimized PROC
 pent_agi_loop:
         ; Load from current address BEFORE calculating next
         db      66h
-        mov     eax, ds:[si]            ; U-pipe: load from SI
+        mov     eax, [ds:si]            ; U-pipe: load from SI
         db      66h
-        mov     ebx, ds:[si+4]          ; V-pipe: load from SI+4 (pairs)
+        mov     ebx, [ds:si+4]          ; V-pipe: load from SI+4 (pairs)
 
         ; Now calculate next source address (AGI-safe: not using SI yet)
         add     si, 8                   ; Advance source pointer
@@ -2316,9 +2277,9 @@ pent_agi_loop:
 
         ; Store to destination
         db      66h
-        mov     es:[di], eax            ; U-pipe: store to DI
+        mov     [es:di], eax            ; U-pipe: store to DI
         db      66h
-        mov     es:[di+4], ebx          ; V-pipe: store to DI+4 (pairs)
+        mov     [es:di+4], ebx          ; V-pipe: store to DI+4 (pairs)
 
         ; Calculate next dest address
         add     di, 8                   ; U-pipe: advance dest
@@ -2353,7 +2314,7 @@ pent_use_pipeline:
 
 pent_done:
         ; Update statistics
-        inc     dword ptr [memory_ops_optimized]
+        inc     dword [memory_ops_optimized]
 
         ; Restore 32-bit registers
         db      66h
@@ -2379,8 +2340,4 @@ pent_fallback:
 pent_exit:
         pop     bp
         ret
-perf_copy_pentium_optimized ENDP
 
-_TEXT ENDS
-
-END

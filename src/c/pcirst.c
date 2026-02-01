@@ -97,19 +97,21 @@ static bool issue_command(uint16_t iobase, uint16_t command) {
  * @return true on success, false on failure
  */
 static bool soft_reset_device(uint16_t iobase) {
+    uint16_t id;
+
     LOG_INFO("Performing soft reset at I/O 0x%04X", iobase);
-    
+
     /* Issue global reset command */
     if (!issue_command(iobase, CMD_GLOBAL_RESET)) {
         LOG_ERROR("Global reset command failed");
         return false;
     }
-    
+
     /* Wait for reset to complete */
     delay_ms(RESET_DELAY_MIN);
-    
+
     /* Verify device is responsive */
-    uint16_t id = inw(iobase + 0x00);  /* Read device ID */
+    id = inw(iobase + 0x00);  /* Read device ID */
     if (id == 0xFFFF || id == 0x0000) {
         LOG_ERROR("Device not responding after reset (ID=0x%04X)", id);
         return false;
@@ -225,7 +227,7 @@ reset_status_t pci_reset_device(uint8_t bus, uint8_t device, uint8_t function, u
     
     /* Stage 2: Soft reset attempt */
     LOG_INFO("Stage 2: Attempting soft reset");
-    start_time = get_system_ticks();
+    start_time = 0;  /* TODO: implement get_system_ticks via BIOS tick counter */
     
     if (soft_reset_device(iobase)) {
         success = true;
@@ -259,7 +261,7 @@ reset_status_t pci_reset_device(uint8_t bus, uint8_t device, uint8_t function, u
         }
     }
     
-    elapsed = get_system_ticks() - start_time;
+    elapsed = 0;  /* TODO: implement get_system_ticks via BIOS tick counter */
     LOG_INFO("Reset completed in %lu ms", elapsed);
     
     /* Stage 5: Restore PCI configuration */

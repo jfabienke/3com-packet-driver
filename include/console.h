@@ -23,24 +23,24 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// ANSI Color Definitions (Standard 16-color palette)
+/* ANSI Color Definitions (Standard 16-color palette) */
 typedef enum {
-    COLOR_BLACK = 0,
-    COLOR_BLUE = 1,
-    COLOR_GREEN = 2, 
-    COLOR_CYAN = 3,
-    COLOR_RED = 4,
-    COLOR_MAGENTA = 5,
-    COLOR_BROWN = 6,
-    COLOR_WHITE = 7,
-    COLOR_GRAY = 8,
-    COLOR_BRIGHT_BLUE = 9,
-    COLOR_BRIGHT_GREEN = 10,
-    COLOR_BRIGHT_CYAN = 11,
-    COLOR_BRIGHT_RED = 12,
-    COLOR_BRIGHT_MAGENTA = 13,
-    COLOR_YELLOW = 14,
-    COLOR_BRIGHT_WHITE = 15
+    COLOR_BLACK,           /* 0 */
+    COLOR_BLUE,            /* 1 */
+    COLOR_GREEN,           /* 2 */
+    COLOR_CYAN,            /* 3 */
+    COLOR_RED,             /* 4 */
+    COLOR_MAGENTA,         /* 5 */
+    COLOR_BROWN,           /* 6 */
+    COLOR_WHITE,           /* 7 */
+    COLOR_GRAY,            /* 8 */
+    COLOR_BRIGHT_BLUE,     /* 9 */
+    COLOR_BRIGHT_GREEN,    /* 10 */
+    COLOR_BRIGHT_CYAN,     /* 11 */
+    COLOR_BRIGHT_RED,      /* 12 */
+    COLOR_BRIGHT_MAGENTA,  /* 13 */
+    COLOR_YELLOW,          /* 14 */
+    COLOR_BRIGHT_WHITE     /* 15 */
 } ansi_color_t;
 
 // Console State and Capabilities

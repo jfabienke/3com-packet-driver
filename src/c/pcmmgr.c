@@ -17,6 +17,7 @@
 #include "pcmcia.h"
 #include "pci_bios.h"
 #include "pcmcis.h"
+#include "pcmsnap.h"
 
 /* ------------------------ PCIC (ISA) probe ------------------------ */
 
@@ -38,20 +39,25 @@ static inline uint8_t pcic_read(uint16_t index_port, uint8_t socket, uint8_t reg
 
 static bool probe_pcic_controller(uint16_t *io_base_out, uint8_t *socket_count_out) {
     int i;
+    uint16_t io;
+    uint8_t r1, r2;
+    uint8_t sockets;
+    uint8_t s;
+    uint8_t status;
+
     for (i = 0; k_pcic_index_ports[i] != 0; i++) {
-        uint16_t io = k_pcic_index_ports[i];
+        io = k_pcic_index_ports[i];
         /* Use scratch register 0x0E on socket 0 for a simple echo test */
         pcic_write(io, 0, 0x0E, 0xAA);
-        uint8_t r1 = pcic_read(io, 0, 0x0E);
+        r1 = pcic_read(io, 0, 0x0E);
         pcic_write(io, 0, 0x0E, 0x55);
-        uint8_t r2 = pcic_read(io, 0, 0x0E);
+        r2 = pcic_read(io, 0, 0x0E);
         if (r1 == 0xAA && r2 == 0x55) {
             /* Determine socket count by probing socket 0..3 status register (0x10 is common) */
-            uint8_t sockets = 0;
-            uint8_t s;
+            sockets = 0;
             for (s = 0; s < 4; s++) {
                 /* If reads look sane (low bits not all set), assume socket exists */
-                uint8_t status = pcic_read(io, s, 0x10);
+                status = pcic_read(io, s, 0x10);
                 if ((status & 0x0F) == 0x00) {
                     sockets++;
                 } else {
@@ -111,7 +117,7 @@ int pcmcia_init(void) {
     /* Prefer Socket Services when available */
     if (ss_available()) {
         int adapters = 0, sockets = 0;
-        if (ss_get_socket_count(&adapters, &sockets) == 0 && sockets > 0) {
+        if (ss_get_socket_count((int *)&adapters, (int *)&sockets) == 0 && sockets > 0) {
             uint8_t s;
             g_ss_present = true;
             if (sockets > 4) sockets = 4;
@@ -184,18 +190,30 @@ int pe_get_card_present(uint16_t io_base, uint8_t socket);
 int pe_enable_power(uint16_t io_base, uint8_t socket);
 int pe_disable_power(uint16_t io_base, uint8_t socket);
 
+/* External function declarations for PCMCIA/socket services */
+extern int ss_get_socket_status(uint16_t socket, uint8_t *status);
+extern int ss_read_cis(uint16_t socket, uint16_t offset, void far *dst, uint16_t len);
+extern int pe_read_cis(uint16_t io_base, uint8_t socket, uint16_t offset, void far *dst, uint16_t len);
+extern int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
+extern int hardware_detach_nic_by_index(int index);
+
 void pcmcia_poll(void) {
+    uint8_t s;
+    uint8_t st;
+    uint8_t cis_buf[128];
+    uint16_t io_tmp;
+    uint8_t irq_tmp;
+    int idx;
+    int present;
+
     if (!g_pcmcia_initialized) return;
     if (!pcmcia_event_flag) return; /* No pending events */
     pcmcia_event_flag = 0;
     /* Prefer Socket Services when available */
     if (g_ss_present) {
         /* Query per-socket status via SS_GET_SOCKET and set basic fields */
-        extern int ss_get_socket_status(uint16_t socket, uint8_t *status);
-        extern int ss_read_cis(uint16_t socket, uint16_t offset, void far *dst, uint16_t len);
-        uint8_t s;
         for (s = 0; s < g_pcic_sockets && s < 4; s++) {
-            uint8_t st = 0;
+            st = 0;
             if (ss_get_socket_status(s, &st) == 0) {
                 /* CARD_DETECT bit approximated as bit0 */
                 g_sock_state[s].card_present = (st & 0x01) ? 1 : 0;
@@ -203,9 +221,10 @@ void pcmcia_poll(void) {
                     /* Minimal defaults until CIS parser fills real values */
                     g_sock_state[s].powered = 1;
                     /* Attempt minimal CIS parse by asking SS to map/copy CIS into buffer */
-                    uint8_t cis_buf[128]; memset(cis_buf, 0, sizeof(cis_buf));
+                    memset(cis_buf, 0, sizeof(cis_buf));
                     if (ss_read_cis(s, 0, (void far*)cis_buf, sizeof(cis_buf)) == 0) {
-                        uint16_t io_tmp = 0; uint8_t irq_tmp = 0;
+                        io_tmp = 0;
+                        irq_tmp = 0;
                         if (pcmcia_cis_parse_3com(cis_buf, sizeof(cis_buf), &io_tmp, &irq_tmp) == 0) {
                             g_sock_state[s].io_base = io_tmp;
                             g_sock_state[s].irq = irq_tmp;
@@ -215,14 +234,12 @@ void pcmcia_poll(void) {
                     if (g_sock_state[s].irq == 0) g_sock_state[s].irq = (uint8_t)(s == 0 ? 10 : 11);
                     /* Attach if not yet attached and resources available */
                     if (!g_sock_state[s].attached && g_sock_state[s].io_base && g_sock_state[s].irq) {
-                        extern int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
-                        int idx = hardware_attach_pcmcia_nic(g_sock_state[s].io_base, g_sock_state[s].irq, s);
+                        idx = hardware_attach_pcmcia_nic(g_sock_state[s].io_base, g_sock_state[s].irq, s);
                         if (idx >= 0) { g_sock_state[s].attached = 1; g_sock_state[s].nic_index = (int8_t)idx; }
                     }
                 }
                 else if (g_sock_state[s].attached) {
                     /* Detach NIC if card removed */
-                    extern int hardware_detach_nic_by_index(int index);
                     hardware_detach_nic_by_index(g_sock_state[s].nic_index);
                     g_sock_state[s].attached = 0; g_sock_state[s].nic_index = -1;
                     g_sock_state[s].powered = 0; g_sock_state[s].io_base = 0; g_sock_state[s].irq = 0;
@@ -231,19 +248,18 @@ void pcmcia_poll(void) {
         }
     } else if (g_pcic_present) {
         /* PE mode: read minimal presence and set conservative defaults */
-        extern int pe_read_cis(uint16_t io_base, uint8_t socket, uint16_t offset, void far *dst, uint16_t len);
-        uint8_t s;
         for (s = 0; s < g_pcic_sockets && s < 4; s++) {
-            int present = pe_get_card_present(g_pcic_io_base, s);
+            present = pe_get_card_present(g_pcic_io_base, s);
             g_sock_state[s].card_present = present ? 1 : 0;
             if (present) {
                 /* Enable power and assign default resources (placeholder) */
                 pe_enable_power(g_pcic_io_base, s);
                 g_sock_state[s].powered = 1;
                 /* Attempt to read CIS via PE window programming */
-                uint8_t cis_buf[128]; _fmemset(cis_buf, 0, sizeof(cis_buf));
+                _fmemset(cis_buf, 0, sizeof(cis_buf));
                 if (pe_read_cis(g_pcic_io_base, s, 0, (void far*)cis_buf, sizeof(cis_buf)) == 0) {
-                    uint16_t io_tmp = 0; uint8_t irq_tmp = 0;
+                    io_tmp = 0;
+                    irq_tmp = 0;
                     if (pcmcia_cis_parse_3com(cis_buf, sizeof(cis_buf), &io_tmp, &irq_tmp) == 0) {
                         g_sock_state[s].io_base = io_tmp;
                         g_sock_state[s].irq = irq_tmp;
@@ -252,13 +268,11 @@ void pcmcia_poll(void) {
                 if (g_sock_state[s].io_base == 0) g_sock_state[s].io_base = (uint16_t)(0x300 + (s * 0x20));
                 if (g_sock_state[s].irq == 0) g_sock_state[s].irq = (uint8_t)(s == 0 ? 10 : 11);
                 if (!g_sock_state[s].attached && g_sock_state[s].io_base && g_sock_state[s].irq) {
-                    extern int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket);
-                    int idx = hardware_attach_pcmcia_nic(g_sock_state[s].io_base, g_sock_state[s].irq, s);
+                    idx = hardware_attach_pcmcia_nic(g_sock_state[s].io_base, g_sock_state[s].irq, s);
                     if (idx >= 0) { g_sock_state[s].attached = 1; g_sock_state[s].nic_index = (int8_t)idx; }
                 }
             }
             else if (g_sock_state[s].attached) {
-                extern int hardware_detach_nic_by_index(int index);
                 hardware_detach_nic_by_index(g_sock_state[s].nic_index);
                 g_sock_state[s].attached = 0; g_sock_state[s].nic_index = -1;
                 g_sock_state[s].powered = 0; g_sock_state[s].io_base = 0; g_sock_state[s].irq = 0;
@@ -274,16 +288,18 @@ int pcmcia_manager_fill_snapshot(pcmcia_socket_info_t *entries,
                                  uint16_t max_entries,
                                  uint8_t *capabilities,
                                  uint8_t *count_out) {
-    if (!entries || !capabilities || !count_out) return -1;
     uint8_t caps = 0;
+    uint8_t cnt = 0;
+    uint8_t limit;
+    uint8_t s;
+
+    if (!entries || !capabilities || !count_out) return -1;
     if (g_pcic_present || g_ss_present) caps |= 0x01;
     if (g_cardbus_present) caps |= 0x02;
     *capabilities = caps;
 
-    uint8_t cnt = 0;
     if (g_pcic_present) {
-        uint8_t limit = (g_pcic_sockets < max_entries) ? g_pcic_sockets : (uint8_t)max_entries;
-        uint8_t s;
+        limit = (g_pcic_sockets < max_entries) ? g_pcic_sockets : (uint8_t)max_entries;
         for (s = 0; s < limit; s++) {
             entries[cnt].socket_id = s;
             entries[cnt].present = g_sock_state[s].present;

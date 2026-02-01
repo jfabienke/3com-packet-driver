@@ -26,6 +26,9 @@
         bits 16
         cpu 386                         ; Enable 386+ instructions (SHR imm, REP INS/OUTS)
 
+; C symbol naming bridge (maps C symbols to symbol_)
+%include "csym.inc"
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; CPU Optimization Constants and Macros
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -143,15 +146,32 @@ hot_section_start:
         global  PATCH_dma_boundary_check ; Export patch point
         global  PATCH_cache_flush_pre    ; Export patch point
         global  PATCH_cache_flush_post   ; Export patch point
+        ; Added: 2026-01-25 from hardware.asm modularization
+        global  hardware_handle_3c509b_irq
+        global  hardware_handle_3c515_irq
 
         ; External references
         extern  packet_isr_receive
         extern  statistics
+        ; Added: 2026-01-25 from hardware.asm modularization
+        extern  current_iobase
+        extern  current_irq
+        extern  current_instance
+        extern  hardware_read_packet
+        extern  hardware_configure_3c509b
+        extern  init_3c515
+        extern  hw_flags_table
 
         ; Constants
         ISR_REENTRY_FLAG    equ 0x01
         PIO_MAX_PACKETS     equ 8       ; 3C509B (PIO) batch cap per IRQ
         DMA_MAX_PACKETS     equ 32      ; 3C515 (bus master) batch cap per IRQ
+
+        ; Added: 2026-01-25 from hardware.asm modularization
+        ; 3Com NIC register offsets (all at same offset 0Eh)
+        REG_COMMAND         EQU 0Eh     ; Command register
+        REG_WINDOW          EQU 0Eh     ; Window select register
+        REG_INT_STATUS      EQU 0Eh     ; Interrupt status
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Main NIC IRQ Handler - Tiny ISR Fast Path
@@ -719,6 +739,369 @@ nic_3c515_done:
         ret
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Hardware IRQ Handlers from hardware.asm
+;; Added: 2026-01-25 from hardware.asm modularization
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;-----------------------------------------------------------------------------
+; hardware_handle_3c509b_irq - Complete 3C509B interrupt handler
+;
+; Input:  None
+; Output: AX = 0 if handled, non-zero if spurious
+; Uses:   All registers
+;-----------------------------------------------------------------------------
+hardware_handle_3c509b_irq:
+        push    bp
+        mov     bp, sp
+        push    bx
+        push    cx
+        push    dx
+
+        ; Complete 3C509B interrupt handler
+        push    si
+        push    di
+        push    ds
+        push    es
+
+        ; Set up data segment
+        mov     ax, cs
+        mov     ds, ax
+
+        ; Get I/O base for current NIC
+        mov     si, [current_iobase]
+        test    si, si
+        jz      .not_ours_3c509b
+
+        ; Read interrupt status
+        mov     dx, si
+        add     dx, REG_INT_STATUS
+        in      ax, dx
+        mov     bx, ax                  ; Save status
+
+        ; Check if our interrupt
+        test    ax, 00FFh
+        jz      .not_ours_3c509b
+
+        ; Process TX complete
+        test    bx, 0004h               ; TX_COMPLETE
+        jz      .check_rx_3c509b
+
+        ; Handle TX completion
+        mov     dx, si
+        add     dx, 0Bh                 ; TX_STATUS
+        in      al, dx
+
+        ; Check for errors
+        test    al, 0F8h                ; Error bits
+        jz      .tx_ok_3c509b
+
+        ; Reset TX on error
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 5800h               ; CMD_TX_RESET
+        out     dx, ax
+        mov     ax, 4800h               ; CMD_TX_ENABLE
+        out     dx, ax
+
+.tx_ok_3c509b:
+        ; Pop TX status
+        mov     dx, si
+        add     dx, 0Bh
+        xor     al, al
+        out     dx, al                  ; Clear status
+
+        ; Acknowledge TX interrupt
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0004h       ; ACK_INTR | TX_COMPLETE
+        out     dx, ax
+
+.check_rx_3c509b:
+        ; Process RX complete
+        test    bx, 0001h               ; RX_COMPLETE
+        jz      .check_errors_3c509b
+
+        ; Process received packets
+        mov     al, [current_instance]
+        push    bp
+        mov     bp, sp
+        sub     sp, 8                   ; Space for buffer ptr
+        lea     di, [bp-8]
+        mov     [bp-8], di              ; Buffer ptr
+        mov     [bp-6], ds
+        push    di
+        push    ds
+        call    hardware_read_packet
+        add     sp, 8
+        mov     sp, bp
+        pop     bp
+
+        ; Acknowledge RX interrupt
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0001h       ; ACK_INTR | RX_COMPLETE
+        out     dx, ax
+
+.check_errors_3c509b:
+        ; Check adapter failure
+        test    bx, 0080h               ; ADAPTER_FAIL
+        jz      .check_stats_3c509b
+
+        ; Reset adapter
+        mov     al, [current_instance]
+        mov     dx, si
+        call    hardware_configure_3c509b
+
+        ; Acknowledge failure
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0080h       ; ACK_INTR | ADAPTER_FAIL
+        out     dx, ax
+
+.check_stats_3c509b:
+        ; Update statistics
+        test    bx, 0008h               ; UPDATE_STATS
+        jz      .int_done_3c509b
+
+        ; Select Window 6 for stats
+        mov     dx, si
+        add     dx, REG_WINDOW
+        mov     ax, 0806h               ; CMD_SELECT_WINDOW | 6
+        out     dx, ax
+
+        ; Read statistics to clear
+        mov     cx, 10
+        mov     dx, si
+.read_stats_3c509b:
+        in      al, dx
+        inc     dx
+        loop    .read_stats_3c509b
+
+        ; Back to Window 1
+        mov     dx, si
+        add     dx, REG_WINDOW
+        mov     ax, 0801h               ; CMD_SELECT_WINDOW | 1
+        out     dx, ax
+
+        ; Acknowledge stats
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0008h       ; ACK_INTR | UPDATE_STATS
+        out     dx, ax
+
+.int_done_3c509b:
+        ; Send EOI to PIC
+        mov     al, [current_irq]
+        cmp     al, 7
+        jbe     .master_pic_3c509b
+        mov     al, 20h
+        out     0A0h, al                ; EOI to slave PIC
+.master_pic_3c509b:
+        mov     al, 20h
+        out     20h, al                 ; EOI to master PIC
+
+        xor     ax, ax                  ; Interrupt handled
+        jmp     .exit_isr_3c509b
+
+.not_ours_3c509b:
+        mov     ax, 1                   ; Not our interrupt
+
+.exit_isr_3c509b:
+        pop     es
+        pop     ds
+        pop     di
+        pop     si
+
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     bp
+        ret
+;; end hardware_handle_3c509b_irq
+
+;-----------------------------------------------------------------------------
+; hardware_handle_3c515_irq - Handle 3C515-TX interrupt with DMA support
+;
+; Input:  None
+; Output: AX = 0 if handled, non-zero if spurious
+; Uses:   All registers
+;-----------------------------------------------------------------------------
+hardware_handle_3c515_irq:
+        push    bp
+        mov     bp, sp
+        push    bx
+        push    cx
+        push    dx
+
+        ; Complete 3C515-TX interrupt handler with DMA support
+        push    si
+        push    di
+        push    ds
+        push    es
+
+        mov     ax, cs
+        mov     ds, ax
+
+        ; Get I/O base
+        mov     si, [current_iobase]
+        test    si, si
+        jz      .not_ours_3c515
+
+        ; Read interrupt status
+        mov     dx, si
+        add     dx, REG_INT_STATUS
+        in      ax, dx
+        mov     bx, ax
+
+        test    ax, 00FFh
+        jz      .not_ours_3c515
+
+        ; Check for DMA interrupts (higher priority)
+        test    bx, 0200h               ; UP_COMPLETE (RX DMA)
+        jz      .check_down_3c515
+
+        ; Handle RX DMA completion
+        ; Select Window 7 for DMA
+        mov     dx, si
+        add     dx, REG_WINDOW
+        mov     ax, 0807h               ; CMD_SELECT_WINDOW | 7
+        out     dx, ax
+
+        ; Process RX DMA descriptors
+        ; (Implementation depends on DMA buffer management)
+
+        ; Acknowledge UP complete
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0200h       ; ACK_INTR | UP_COMPLETE
+        out     dx, ax
+
+.check_down_3c515:
+        test    bx, 0400h               ; DOWN_COMPLETE (TX DMA)
+        jz      .check_pio_3c515
+
+        ; Handle TX DMA completion
+        ; Process TX DMA descriptors
+
+        ; Acknowledge DOWN complete
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0400h       ; ACK_INTR | DOWN_COMPLETE
+        out     dx, ax
+
+.check_pio_3c515:
+        ; Standard TX complete
+        test    bx, 0004h               ; TX_COMPLETE
+        jz      .check_rx_3c515
+
+        mov     dx, si
+        add     dx, 1Bh                 ; TX_STATUS for 3C515
+        in      al, dx
+        out     dx, al                  ; Pop status
+
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0004h       ; ACK_INTR | TX_COMPLETE
+        out     dx, ax
+
+.check_rx_3c515:
+        test    bx, 0001h               ; RX_COMPLETE
+        jz      .check_host_3c515
+
+        ; Check if using DMA or PIO
+        mov     di, hw_flags_table
+        mov     al, [current_instance]
+        xor     ah, ah
+        add     di, ax
+        test    byte [di], 01h          ; FLAG_BUS_MASTER
+        jnz     .rx_dma_3c515
+
+        ; PIO mode RX
+        mov     al, [current_instance]
+        push    bp
+        mov     bp, sp
+        sub     sp, 8
+        lea     di, [bp-8]
+        mov     [bp-8], di
+        mov     [bp-6], ds
+        push    di
+        push    ds
+        call    hardware_read_packet
+        add     sp, 8
+        mov     sp, bp
+        pop     bp
+
+.rx_dma_3c515:
+        ; Acknowledge RX interrupt
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0001h       ; ACK_INTR | RX_COMPLETE
+        out     dx, ax
+
+.check_host_3c515:
+        ; Check host error
+        test    bx, 0002h               ; HOST_ERROR
+        jz      .int_done_3c515
+
+        ; Read PCI status
+        mov     dx, si
+        add     dx, 20h                 ; PCI_STATUS
+        in      ax, dx
+
+        ; Clear errors
+        out     dx, ax
+
+        ; Reset if fatal
+        test    ax, 8000h               ; PCI_ERR_FATAL
+        jz      .ack_host_3c515
+
+        mov     al, [current_instance]
+        mov     dx, si
+        call    init_3c515
+
+.ack_host_3c515:
+        mov     dx, si
+        add     dx, REG_COMMAND
+        mov     ax, 6800h | 0002h       ; ACK_INTR | HOST_ERROR
+        out     dx, ax
+
+.int_done_3c515:
+        ; Restore Window 1
+        mov     dx, si
+        add     dx, REG_WINDOW
+        mov     ax, 0801h               ; CMD_SELECT_WINDOW | 1
+        out     dx, ax
+
+        ; Send EOI
+        mov     al, [current_irq]
+        cmp     al, 7
+        jbe     .master_pic_3c515
+        mov     al, 20h
+        out     0A0h, al
+.master_pic_3c515:
+        mov     al, 20h
+        out     20h, al
+
+        xor     ax, ax                  ; Handled
+        jmp     .exit_isr_3c515
+
+.not_ours_3c515:
+        mov     ax, 1                   ; Not ours
+
+.exit_isr_3c515:
+        pop     es
+        pop     ds
+        pop     di
+        pop     si
+
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     bp
+        ret
+;; end hardware_handle_3c515_irq
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Transfer Methods (Patchable)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         global  transfer_pio
@@ -908,8 +1291,8 @@ allocate_bounce_buffer:
         ; Push size argument (small model, near call)
         mov     ax, [packet_length]
         push    ax
-        extern  _dma_get_rx_bounce_buffer
-        call    _dma_get_rx_bounce_buffer
+        extern  dma_get_rx_bounce_buffer
+        call    dma_get_rx_bounce_buffer
         add     sp, 2               ; Clean up argument
 
         ; Check if allocation succeeded (AX = pointer or NULL)

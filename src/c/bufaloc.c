@@ -13,6 +13,7 @@
 #include "vds.h"
 #include "pltprob.h"
 #include "logging.h"
+#include "cpudet.h"  /* For cpu_info_t and CPU type constants */
 
 /* Global buffer pools */
 buffer_pool_t g_tx_buffer_pool;
@@ -59,16 +60,20 @@ static void buffer_update_stats_free(uint32_t size);
 
 /* Buffer system initialization and cleanup */
 int buffer_system_init(void) {
+    /* C89: All declarations must be at the start of the block */
+    uint32_t total_memory;
+    int result;
+
     if (g_buffer_system_initialized) {
         return SUCCESS;
     }
-    
+
     /* Initialize global statistics */
     buffer_stats_init(&g_buffer_stats);
-    
+
     /* Initialize per-NIC buffer pool manager first */
-    uint32_t total_memory = memory_xms_available() ? (memory_get_xms_size() * 1024) : (512 * 1024);
-    int result = nic_buffer_pool_manager_init(total_memory, MEMORY_TIER_AUTO);
+    total_memory = memory_xms_available() ? (memory_get_xms_size() * 1024) : (512 * 1024);
+    result = nic_buffer_pool_manager_init(total_memory, MEMORY_TIER_AUTO);
     if (result != SUCCESS) {
         log_warning("Failed to initialize per-NIC buffer pools: %d, using legacy pools", result);
     }
@@ -94,15 +99,15 @@ void buffer_system_cleanup(void) {
     /* Cleanup VDS common buffers first */
     if (g_vds_buffers_allocated) {
         if (g_vds_tx_ring_buffer.allocated) {
-            vds_release_buffer(&g_vds_tx_ring_buffer);
+            vds_free_buffer(&g_vds_tx_ring_buffer);
             log_debug("VDS TX ring buffer released");
         }
         if (g_vds_rx_ring_buffer.allocated) {
-            vds_release_buffer(&g_vds_rx_ring_buffer);
+            vds_free_buffer(&g_vds_rx_ring_buffer);
             log_debug("VDS RX ring buffer released");
         }
         if (g_vds_rx_data_buffer.allocated) {
-            vds_release_buffer(&g_vds_rx_data_buffer);
+            vds_free_buffer(&g_vds_rx_data_buffer);
             log_debug("VDS RX data buffer released");
         }
         g_vds_buffers_allocated = false;
@@ -123,18 +128,25 @@ void buffer_system_cleanup(void) {
 int buffer_init_default_pools(void) {
     int result;
     extern cpu_info_t g_cpu_info; /* From Phase 1 */
-    
+
+    /* C89: All declarations must be at the start of the block */
     /* Determine optimal buffer counts based on available memory */
     uint32_t tx_buffers = 16;   /* Default for TX */
     uint32_t rx_buffers = 32;   /* Default for RX */
     uint32_t dma_buffers = 8;   /* Default for DMA */
-    
+
     /* Size-specific pool counts based on typical network traffic patterns */
     uint32_t pool_64_count = 32;    /* Lots of small packets (ACKs, control) */
     uint32_t pool_128_count = 24;   /* Medium packets (small data) */
     uint32_t pool_512_count = 16;   /* Large packets (file transfers) */
     uint32_t pool_1518_count = 12;  /* Maximum size packets */
-    
+
+    /* C89: Move this declaration to start */
+    uint32_t tx_flags;
+    uint32_t rx_flags;
+    uint32_t dma_flags;
+    uint32_t size_pool_flags;
+
     /* Adjust buffer counts based on available XMS memory */
     if (memory_xms_available()) {
         uint32_t xms_kb = memory_get_xms_size();
@@ -161,8 +173,8 @@ int buffer_init_default_pools(void) {
     }
     
     /* Initialize TX buffer pool with optimized size for Ethernet frames */
-    uint32_t tx_flags = BUFFER_FLAG_ALIGNED;
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    tx_flags = BUFFER_FLAG_ALIGNED;
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         tx_flags |= BUFFER_FLAG_ZERO_INIT; /* 386+ can handle fast zero init */
     }
     
@@ -174,7 +186,7 @@ int buffer_init_default_pools(void) {
     }
     
     /* Initialize RX buffer pool with size for maximum Ethernet frame + margin */
-    uint32_t rx_flags = BUFFER_FLAG_ALIGNED | BUFFER_FLAG_ZERO_INIT;
+    rx_flags = BUFFER_FLAG_ALIGNED | BUFFER_FLAG_ZERO_INIT;
     
     result = buffer_pool_init(&g_rx_buffer_pool, BUFFER_TYPE_RX,
                              RX_BUFFER_SIZE, rx_buffers, rx_flags);
@@ -186,32 +198,34 @@ int buffer_init_default_pools(void) {
     
     /* Initialize DMA buffer pool - use VDS common buffers when appropriate */
     if (platform_get_dma_policy() == DMA_POLICY_COMMONBUF) {
-        log_info("Allocating VDS common buffers for DMA operations");
-        
-        /* Allocate VDS common buffer for TX descriptor ring */
+        /* C89: Declarations at start of block */
         uint32_t tx_ring_size = 16 * 1024;  /* 16KB for TX descriptors */
-        if (vds_request_buffer(tx_ring_size, VDS_ISA_BUFFER_FLAGS, &g_vds_tx_ring_buffer)) {
-            log_info("VDS TX ring buffer allocated: %lu bytes at phys %08lXh", 
+        uint32_t rx_ring_size = 16 * 1024;  /* 16KB for RX descriptors */
+        uint32_t rx_data_size = 64 * 1024;  /* 64KB for RX data pool */
+
+        log_info("Allocating VDS common buffers for DMA operations");
+
+        /* Allocate VDS common buffer for TX descriptor ring */
+        if (vds_alloc_buffer(tx_ring_size, VDS_ISA_BUFFER_FLAGS, &g_vds_tx_ring_buffer)) {
+            log_info("VDS TX ring buffer allocated: %lu bytes at phys %08lXh",
                     (unsigned long)g_vds_tx_ring_buffer.size,
                     (unsigned long)g_vds_tx_ring_buffer.physical_addr);
         } else {
             log_warning("Failed to allocate VDS TX ring buffer - using conventional");
         }
-        
+
         /* Allocate VDS common buffer for RX descriptor ring */
-        uint32_t rx_ring_size = 16 * 1024;  /* 16KB for RX descriptors */
-        if (vds_request_buffer(rx_ring_size, VDS_ISA_BUFFER_FLAGS, &g_vds_rx_ring_buffer)) {
-            log_info("VDS RX ring buffer allocated: %lu bytes at phys %08lXh", 
+        if (vds_alloc_buffer(rx_ring_size, VDS_ISA_BUFFER_FLAGS, &g_vds_rx_ring_buffer)) {
+            log_info("VDS RX ring buffer allocated: %lu bytes at phys %08lXh",
                     (unsigned long)g_vds_rx_ring_buffer.size,
                     (unsigned long)g_vds_rx_ring_buffer.physical_addr);
         } else {
             log_warning("Failed to allocate VDS RX ring buffer - using conventional");
         }
-        
+
         /* Allocate VDS common buffer for RX data buffers (GPT-5 recommendation) */
-        uint32_t rx_data_size = 64 * 1024;  /* 64KB for RX data pool */
-        if (vds_request_buffer(rx_data_size, VDS_ISA_BUFFER_FLAGS, &g_vds_rx_data_buffer)) {
-            log_info("VDS RX data buffer allocated: %lu bytes at phys %08lXh", 
+        if (vds_alloc_buffer(rx_data_size, VDS_ISA_BUFFER_FLAGS, &g_vds_rx_data_buffer)) {
+            log_info("VDS RX data buffer allocated: %lu bytes at phys %08lXh",
                     (unsigned long)g_vds_rx_data_buffer.size,
                     (unsigned long)g_vds_rx_data_buffer.physical_addr);
             g_vds_buffers_allocated = true;
@@ -221,8 +235,8 @@ int buffer_init_default_pools(void) {
     }
     
     /* Initialize conventional DMA buffer pool as fallback */
-    uint32_t dma_flags = BUFFER_FLAG_DMA_CAPABLE | BUFFER_FLAG_ALIGNED;
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    dma_flags = BUFFER_FLAG_DMA_CAPABLE | BUFFER_FLAG_ALIGNED;
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         dma_flags |= BUFFER_FLAG_PERSISTENT; /* Keep DMA buffers locked */
     }
     
@@ -236,8 +250,8 @@ int buffer_init_default_pools(void) {
     }
     
     /* Initialize size-specific buffer pools for fast path allocation */
-    uint32_t size_pool_flags = BUFFER_FLAG_ALIGNED;
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    size_pool_flags = BUFFER_FLAG_ALIGNED;
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         size_pool_flags |= BUFFER_FLAG_ZERO_INIT;
     }
     
@@ -307,11 +321,14 @@ void buffer_cleanup_default_pools(void) {
 /* Buffer pool management */
 int buffer_pool_init(buffer_pool_t *pool, buffer_type_t type,
                     uint32_t buffer_size, uint32_t buffer_count, uint32_t flags) {
+    uint32_t total_size;
+    uint32_t mem_flags;
+
     if (!pool) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Initialize pool structure */
     pool->free_list = NULL;
     pool->used_list = NULL;
@@ -325,11 +342,11 @@ int buffer_pool_init(buffer_pool_t *pool, buffer_type_t type,
     pool->memory_base = NULL;
     pool->memory_size = 0;
     pool->initialized = false;
-    
+
     /* Allocate memory for all buffers in the pool using three-tier system */
-    uint32_t total_size = buffer_count * (buffer_size + sizeof(buffer_desc_t));
-    uint32_t mem_flags = 0;
-    
+    total_size = buffer_count * (buffer_size + sizeof(buffer_desc_t));
+    mem_flags = 0;
+
     /* Set memory flags based on buffer requirements */
     if (flags & BUFFER_FLAG_ALIGNED) {
         mem_flags |= MEM_FLAG_ALIGNED;
@@ -363,44 +380,45 @@ int buffer_pool_init(buffer_pool_t *pool, buffer_type_t type,
     {
         uint8_t *current_ptr = (uint8_t*)pool->memory_base;
         uint32_t i;
+        buffer_desc_t *desc;
+        extern cpu_info_t g_cpu_info;
+        uint32_t alignment;
 
         for (i = 0; i < buffer_count; i++) {
-        buffer_desc_t *desc = (buffer_desc_t*)current_ptr;
-        current_ptr += sizeof(buffer_desc_t);
-        
-        /* Align buffer data based on CPU capabilities */
-        if (flags & BUFFER_FLAG_ALIGNED) {
-            extern cpu_info_t g_cpu_info;
-            uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80386) ? 4 : 2;
-            current_ptr = (uint8_t*)ALIGN_UP((uint32_t)current_ptr, alignment);
-        }
-        
-        /* Initialize descriptor */
-        desc->data = current_ptr;
-        desc->size = buffer_size;
-        desc->used = 0;
-        desc->type = type;
-        desc->state = BUFFER_STATE_FREE;
-        desc->flags = flags;
-        desc->timestamp = 0;
-        desc->magic = BUFFER_MAGIC_FREE;
-        desc->next = pool->free_list;
-        desc->prev = NULL;
-        desc->private_data = NULL;
-        
-        /* Add to free list */
-        if (pool->free_list) {
-            pool->free_list->prev = desc;
-        }
-        pool->free_list = desc;
-        pool->free_count++;
-        
-        current_ptr += buffer_size;
-        
+            desc = (buffer_desc_t*)current_ptr;
+            current_ptr += sizeof(buffer_desc_t);
+
+            /* Align buffer data based on CPU capabilities */
+            if (flags & BUFFER_FLAG_ALIGNED) {
+                alignment = (g_cpu_info.cpu_type >= CPU_DET_80386) ? 4 : 2;
+                current_ptr = (uint8_t*)ALIGN_UP((uint32_t)current_ptr, alignment);
+            }
+
+            /* Initialize descriptor */
+            desc->data = current_ptr;
+            desc->size = buffer_size;
+            desc->used = 0;
+            desc->type = type;
+            desc->state = BUFFER_STATE_FREE;
+            desc->flags = flags;
+            desc->timestamp = 0;
+            desc->magic = BUFFER_MAGIC_FREE;
+            desc->next = pool->free_list;
+            desc->prev = NULL;
+            desc->private_data = NULL;
+
+            /* Add to free list */
+            if (pool->free_list) {
+                pool->free_list->prev = desc;
+            }
+            pool->free_list = desc;
+            pool->free_count++;
+
+            current_ptr += buffer_size;
+
             /* Apply alignment padding for next buffer */
             if (flags & BUFFER_FLAG_ALIGNED) {
-                extern cpu_info_t g_cpu_info;
-                uint32_t alignment = (g_cpu_info.type >= CPU_TYPE_80386) ? 4 : 2;
+                alignment = (g_cpu_info.cpu_type >= CPU_DET_80386) ? 4 : 2;
                 current_ptr = (uint8_t*)ALIGN_UP((uint32_t)current_ptr, alignment);
             }
         }
@@ -437,18 +455,21 @@ void buffer_pool_cleanup(buffer_pool_t *pool) {
 
 /* Buffer allocation and deallocation */
 buffer_desc_t* buffer_alloc(buffer_pool_t *pool) {
+    /* C89: All declarations must be at start of block */
+    buffer_desc_t *buffer;
+
     if (!pool || !pool->initialized) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         return NULL;
     }
-    
+
     if (!pool->free_list) {
         buffer_set_last_error(BUFFER_ERROR_POOL_FULL);
         return NULL;
     }
-    
+
     /* Remove from free list */
-    buffer_desc_t *buffer = pool->free_list;
+    buffer = pool->free_list;
     pool->free_list = buffer->next;
     if (pool->free_list) {
         pool->free_list->prev = NULL;
@@ -772,33 +793,34 @@ static void buffer_update_stats_free(uint32_t size) {
 int rx_copybreak_init(uint32_t small_count, uint32_t large_count) {
     int result;
     extern cpu_info_t g_cpu_info;
-    
+    uint32_t pool_flags;
+
     /* Validate parameters */
     if (small_count == 0 || large_count == 0) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if already initialized */
     if (g_rx_copybreak_pool.small_pool.initialized || g_rx_copybreak_pool.large_pool.initialized) {
         log_warning("RX_COPYBREAK pool already initialized, cleaning up first");
         rx_copybreak_cleanup();
     }
-    
+
     /* Initialize pool settings */
     g_rx_copybreak_pool.small_buffer_count = small_count;
     g_rx_copybreak_pool.large_buffer_count = large_count;
     g_rx_copybreak_pool.copybreak_threshold = RX_COPYBREAK_THRESHOLD;
-    
+
     /* Initialize statistics */
     g_rx_copybreak_pool.small_allocations = 0;
     g_rx_copybreak_pool.large_allocations = 0;
     g_rx_copybreak_pool.copy_operations = 0;
     g_rx_copybreak_pool.memory_saved = 0;
-    
+
     /* Set up buffer pool flags based on CPU capabilities */
-    uint32_t pool_flags = BUFFER_FLAG_ALIGNED;
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    pool_flags = BUFFER_FLAG_ALIGNED;
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         pool_flags |= BUFFER_FLAG_ZERO_INIT; /* 386+ can handle fast zero init */
     }
     
@@ -994,14 +1016,19 @@ void rx_copybreak_get_stats(rx_copybreak_pool_t* stats) {
              g_rx_copybreak_pool.large_allocations);
     log_info("  Copy operations: %lu", g_rx_copybreak_pool.copy_operations);
     log_info("  Memory saved: %lu bytes", g_rx_copybreak_pool.memory_saved);
-    
+
     /* Calculate efficiency statistics */
-    uint32_t total_allocations = g_rx_copybreak_pool.small_allocations + g_rx_copybreak_pool.large_allocations;
-    if (total_allocations > 0) {
-        uint32_t small_percentage = (g_rx_copybreak_pool.small_allocations * 100) / total_allocations;
-        log_info("  Efficiency: %u%% small buffer usage, %lu bytes average saved per allocation",
-                 small_percentage,
-                 total_allocations > 0 ? g_rx_copybreak_pool.memory_saved / total_allocations : 0);
+    {
+        uint32_t total_allocations;
+        uint32_t small_percentage;
+
+        total_allocations = g_rx_copybreak_pool.small_allocations + g_rx_copybreak_pool.large_allocations;
+        if (total_allocations > 0) {
+            small_percentage = (g_rx_copybreak_pool.small_allocations * 100) / total_allocations;
+            log_info("  Efficiency: %u%% small buffer usage, %lu bytes average saved per allocation",
+                     small_percentage,
+                     total_allocations > 0 ? g_rx_copybreak_pool.memory_saved / total_allocations : 0);
+        }
     }
 }
 
@@ -1012,20 +1039,26 @@ void rx_copybreak_get_stats(rx_copybreak_pool_t* stats) {
  * @return SUCCESS on success, error code on failure
  */
 int rx_copybreak_resize_pools(uint32_t new_small_count, uint32_t new_large_count) {
+    uint32_t old_small_allocs;
+    uint32_t old_large_allocs;
+    uint32_t old_copy_ops;
+    uint32_t old_memory_saved;
+    int result;
+
     /* Check if RX_COPYBREAK is initialized */
     if (!g_rx_copybreak_pool.small_pool.initialized || !g_rx_copybreak_pool.large_pool.initialized) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         log_error("RX_COPYBREAK not initialized, cannot resize pools");
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Validate parameters */
     if (new_small_count == 0 || new_large_count == 0) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         log_error("Invalid pool sizes: small=%u, large=%u", new_small_count, new_large_count);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Check if pools are currently in use */
     if (g_rx_copybreak_pool.small_pool.used_count > 0 || g_rx_copybreak_pool.large_pool.used_count > 0) {
         buffer_set_last_error(BUFFER_ERROR_BUFFER_IN_USE);
@@ -1034,12 +1067,12 @@ int rx_copybreak_resize_pools(uint32_t new_small_count, uint32_t new_large_count
                  g_rx_copybreak_pool.large_pool.used_count);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Save current statistics before cleanup */
-    uint32_t old_small_allocs = g_rx_copybreak_pool.small_allocations;
-    uint32_t old_large_allocs = g_rx_copybreak_pool.large_allocations;
-    uint32_t old_copy_ops = g_rx_copybreak_pool.copy_operations;
-    uint32_t old_memory_saved = g_rx_copybreak_pool.memory_saved;
+    old_small_allocs = g_rx_copybreak_pool.small_allocations;
+    old_large_allocs = g_rx_copybreak_pool.large_allocations;
+    old_copy_ops = g_rx_copybreak_pool.copy_operations;
+    old_memory_saved = g_rx_copybreak_pool.memory_saved;
     
     log_info("Resizing RX_COPYBREAK pools from small=%u, large=%u to small=%u, large=%u",
              g_rx_copybreak_pool.small_buffer_count, g_rx_copybreak_pool.large_buffer_count,
@@ -1047,9 +1080,9 @@ int rx_copybreak_resize_pools(uint32_t new_small_count, uint32_t new_large_count
     
     /* Cleanup existing pools */
     rx_copybreak_cleanup();
-    
+
     /* Reinitialize with new sizes */
-    int result = rx_copybreak_init(new_small_count, new_large_count);
+    result = rx_copybreak_init(new_small_count, new_large_count);
     if (result != SUCCESS) {
         log_error("Failed to reinitialize RX_COPYBREAK with new sizes");
         return result;
@@ -1085,33 +1118,29 @@ void rx_copybreak_record_copy(void) {
 /**
  * @brief Save flags and disable interrupts (16-bit safe)
  * @return Saved flags value
+ *
+ * Open Watcom inline assembly using #pragma aux
  */
-static inline uint16_t irq_save_disable(void) {
-    uint16_t flags;
-    __asm__ __volatile__(
-        "pushf\n\t"
-        "pop %0\n\t"
-        "cli"
-        : "=r"(flags)
-        :
-        : "memory"
-    );
-    return flags;
-}
+uint16_t irq_save_disable(void);
+#pragma aux irq_save_disable = \
+    "pushf"                    \
+    "pop ax"                   \
+    "cli"                      \
+    value [ax]                 \
+    modify exact [ax];
 
 /**
  * @brief Restore flags (16-bit safe)
  * @param flags Flags value to restore
+ *
+ * Open Watcom inline assembly using #pragma aux
  */
-static inline void irq_restore(uint16_t flags) {
-    __asm__ __volatile__(
-        "push %0\n\t"
-        "popf"
-        :
-        : "r"(flags)
-        : "memory"
-    );
-}
+void irq_restore(uint16_t flags);
+#pragma aux irq_restore =      \
+    "push ax"                  \
+    "popf"                     \
+    parm [ax]                  \
+    modify exact [];
 
 /* ========================================================================
  * XMS Buffer Pool Implementation
@@ -1298,22 +1327,23 @@ void xms_buffer_free(xms_buffer_pool_t *pool, uint32_t buffer_offset) {
  */
 int xms_copy_to_buffer(xms_buffer_pool_t *pool, uint32_t offset, void *src, uint32_t size) {
     int result;
-    
+    uint32_t src_addr;
+
     if (!pool || !src || size == 0 || pool->xms_handle == 0) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Validate offset and size */
     if (offset + size > pool->total_size) {
         buffer_set_last_error(BUFFER_ERROR_SIZE_MISMATCH);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Build proper real-mode address for XMS move */
     /* XMS expects segment:offset in format: high word = segment, low word = offset */
-    uint32_t src_addr = ((uint32_t)FP_SEG(src) << 16) | FP_OFF(src);
-    
+    src_addr = ((uint32_t)FP_SEG(src) << 16) | FP_OFF(src);
+
     /* Use XMS move function (src_handle=0 means conventional memory) */
     result = xms_move_memory(pool->xms_handle, offset, 0, src_addr, size);
     if (result != XMS_SUCCESS) {
@@ -1337,22 +1367,23 @@ int xms_copy_to_buffer(xms_buffer_pool_t *pool, uint32_t offset, void *src, uint
  */
 int xms_copy_from_buffer(xms_buffer_pool_t *pool, void *dest, uint32_t offset, uint32_t size) {
     int result;
-    
+    uint32_t dest_addr;
+
     if (!pool || !dest || size == 0 || pool->xms_handle == 0) {
         buffer_set_last_error(BUFFER_ERROR_INVALID_PARAM);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Validate offset and size */
     if (offset + size > pool->total_size) {
         buffer_set_last_error(BUFFER_ERROR_SIZE_MISMATCH);
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Build proper real-mode address for XMS move */
     /* XMS expects segment:offset in format: high word = segment, low word = offset */
-    uint32_t dest_addr = ((uint32_t)FP_SEG(dest) << 16) | FP_OFF(dest);
-    
+    dest_addr = ((uint32_t)FP_SEG(dest) << 16) | FP_OFF(dest);
+
     /* Use XMS move function (dest_handle=0 means conventional memory) */
     result = xms_move_memory(0, dest_addr, pool->xms_handle, offset, size);
     if (result != XMS_SUCCESS) {
@@ -1391,15 +1422,15 @@ int staging_buffer_init(uint32_t count, uint32_t size) {
     }
     
     /* Allocate staging buffer array */
-    g_staging_buffers = (staging_buffer_t*)memory_allocate(
-        count * sizeof(staging_buffer_t), MEMORY_FLAG_ZERO);
+    g_staging_buffers = (staging_buffer_t*)memory_alloc(
+        count * sizeof(staging_buffer_t), MEM_TYPE_GENERAL, MEM_FLAG_ZERO);
     if (!g_staging_buffers) {
         buffer_set_last_error(BUFFER_ERROR_OUT_OF_MEMORY);
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Allocate buffer data */
-    buffer_data = (uint8_t*)memory_allocate(count * size, MEMORY_FLAG_ZERO);
+    buffer_data = (uint8_t*)memory_alloc(count * size, MEM_TYPE_GENERAL, MEM_FLAG_ZERO);
     if (!buffer_data) {
         memory_free(g_staging_buffers);
         g_staging_buffers = NULL;
@@ -1757,17 +1788,19 @@ buffer_desc_t* buffer_alloc_ethernet_frame(uint32_t frame_size, buffer_type_t ty
  * @return Buffer descriptor or NULL
  */
 buffer_desc_t* buffer_alloc_dma(uint32_t size, uint32_t alignment) {
+    /* C89: All declarations must be at start of block */
     extern cpu_info_t g_cpu_info;
-    
+    buffer_desc_t *buffer;
+
     /* Validate alignment */
     if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
         buffer_set_last_error(BUFFER_ERROR_ALIGNMENT);
         return NULL;
     }
-    
+
     /* Use DMA pool if available and size fits */
     if (size <= DMA_BUFFER_SIZE) {
-        buffer_desc_t *buffer = buffer_alloc(&g_dma_buffer_pool);
+        buffer = buffer_alloc(&g_dma_buffer_pool);
         if (buffer) {
             /* Check if buffer data is properly aligned */
             if (!IS_ALIGNED((uint32_t)buffer->data, alignment)) {
@@ -1780,7 +1813,7 @@ buffer_desc_t* buffer_alloc_dma(uint32_t size, uint32_t alignment) {
             return buffer;
         }
     }
-    
+
     /* Fall back to regular allocation */
     buffer_set_last_error(BUFFER_ERROR_POOL_FULL);
     return NULL;
@@ -1796,7 +1829,7 @@ uint32_t buffer_get_optimal_size(uint32_t requested_size) {
     uint32_t alignment;
     
     /* Determine optimal alignment based on CPU */
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         alignment = 4; /* 32-bit alignment for 386+ */
     } else {
         alignment = 2; /* 16-bit alignment for older CPUs */
@@ -1822,9 +1855,9 @@ int buffer_system_init_optimized(void) {
     
     /* Apply CPU-specific optimizations */
     log_info("Optimizing buffer system for %s CPU",
-             cpu_type_to_string(g_cpu_info.type));
+             cpu_type_to_string(g_cpu_info.cpu_type));
     
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         log_info("Enabling 32-bit buffer optimizations");
         
         /* 386+ specific optimizations */
@@ -1874,18 +1907,21 @@ int buffer_copy_packet_data(buffer_desc_t *dest, const buffer_desc_t *src) {
  */
 void buffer_prefetch_data(const buffer_desc_t *buffer) {
     extern cpu_info_t g_cpu_info;
-    
+    volatile uint8_t *data;
+    uint32_t size;
+    uint32_t cache_line;
+    uint32_t offset;
+
     if (!buffer || !buffer_is_valid(buffer)) {
         return;
     }
-    
+
     /* On 386+ CPUs, we can implement cache-friendly prefetching */
-    if (g_cpu_info.type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         /* Touch the data to bring it into cache */
-        volatile uint8_t *data = (volatile uint8_t*)buffer->data;
-        uint32_t size = buffer->used;
-        uint32_t cache_line = 32; /* Typical cache line size */
-        uint32_t offset;
+        data = (volatile uint8_t*)buffer->data;
+        size = buffer->used;
+        cache_line = 32; /* Typical cache line size */
 
         /* Touch every cache line */
         for (offset = 0; offset < size; offset += cache_line) {
@@ -1950,21 +1986,23 @@ buffer_desc_t* buffer_alloc_nic_aware(nic_id_t nic_id, buffer_type_t type, uint3
  * @param buffer Buffer to free
  */
 void buffer_free_nic_aware(nic_id_t nic_id, buffer_desc_t* buffer) {
+    nic_id_t test_id;
+
     if (!buffer) {
         return;
     }
-    
+
     /* Try per-NIC free first if NIC ID is valid */
     if (nic_id != INVALID_NIC_ID && nic_buffer_is_initialized(nic_id)) {
         nic_buffer_free(nic_id, buffer);
         log_debug("Freed buffer to per-NIC pool for NIC %d", nic_id);
         return;
     }
-    
+
     /* Try to auto-detect NIC if ID not provided */
     if (nic_id == INVALID_NIC_ID) {
         /* Try all initialized NICs to find the right pool */
-        for (nic_id_t test_id = 0; test_id < MAX_NICS; test_id++) {
+        for (test_id = 0; test_id < MAX_NICS; test_id++) {
             if (nic_buffer_is_initialized(test_id)) {
                 /* This is a simplified approach - in practice we'd need better tracking */
                 nic_buffer_free(test_id, buffer);
@@ -1973,7 +2011,7 @@ void buffer_free_nic_aware(nic_id_t nic_id, buffer_desc_t* buffer) {
             }
         }
     }
-    
+
     /* Fall back to legacy free */
     buffer_free_any(buffer);
     log_debug("Freed buffer using legacy method");
@@ -1987,25 +2025,31 @@ void buffer_free_nic_aware(nic_id_t nic_id, buffer_desc_t* buffer) {
  * @return SUCCESS on success, error code on failure
  */
 int buffer_register_nic(nic_id_t nic_id, nic_type_t nic_type, const char* nic_name) {
+    /* C89: All declarations must be at start of block */
+    int result;
+    uint32_t small_count;
+    uint32_t large_count;
+    uint32_t threshold;
+
     if (!g_buffer_system_initialized) {
         log_error("Buffer system not initialized");
         return ERROR_INVALID_PARAM;
     }
-    
+
     log_info("Registering NIC %d (%s) with buffer system", nic_id, nic_name ? nic_name : "Unknown");
-    
+
     /* Create per-NIC buffer pools */
-    int result = nic_buffer_pool_create(nic_id, nic_type, nic_name);
+    result = nic_buffer_pool_create(nic_id, nic_type, nic_name);
     if (result != SUCCESS) {
         log_error("Failed to create buffer pools for NIC %d: %d", nic_id, result);
         return result;
     }
-    
+
     /* Initialize RX_COPYBREAK for this NIC based on type */
-    uint32_t small_count = DEFAULT_SMALL_BUFFERS_PER_NIC;
-    uint32_t large_count = DEFAULT_LARGE_BUFFERS_PER_NIC;
-    uint32_t threshold = RX_COPYBREAK_THRESHOLD;
-    
+    small_count = DEFAULT_SMALL_BUFFERS_PER_NIC;
+    large_count = DEFAULT_LARGE_BUFFERS_PER_NIC;
+    threshold = RX_COPYBREAK_THRESHOLD;
+
     /* Adjust based on NIC type */
     if (nic_type == NIC_TYPE_3C515_TX) {
         /* 3C515-TX can handle more aggressive optimization */
@@ -2013,13 +2057,13 @@ int buffer_register_nic(nic_id_t nic_id, nic_type_t nic_type, const char* nic_na
         large_count = 16;
         threshold = 256; /* Higher threshold for fast NIC */
     }
-    
+
     result = nic_rx_copybreak_init(nic_id, small_count, large_count, threshold);
     if (result != SUCCESS) {
         log_warning("Failed to initialize RX_COPYBREAK for NIC %d: %d", nic_id, result);
         /* Continue without RX_COPYBREAK */
     }
-    
+
     log_info("Successfully registered NIC %d with buffer system", nic_id);
     return SUCCESS;
 }
@@ -2030,18 +2074,21 @@ int buffer_register_nic(nic_id_t nic_id, nic_type_t nic_type, const char* nic_na
  * @return SUCCESS on success, error code on failure
  */
 int buffer_unregister_nic(nic_id_t nic_id) {
+    /* C89: All declarations must be at start of block */
+    int result;
+
     if (!g_buffer_system_initialized) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     log_info("Unregistering NIC %d from buffer system", nic_id);
-    
+
     /* Destroy per-NIC buffer pools */
-    int result = nic_buffer_pool_destroy(nic_id);
+    result = nic_buffer_pool_destroy(nic_id);
     if (result != SUCCESS) {
         log_warning("Failed to destroy buffer pools for NIC %d: %d", nic_id, result);
     }
-    
+
     return result;
 }
 
@@ -2133,67 +2180,77 @@ void buffer_rx_copybreak_free_nic(nic_id_t nic_id, buffer_desc_t* buffer) {
  * @brief Print comprehensive buffer statistics including per-NIC information
  */
 void buffer_print_comprehensive_stats(void) {
+    /* C89: All declarations must be at start of block */
+    const buffer_stats_t* stats;
+
     /* Print global legacy statistics */
     log_info("=== Legacy Global Buffer Pool Statistics ===");
-    
+
     log_info("TX Pool: %u total, %u free, %u used, peak %u",
              buffer_pool_get_total_count(&g_tx_buffer_pool),
              buffer_pool_get_free_count(&g_tx_buffer_pool),
              buffer_pool_get_used_count(&g_tx_buffer_pool),
              g_tx_buffer_pool.peak_usage);
-    
+
     log_info("RX Pool: %u total, %u free, %u used, peak %u",
              buffer_pool_get_total_count(&g_rx_buffer_pool),
              buffer_pool_get_free_count(&g_rx_buffer_pool),
              buffer_pool_get_used_count(&g_rx_buffer_pool),
              g_rx_buffer_pool.peak_usage);
-    
+
     log_info("DMA Pool: %u total, %u free, %u used, peak %u",
              buffer_pool_get_total_count(&g_dma_buffer_pool),
              buffer_pool_get_free_count(&g_dma_buffer_pool),
              buffer_pool_get_used_count(&g_dma_buffer_pool),
              g_dma_buffer_pool.peak_usage);
-    
+
     /* Print global buffer statistics */
-    const buffer_stats_t* stats = buffer_get_stats();
+    stats = buffer_get_stats();
     log_info("Global Stats: %lu total allocs, %lu failures, %lu current, %lu peak",
              stats->total_allocations, stats->allocation_failures,
              stats->current_allocated, stats->peak_allocated);
-    
+
     /* Print per-NIC statistics */
     nic_buffer_print_all_stats();
-    
+
     /* Print fast path allocation statistics */
     log_info("Fast Path Stats: %lu fast allocs, %lu cache hits, %lu fallbacks",
              g_fast_path_allocations, g_fast_path_cache_hits, g_fallback_allocations);
 }
 
+/* Monitor legacy pools - static tracking variable */
+static uint32_t g_last_legacy_monitor = 0;
+
 /**
  * @brief Monitor buffer usage and trigger rebalancing if needed
  */
 void buffer_monitor_and_rebalance(void) {
+    uint32_t current_time;
+    uint32_t tx_usage;
+    uint32_t rx_usage;
+    uint32_t dma_usage;
+
     if (!g_buffer_system_initialized) {
         return;
     }
-    
+
     /* Monitor per-NIC buffer usage */
     monitor_nic_buffer_usage();
-    
+
     /* Monitor legacy pools */
-    static uint32_t last_legacy_monitor = 0;
-    uint32_t current_time = get_system_timestamp_ms();
-    
-    if (current_time - last_legacy_monitor > 10000) { /* Every 10 seconds */
-        uint32_t tx_usage = (g_tx_buffer_pool.used_count * 100) / g_tx_buffer_pool.buffer_count;
-        uint32_t rx_usage = (g_rx_buffer_pool.used_count * 100) / g_rx_buffer_pool.buffer_count;
-        uint32_t dma_usage = (g_dma_buffer_pool.used_count * 100) / g_dma_buffer_pool.buffer_count;
-        
+    current_time = get_system_timestamp_ms();
+
+    if (current_time - g_last_legacy_monitor > 10000) { /* Every 10 seconds */
+        tx_usage = (g_tx_buffer_pool.used_count * 100) / g_tx_buffer_pool.buffer_count;
+        rx_usage = (g_rx_buffer_pool.used_count * 100) / g_rx_buffer_pool.buffer_count;
+        dma_usage = (g_dma_buffer_pool.used_count * 100) / g_dma_buffer_pool.buffer_count;
+
         if (tx_usage > 85 || rx_usage > 85 || dma_usage > 85) {
             log_warning("High legacy pool usage: TX %u%%, RX %u%%, DMA %u%%",
                        tx_usage, rx_usage, dma_usage);
         }
-        
-        last_legacy_monitor = current_time;
+
+        g_last_legacy_monitor = current_time;
     }
 }
 
@@ -2271,7 +2328,9 @@ uint32_t buffer_get_vds_physical_address(int buffer_type, uint32_t offset) {
  */
 void far* buffer_get_vds_virtual_address(int buffer_type, uint32_t offset) {
     const vds_buffer_t *vds_buf = NULL;
-    
+    uint16_t seg;
+    uint16_t off;
+
     switch (buffer_type) {
         case 0: /* TX ring */
             vds_buf = &g_vds_tx_ring_buffer;
@@ -2285,21 +2344,21 @@ void far* buffer_get_vds_virtual_address(int buffer_type, uint32_t offset) {
         default:
             return NULL;
     }
-    
+
     if (!vds_buf->allocated || offset >= vds_buf->size) {
         return NULL;
     }
-    
+
     /* Calculate far pointer with offset */
-    uint16_t seg = FP_SEG(vds_buf->virtual_addr);
-    uint16_t off = FP_OFF(vds_buf->virtual_addr) + (uint16_t)offset;
-    
+    seg = FP_SEG(vds_buf->virtual_addr);
+    off = FP_OFF(vds_buf->virtual_addr) + (uint16_t)offset;
+
     /* Handle segment wrap if needed */
     if (off < FP_OFF(vds_buf->virtual_addr)) {
         seg += 0x1000;  /* Add 64KB to segment */
         off = (uint16_t)offset - (0x10000 - FP_OFF(vds_buf->virtual_addr));
     }
-    
+
     return MK_FP(seg, off);
 }
 

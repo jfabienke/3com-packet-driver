@@ -4,10 +4,10 @@
  */
 
 #include <string.h>
-#include "../include/common.h"
-#include "../include/logging.h"
-#include "../include/pcmcia.h"
-#include "../include/pcmsnap.h"
+#include "common.h"
+#include "logging.h"
+#include "pcmcia.h"
+#include "pcmsnap.h"
 
 /* Share minimal state with manager via accessors; manager keeps static globals */
 
@@ -18,7 +18,16 @@ extern int pcmcia_manager_fill_snapshot(pcmcia_socket_info_t *entries,
 
 int pcmcia_get_snapshot(void far *dst, uint16_t max_bytes) {
     pcmcia_snapshot_header_t hdr;
-    uint8_t caps = 0;
+    pcmcia_socket_info_t temp[4];
+    char far *p;
+    uint16_t bytes_left;
+    uint16_t max_ent;
+    uint8_t caps;
+    uint8_t cnt;
+
+    /* Initialize variables */
+    caps = 0;
+    cnt = 0;
     hdr.socket_count = 0;
     hdr.capabilities = 0;
     hdr.reserved = 0;
@@ -28,18 +37,16 @@ int pcmcia_get_snapshot(void far *dst, uint16_t max_bytes) {
     }
 
     /* Far pointer write */
-    void far *p = dst;
+    p = (char far *)dst;
     _fmemcpy(p, &hdr, sizeof(hdr));
-    p = (char far *)p + sizeof(hdr);
+    p = p + sizeof(hdr);
 
     /* Fill entries */
-    uint16_t bytes_left = max_bytes - sizeof(hdr);
-    uint16_t max_entries = bytes_left / sizeof(pcmcia_socket_info_t);
-    pcmcia_socket_info_t temp[4];
+    bytes_left = max_bytes - sizeof(hdr);
+    max_ent = bytes_left / sizeof(pcmcia_socket_info_t);
     memset(temp, 0, sizeof(temp));
 
-    uint8_t cnt = 0;
-    (void)pcmcia_manager_fill_snapshot(temp, (max_entries > 4) ? 4 : (uint8_t)max_entries, &caps, &cnt);
+    (void)pcmcia_manager_fill_snapshot(temp, (max_ent > 4) ? 4 : (uint8_t)max_ent, &caps, &cnt);
     ((pcmcia_snapshot_header_t far *)dst)->capabilities = caps;
     ((pcmcia_snapshot_header_t far *)dst)->socket_count = cnt;
     if (cnt > 0) {

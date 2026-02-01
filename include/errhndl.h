@@ -25,6 +25,9 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Forward declaration to break circular dependency with hardware.h */
+struct nic_info;
+
 /* Error severity levels matching Linux conventions */
 #define ERROR_LEVEL_INFO        0   /* Informational message */
 #define ERROR_LEVEL_WARNING     1   /* Warning condition */
@@ -163,8 +166,8 @@ typedef struct {
  * for comprehensive error management and automatic recovery.
  */
 typedef struct {
-    /* Basic NIC information */
-    nic_info_t nic_info;               /* Standard NIC information */
+    /* Basic NIC information (pointer to break circular dependency) */
+    struct nic_info *nic_info;         /* Pointer to standard NIC information */
     
     /* Error statistics */
     error_stats_t error_stats;         /* Comprehensive error statistics */
@@ -193,7 +196,7 @@ typedef struct {
     uint32_t diagnostic_start_time;     /* Diagnostic mode start time */
     uint8_t last_error_type;            /* Last error type encountered */
     uint8_t last_failure_type;          /* Last adapter failure type */
-} nic_context_t;
+} nic_error_context_t;
 
 /**
  * @brief Error log entry structure for ring buffer
@@ -242,74 +245,74 @@ extern error_handling_state_t g_error_handling_state;
 /* Core error handling functions */
 int error_handling_init(void);
 void error_handling_cleanup(void);
-int error_handling_reset_stats(nic_context_t *ctx);
+int error_handling_reset_stats(nic_error_context_t *ctx);
 
 /* Error classification and handling */
-int handle_rx_error(nic_context_t *ctx, uint32_t rx_status);
-int handle_tx_error(nic_context_t *ctx, uint32_t tx_status);
-int handle_adapter_error(nic_context_t *ctx, uint8_t failure_type);
+int handle_rx_error(nic_error_context_t *ctx, uint32_t rx_status);
+int handle_tx_error(nic_error_context_t *ctx, uint32_t tx_status);
+int handle_adapter_error(nic_error_context_t *ctx, uint8_t failure_type);
 
 /* Recovery functions */
-int attempt_adapter_recovery(nic_context_t *ctx);
-int perform_soft_reset(nic_context_t *ctx);
-int perform_hard_reset(nic_context_t *ctx);
-int perform_complete_reinit(nic_context_t *ctx);
-int attempt_failover(nic_context_t *ctx);
+int attempt_adapter_recovery(nic_error_context_t *ctx);
+int perform_soft_reset(nic_error_context_t *ctx);
+int perform_hard_reset(nic_error_context_t *ctx);
+int perform_complete_reinit(nic_error_context_t *ctx);
+int attempt_failover(nic_error_context_t *ctx);
 
 /* Error rate and threshold management */
-int update_error_rate(nic_context_t *ctx);
-bool check_error_thresholds(nic_context_t *ctx);
-int escalate_recovery_strategy(nic_context_t *ctx);
+int update_error_rate(nic_error_context_t *ctx);
+bool check_error_thresholds(nic_error_context_t *ctx);
+int escalate_recovery_strategy(nic_error_context_t *ctx);
 
 /* Diagnostic and logging functions */
-void log_error(uint8_t severity, nic_context_t *ctx, uint8_t error_type, const char *format, ...);
+void log_nic_error(uint8_t severity, nic_error_context_t *ctx, uint8_t error_type, const char *format, ...);
 int write_error_to_ring_buffer(uint8_t severity, uint8_t nic_id, uint8_t error_type, 
                                uint8_t recovery_action, const char *message);
 int read_error_log_entries(error_log_entry_t *entries, int max_entries);
 
 /* Recovery validation and monitoring */
-int validate_recovery_success(nic_context_t *ctx);
-int monitor_post_recovery_health(nic_context_t *ctx);
-int schedule_recovery_retry(nic_context_t *ctx, uint32_t delay_ms);
+int validate_recovery_success(nic_error_context_t *ctx);
+int monitor_post_recovery_health(nic_error_context_t *ctx);
+int schedule_recovery_retry(nic_error_context_t *ctx, uint32_t delay_ms);
 
 /* Statistics and reporting */
-void print_error_statistics(nic_context_t *ctx);
+void print_error_statistics(nic_error_context_t *ctx);
 void print_global_error_summary(void);
 int get_system_health_status(void);
-int export_error_statistics(nic_context_t *ctx, char *buffer, size_t buffer_size);
+int export_error_statistics(nic_error_context_t *ctx, char *buffer, size_t buffer_size);
 
 /* Error threshold configuration */
-int configure_error_thresholds(nic_context_t *ctx, uint32_t max_error_rate, 
+int configure_error_thresholds(nic_error_context_t *ctx, uint32_t max_error_rate, 
                               uint32_t max_consecutive, uint32_t recovery_timeout);
 
 /* Hardware-specific error handling */
-int handle_3c509b_error(nic_context_t *ctx, uint16_t status_reg);
-int handle_3c515_error(nic_context_t *ctx, uint16_t status_reg);
+int handle_3c509b_error(nic_error_context_t *ctx, uint16_t status_reg);
+int handle_3c515_error(nic_error_context_t *ctx, uint16_t status_reg);
 
 /* Recovery strategy selection */
-int select_recovery_strategy(nic_context_t *ctx, uint8_t error_severity);
-int determine_recovery_timeout(nic_context_t *ctx, uint8_t strategy);
+int select_recovery_strategy(nic_error_context_t *ctx, uint8_t error_severity);
+int determine_recovery_timeout(nic_error_context_t *ctx, uint8_t strategy);
 
 /* Advanced Error Recovery System */
 int advanced_recovery_init(void);
 void advanced_recovery_cleanup(void);
-int enhanced_adapter_recovery(nic_context_t *ctx, uint8_t error_type);
+int enhanced_adapter_recovery(nic_error_context_t *ctx, uint8_t error_type);
 
 /* Protected Hardware Operations with Timeout */
-int protected_hardware_operation(nic_context_t *ctx, uint16_t port, uint8_t operation,
+int protected_hardware_operation(nic_error_context_t *ctx, uint16_t port, uint8_t operation,
                                 uint16_t data, uint16_t timeout_ms);
-int protected_wait_ready(nic_context_t *ctx, uint16_t status_port, uint8_t ready_mask, 
+int protected_wait_ready(nic_error_context_t *ctx, uint16_t status_port, uint8_t ready_mask, 
                         uint16_t timeout_ms);
-int protected_dma_operation(nic_context_t *ctx, uint16_t dma_port, uint8_t completion_mask,
+int protected_dma_operation(nic_error_context_t *ctx, uint16_t dma_port, uint8_t completion_mask,
                            uint16_t timeout_ms);
 
 /* Recovery Method Implementations */
-int perform_retry_recovery(nic_context_t *ctx);
-int perform_protected_soft_reset(nic_context_t *ctx);
-int perform_protected_hard_reset(nic_context_t *ctx);
-int perform_driver_restart(nic_context_t *ctx);
-int perform_adapter_disable(nic_context_t *ctx);
-int perform_system_failover(nic_context_t *ctx);
+int perform_retry_recovery(nic_error_context_t *ctx);
+int perform_protected_soft_reset(nic_error_context_t *ctx);
+int perform_protected_hard_reset(nic_error_context_t *ctx);
+int perform_driver_restart(nic_error_context_t *ctx);
+int perform_adapter_disable(nic_error_context_t *ctx);
+int perform_system_failover(nic_error_context_t *ctx);
 
 /* Recovery Statistics and Reporting */
 void print_recovery_statistics(void);

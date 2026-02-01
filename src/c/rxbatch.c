@@ -8,13 +8,13 @@
 
 #include <string.h>
 #include <dos.h>
-#include "../include/common.h"
-#include "../include/hardware.h"
-#include "../include/logging.h"
-#include "../include/bufpool.h"
-#include "../include/dmamap.h"
-#include "../include/vds.h"
-#include "../include/barrier.h"
+#include "common.h"
+#include "hardware.h"
+#include "logging.h"
+#include "bufpool.h"
+#include "dmamap.h"
+#include "vds.h"
+#include "barrier.h"
 
 /* Configuration parameters */
 #define RX_RING_SIZE          32      /* RX descriptor ring size */
@@ -308,11 +308,18 @@ int rx_batch_refill(uint8_t nic_index) {
 /**
  * Process received packet
  */
+/* External function - packet processing with NIC index for multi-NIC support */
+extern int packet_receive_process(uint8_t *raw_data, uint16_t length, uint8_t nic_index);
+
 int rx_batch_process(uint8_t nic_index) {
     rx_batch_state_t *state;
     uint16_t processed = 0;
     uint16_t idx;
-    
+    rx_desc_t *desc;
+    uint16_t pkt_len;
+    void far *pkt_buf;
+    void far *small_buf;
+
     if (nic_index >= MAX_NICS) {
         return -1;
     }
@@ -326,9 +333,8 @@ int rx_batch_process(uint8_t nic_index) {
     idx = state->tail;
     
     while (processed < RX_BUDGET) {
-        rx_desc_t *desc = &state->ring[idx];
-        uint16_t pkt_len;
-        
+        desc = &state->ring[idx];
+
         /* Check if NIC has filled this descriptor */
         if (desc->status & RX_OWN_BIT) {
             break;  /* NIC still owns it */
@@ -347,26 +353,24 @@ int rx_batch_process(uint8_t nic_index) {
         pkt_len = (desc->status >> 16) & 0x1FFF;
         
         if (pkt_len > 0 && pkt_len <= 1536) {
-            void far *pkt_buf = state->buffer_virt[idx];
-            
+            pkt_buf = state->buffer_virt[idx];
+
             /* Decide copy vs flip based on threshold */
             if (pkt_len <= g_copy_break_threshold) {
                 /* Copy to small buffer */
-                void far *small_buf = buffer_alloc_small(pkt_len);
+                small_buf = buffer_alloc_small(pkt_len);
                 if (small_buf) {
                     _fmemcpy(small_buf, pkt_buf, pkt_len);
-                    
-                    /* Pass up small buffer */
-                    extern int packet_received(void far *buf, uint16_t len);
-                    packet_received(small_buf, pkt_len);
-                    
+
+                    /* Pass up small buffer with correct NIC index */
+                    packet_receive_process((uint8_t *)small_buf, pkt_len, nic_index);
+
                     state->copy_break_count++;
                 }
             } else {
-                /* Flip - pass up large buffer, allocate new one */
-                extern int packet_received(void far *buf, uint16_t len);
-                packet_received(pkt_buf, pkt_len);
-                
+                /* Flip - pass up large buffer with correct NIC index */
+                packet_receive_process((uint8_t *)pkt_buf, pkt_len, nic_index);
+
                 /* Mark buffer as consumed */
                 state->buffer_virt[idx] = NULL;
             }

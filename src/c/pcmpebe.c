@@ -3,8 +3,8 @@
  * @brief Point Enabler (PCIC) backend - minimal helpers
  */
 
-#include "../include/common.h"
-#include "../include/logging.h"
+#include "common.h"
+#include "logging.h"
 
 /* PCIC register indices and bits (subset) */
 #define PCIC_STATUS             0x01  /* Interface Status */

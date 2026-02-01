@@ -9,8 +9,7 @@
 #ifndef _VDS_H_
 #define _VDS_H_
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
 
 /* VDS service IDs */
 #define VDS_GET_VERSION         0x8102
@@ -75,7 +74,27 @@ typedef struct {
 } VDS_SG_ENTRY;
 #pragma pack(pop)
 
+/* VDS ISA buffer flags for common buffer allocation */
+#define VDS_ISA_BUFFER_FLAGS    (VDS_FLAGS_COPY | VDS_FLAGS_64K_ALIGN)
+
+/* VDS common buffer structure for DMA-safe buffers
+ * This wraps VDS_DDS with additional convenience fields */
+typedef struct vds_buffer {
+    VDS_DDS     dds;            /* VDS DMA descriptor */
+    void __far  *virtual_addr;  /* Virtual address (segment:offset) */
+    uint32_t    physical_addr;  /* Physical address for DMA */
+    uint32_t    size;           /* Buffer size in bytes */
+    bool        allocated;      /* Buffer allocation status */
+    bool        locked;         /* Buffer locked in memory */
+} vds_buffer_t;
+
 /* Function prototypes */
+
+/**
+ * Initialize VDS subsystem
+ * @return 0 on success, non-zero on failure
+ */
+int vds_init(void);
 
 /**
  * Check if VDS is available
@@ -99,7 +118,7 @@ bool vds_get_version(uint8_t *major, uint8_t *minor, uint16_t *flags);
  * @param dds Filled with DMA descriptor
  * @return VDS error code (0 = success)
  */
-uint8_t vds_lock_region(void far *ptr, uint32_t size, VDS_DDS *dds);
+uint8_t vds_lock_region(void __far *ptr, uint32_t size, VDS_DDS *dds);
 
 /**
  * Unlock a previously locked region
@@ -124,30 +143,24 @@ uint8_t vds_request_buffer(uint32_t size, VDS_DDS *dds);
 uint8_t vds_release_buffer(VDS_DDS *dds);
 
 /**
- * Get physical address without VDS (real mode only)
- * @param ptr Far pointer
- * @return Physical address
+ * Allocate a VDS common buffer (wrapper for buffer_alloc.c compatibility)
+ * @param size Size needed
+ * @param flags VDS flags (e.g., VDS_ISA_BUFFER_FLAGS)
+ * @param buffer VDS buffer structure to fill
+ * @return true on success, false on failure
  */
-uint32_t far_ptr_to_physical(void far *ptr);
+bool vds_alloc_buffer(uint32_t size, uint16_t flags, vds_buffer_t *buffer);
 
 /**
- * Check if address crosses 64KB boundary
- * @param physical Physical address
- * @param size Size in bytes
- * @return true if crosses boundary
+ * Release a VDS common buffer (wrapper for buffer_alloc.c compatibility)
+ * @param buffer VDS buffer structure
+ * @return true on success, false on failure
  */
-bool crosses_64k_boundary(uint32_t physical, uint32_t size);
-
-/**
- * Check if address is above 16MB (ISA DMA limit)
- * @param physical Physical address
- * @return true if above 16MB
- */
-bool above_isa_limit(uint32_t physical);
+bool vds_free_buffer(vds_buffer_t *buffer);
 
 /* Inline implementations for critical functions */
 
-static inline uint32_t far_ptr_to_physical(void far *ptr) {
+static inline uint32_t far_ptr_to_physical(void __far *ptr) {
     return ((uint32_t)FP_SEG(ptr) << 4) + FP_OFF(ptr);
 }
 

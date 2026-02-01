@@ -23,22 +23,26 @@
 typedef struct device_caps device_caps_t;
 
 /* Cache management tiers */
+/* Note: cache_tier_t may already be defined by cacheche.h with compatible values */
+#ifndef _CACHE_TIER_T_DEFINED
+#define _CACHE_TIER_T_DEFINED
 typedef enum {
-    CACHE_TIER_1_CLFLUSH = 1,    /* Pentium 4+ - Surgical cache line management */
-    CACHE_TIER_2_WBINVD = 2,     /* 486+ - Complete cache flush/invalidate */
-    CACHE_TIER_3_SOFTWARE = 3,   /* 386+ - Software cache barriers */
-    CACHE_TIER_4_FALLBACK = 4,   /* 286+ - No cache management needed */
-    TIER_DISABLE_BUS_MASTER = 0  /* Disable DMA, use PIO only */
+    TIER_DISABLE_BUS_MASTER,  /* 0: Disable DMA, use PIO only */
+    CACHE_TIER_1_CLFLUSH,     /* 1: Pentium 4+ - Surgical cache line management */
+    CACHE_TIER_2_WBINVD,      /* 2: 486+ - Complete cache flush/invalidate */
+    CACHE_TIER_3_SOFTWARE,    /* 3: 386+ - Software cache barriers */
+    CACHE_TIER_4_FALLBACK     /* 4: 286+ - No cache management needed */
 } cache_tier_t;
+#endif /* _CACHE_TIER_T_DEFINED */
 
 /* DMA disabled reasons - based on GPT-5 analysis */
 typedef enum {
-    DMA_ENABLED = 0,              /* DMA is enabled and safe */
-    DMA_DISABLED_V86_MODE,        /* V86 mode prevents WBINVD execution */
-    DMA_DISABLED_CACHE_OVERHEAD,  /* Cache management overhead exceeds PIO */
-    DMA_DISABLED_ISA_486,         /* 486 on ISA: DMA worse than PIO */
-    DMA_DISABLED_USER_REQUEST,    /* User explicitly requested PIO */
-    DMA_DISABLED_SAFETY_FAIL      /* Safety tests failed */
+    DMA_ENABLED,                  /* 0: DMA is enabled and safe */
+    DMA_DISABLED_V86_MODE,        /* 1: V86 mode prevents WBINVD execution */
+    DMA_DISABLED_CACHE_OVERHEAD,  /* 2: Cache management overhead exceeds PIO */
+    DMA_DISABLED_ISA_486,         /* 3: 486 on ISA: DMA worse than PIO */
+    DMA_DISABLED_USER_REQUEST,    /* 4: User explicitly requested PIO */
+    DMA_DISABLED_SAFETY_FAIL      /* 5: Safety tests failed */
 } dma_disable_reason_t;
 
 /* Configuration flags for 486 optimization - based on GPT-5 guidance */
@@ -56,7 +60,7 @@ typedef struct {
     bool requires_bounce;                /* Must use bounce buffers */
     uint8_t confidence_level;           /* 0-100% confidence in decision */
     const char* explanation;            /* Human-readable explanation */
-} dma_policy_t;
+} dma_policy_extended_t;
 
 /* Bus master functionality test results */
 typedef enum {
@@ -80,12 +84,7 @@ typedef enum {
     SNOOPING_UNKNOWN      /* Cannot determine */
 } snooping_result_t;
 
-/* Cache mode detection */
-typedef enum {
-    CACHE_DISABLED,       /* Cache is disabled */
-    CACHE_WRITE_THROUGH,  /* Write-through cache mode */
-    CACHE_WRITE_BACK      /* Write-back cache mode */
-} cache_mode_t;
+/* Note: cache_mode_t is defined in dmacap.h (included via cpudet.h) */
 
 /* Complete coherency analysis results */
 typedef struct {
@@ -159,17 +158,17 @@ typedef enum {
 
 /* Core testing functions */
 bus_master_result_t test_basic_bus_master(void);
-coherency_result_t test_cache_coherency(void);
+coherency_result_t test_cache_coherency_basic(void);
 snooping_result_t test_hardware_snooping(void);
 
 /* Main analysis function */
 coherency_analysis_t perform_complete_coherency_analysis(void);
 
 /* Centralized DMA policy resolution */
-dma_policy_t resolve_dma_policy(void);
+dma_policy_extended_t resolve_dma_policy(void);
 
 /* Complete policy matrix for all CPU families */
-dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode, 
+dma_policy_extended_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                                          bool has_hardware_snooping, bool is_isa_bus);
 
 /* Policy matrix debugging and analysis */

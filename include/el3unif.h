@@ -7,10 +7,10 @@
 #define MAX_EL3_DEVICES 4
 
 enum el3_generation {
-    EL3_GEN_VORTEX = 0,
-    EL3_GEN_BOOMERANG,
-    EL3_GEN_CYCLONE,
-    EL3_GEN_TORNADO
+    EL3_GEN_VORTEX,     /* 0: Vortex generation */
+    EL3_GEN_BOOMERANG,  /* 1: Boomerang generation */
+    EL3_GEN_CYCLONE,    /* 2: Cyclone generation */
+    EL3_GEN_TORNADO     /* 3: Tornado generation */
 };
 
 enum el3_capabilities {

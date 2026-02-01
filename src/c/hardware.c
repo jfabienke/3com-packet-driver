@@ -22,8 +22,39 @@
 #include "errhndl.h"
 #include "bufaloc.h"
 #include "nicbufp.h"
+#include "main.h"
 #include <string.h>
 #include <stdlib.h>
+
+/* Hardware statistics structure - C89 compatible */
+typedef struct {
+    uint32_t packets_sent;          /* Total packets sent */
+    uint32_t packets_received;      /* Total packets received */
+    uint32_t send_errors;           /* Send error count */
+    uint32_t receive_errors;        /* Receive error count */
+    uint32_t successful_sends;      /* Successful sends */
+    uint32_t successful_receives;   /* Successful receives */
+    uint32_t interrupts_handled;    /* Interrupts handled */
+} hardware_stats_t;
+
+/* Per-NIC recovery statistics */
+typedef struct {
+    uint32_t consecutive_errors;    /* Consecutive error count */
+    uint32_t recovery_attempts;     /* Recovery attempts */
+    uint32_t last_error_time;       /* Last error timestamp */
+    uint32_t last_recovery_time;    /* Last recovery timestamp */
+    uint32_t error_counts[12];      /* Error counts by type */
+} nic_recovery_stats_t;
+
+/* Hardware recovery statistics structure */
+typedef struct {
+    uint32_t total_failures;        /* Total failure count */
+    uint32_t successful_recoveries; /* Successful recovery count */
+    bool failover_active;           /* Failover currently active */
+    int primary_nic;                /* Primary NIC index */
+    int backup_nic;                 /* Backup NIC index */
+    nic_recovery_stats_t nic_stats[MAX_NICS]; /* Per-NIC statistics */
+} hardware_recovery_stats_t;
 
 /* Global hardware state */
 nic_info_t g_nic_infos[MAX_NICS];
@@ -34,9 +65,9 @@ bool g_hardware_initialized = false;
 static nic_ops_t g_3c509b_ops;
 static nic_ops_t g_3c515_ops;
 
-/* HAL vtable instances for bridge to assembly layer */
-hardware_hal_vtable_t g_3c509b_hal_vtable;
-hardware_hal_vtable_t g_3c515_tx_hal_vtable;
+/* NOTE: HAL vtable instances removed 2026-01-25 - dead code.
+ * The C nic_ops_t vtable is the production path.
+ */
 
 /* Private hardware state */
 static hardware_stats_t g_hardware_stats;
@@ -57,6 +88,7 @@ static struct {
     int backup_nic;                         /* Backup NIC for failover */
     uint32_t total_failures;                /* Total failure count */
     uint32_t successful_recoveries;         /* Successful recovery count */
+    uint32_t failovers;                     /* Failover count */
 } g_error_recovery_state = {0};
 
 /* Private helper functions */
@@ -123,13 +155,6 @@ int hardware_init(void) {
     /* Initialize statistics */
     hardware_reset_stats();
 
-    /* Initialize HAL vtables for assembly layer integration */
-    result = hal_init_vtables();
-    if (result != HAL_SUCCESS) {
-        LOG_ERROR("Failed to initialize HAL vtables: %d", result);
-        return ERROR_HARDWARE;
-    }
-    
     /* Initialize NIC detection and initialization system */
     result = nic_init_system();
     if (result != SUCCESS) {
@@ -175,7 +200,12 @@ int hardware_init(void) {
     return SUCCESS;
 }
 
+/* Forward declaration for nic_irq_uninstall */
+extern void nic_irq_uninstall(void);
+
 void hardware_cleanup(void) {
+    int i;
+
     if (!g_hardware_initialized) {
         return;
     }
@@ -183,30 +213,77 @@ void hardware_cleanup(void) {
     LOG_INFO("Shutting down hardware layer");
 
     /* Restore original IRQ vector before tearing down NICs */
-    extern void nic_irq_uninstall(void);
     nic_irq_uninstall();
-    
+
     /* Cleanup all NICs */
-    {
-        int i;
-        for (i = 0; i < g_num_nics; i++) {
+    for (i = 0; i < g_num_nics; i++) {
         /* Unregister from buffer system first */
         hardware_unregister_nic_from_buffer_system(i);
-        
+
         if (g_nic_infos[i].ops && g_nic_infos[i].ops->cleanup) {
             g_nic_infos[i].ops->cleanup(&g_nic_infos[i]);
-        }
         }
     }
 
     /* Cleanup NIC initialization system */
     nic_init_cleanup();
-    
+
     /* Cleanup error handling system */
     hardware_cleanup_error_handling();
-    
+
     g_num_nics = 0;
     g_hardware_initialized = false;
+}
+
+/**
+ * @brief Get the primary (first active) NIC for testing
+ *
+ * Phase 5: Moved from hwstubs.c - now a real implementation.
+ * This is used for DMA capability testing after hardware init.
+ * Returns the first NIC that is present and initialized.
+ *
+ * @return Pointer to primary NIC or NULL if none available
+ */
+nic_info_t* hardware_get_primary_nic(void) {
+    int i;
+
+    for (i = 0; i < g_num_nics; i++) {
+        if ((g_nic_infos[i].status & NIC_STATUS_PRESENT) &&
+            (g_nic_infos[i].status & NIC_STATUS_INITIALIZED)) {
+            LOG_DEBUG("Primary NIC selected: index %d, type %d",
+                     i, g_nic_infos[i].type);
+            return &g_nic_infos[i];
+        }
+    }
+
+    LOG_WARNING("No primary NIC available for testing");
+    return NULL;
+}
+
+/**
+ * @brief Clear pending NIC interrupts
+ *
+ * Phase 5: Moved from hwstubs.c - now a real implementation.
+ * Reads/acknowledges pending interrupt status on the specified NIC.
+ *
+ * @param nic Pointer to NIC info structure
+ * @return 0 on success, negative on error
+ */
+int hardware_clear_interrupts(nic_info_t *nic) {
+    if (!nic) {
+        return -1;
+    }
+
+    /* If NIC has disable_interrupts op, use it to clear pending interrupts */
+    if (nic->ops && nic->ops->disable_interrupts) {
+        int rc = nic->ops->disable_interrupts(nic);
+        if (rc != SUCCESS) {
+            LOG_WARNING("Failed to clear interrupts on NIC: %d", rc);
+            return rc;
+        }
+    }
+
+    return SUCCESS;
 }
 
 /* NIC operations vtable management */
@@ -305,47 +382,51 @@ bool hardware_is_nic_active(int index) {
 }
 
 /* Packet operations */
-int hardware_send_packet(nic_info_t *nic, const uint8_t *packet, uint16_t length) {
+int hardware_send_packet(nic_info_t *nic, const uint8_t *packet, size_t length) {
+    int result;
+
     if (!nic || !packet || length == 0) {
         hardware_update_packet_stats(true, false);
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (!nic->ops || !nic->ops->send_packet) {
         hardware_update_packet_stats(true, false);
         return ERROR_NOT_SUPPORTED;
     }
-    
+
     if (!(nic->status & NIC_STATUS_ACTIVE)) {
         hardware_update_packet_stats(true, false);
         return ERROR_BUSY;
     }
-    
-    int result = nic->ops->send_packet(nic, packet, length);
+
+    result = nic->ops->send_packet(nic, packet, length);
     hardware_update_packet_stats(true, result == SUCCESS);
-    
+
     return result;
 }
 
-int hardware_receive_packet(nic_info_t *nic, uint8_t *buffer, uint16_t *length) {
+int hardware_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *length) {
+    int result;
+
     if (!nic || !buffer || !length) {
         hardware_update_packet_stats(false, false);
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (!nic->ops || !nic->ops->receive_packet) {
         hardware_update_packet_stats(false, false);
         return ERROR_NOT_SUPPORTED;
     }
-    
+
     if (!(nic->status & NIC_STATUS_ACTIVE)) {
         hardware_update_packet_stats(false, false);
         return ERROR_BUSY;
     }
-    
-    int result = nic->ops->receive_packet(nic, buffer, length);
+
+    result = nic->ops->receive_packet(nic, buffer, length);
     hardware_update_packet_stats(false, result == SUCCESS);
-    
+
     return result;
 }
 
@@ -359,20 +440,28 @@ int hardware_send_packet_to_nic(int nic_index, const uint8_t *packet, uint16_t l
 }
 
 int hardware_receive_packet_from_nic(int nic_index, uint8_t *buffer, uint16_t *length) {
+    int result;
+    size_t len;
     nic_info_t *nic = hardware_get_nic(nic_index);
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
-    return hardware_receive_packet(nic, buffer, length);
+
+    len = (size_t)*length;
+    result = hardware_receive_packet(nic, buffer, &len);
+    *length = (uint16_t)len;
+    return result;
 }
 
 /* Interrupt handling */
 void hardware_interrupt_handler(void) {
     int i;
+    nic_info_t *nic;
+
     for (i = 0; i < g_num_nics; i++) {
-        nic_info_t *nic = &g_nic_infos[i];
-        
+        nic = &g_nic_infos[i];
+
         if (!(nic->status & NIC_STATUS_ACTIVE) || !nic->ops) {
             continue;
         }
@@ -482,16 +571,15 @@ void hardware_clear_stats(void) {
     hardware_reset_stats();
 }
 
-void hardware_print_nic_info(int index) {
-    nic_info_t *nic = hardware_get_nic(index);
+void hardware_print_nic_info(const nic_info_t *nic) {
     if (!nic) {
-        LOG_ERROR("Invalid NIC index: %d", index);
+        LOG_ERROR("Invalid NIC pointer");
         return;
     }
-    
-    LOG_INFO("NIC %d: Type=%d, I/O=0x%X, IRQ=%d, MAC=%02X:%02X:%02X:%02X:%02X:%02X",
-             index, nic->type, nic->io_base, nic->irq,
-             nic->mac[0], nic->mac[1], nic->mac[2], 
+
+    LOG_INFO("NIC: Type=%d, I/O=0x%X, IRQ=%d, MAC=%02X:%02X:%02X:%02X:%02X:%02X",
+             nic->type, nic->io_base, nic->irq,
+             nic->mac[0], nic->mac[1], nic->mac[2],
              nic->mac[3], nic->mac[4], nic->mac[5]);
 }
 
@@ -572,17 +660,19 @@ static void hardware_update_packet_stats(bool sent, bool success) {
 
 /* 3C509B Operations */
 static int nic_3c509b_init(struct nic_info *nic) {
+    int result;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     LOG_DEBUG("Initializing 3C509B at I/O 0x%X", nic->io_base);
-    
+
     /* Reset the NIC */
     _3C509B_SELECT_WINDOW(nic->io_base, _3C509B_WINDOW_0);
     outw(nic->io_base + _3C509B_COMMAND_REG, _3C509B_CMD_GLOBAL_RESET);
     nic_delay_milliseconds(100);
-    
+
     /* Read and set MAC address */
-    int result = nic_read_mac_address_3c509b(nic->io_base, nic->mac);
+    result = nic_read_mac_address_3c509b(nic->io_base, nic->mac);
     if (result != SUCCESS) {
         LOG_ERROR("Failed to read MAC address from 3C509B");
         return result;
@@ -656,17 +746,19 @@ static int nic_3c509b_disable_interrupts(struct nic_info *nic) {
 
 /* 3C515-TX Operations */
 static int nic_3c515_init(struct nic_info *nic) {
+    int result;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     LOG_DEBUG("Initializing 3C515-TX at I/O 0x%X", nic->io_base);
-    
+
     /* Reset the NIC */
     _3C515_TX_SELECT_WINDOW(nic->io_base, _3C515_TX_WINDOW_0);
     outw(nic->io_base + _3C515_TX_COMMAND_REG, _3C515_TX_CMD_TOTAL_RESET);
     nic_delay_milliseconds(100);
-    
+
     /* Read and set MAC address */
-    int result = nic_read_mac_address_3c515(nic->io_base, nic->mac);
+    result = nic_read_mac_address_3c515(nic->io_base, nic->mac);
     if (result != SUCCESS) {
         LOG_ERROR("Failed to read MAC address from 3C515-TX");
         return result;
@@ -749,11 +841,13 @@ extern int _3c509b_cleanup(nic_info_t *nic);
 extern int _3c509b_reset(nic_info_t *nic);
 extern int _3c509b_send_packet(nic_info_t *nic, const uint8_t *packet, size_t length);
 extern int _3c509b_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *length);
-extern bool _3c509b_check_interrupt(nic_info_t *nic);
+extern int _3c509b_check_interrupt(nic_info_t *nic);
 extern void _3c509b_handle_interrupt(nic_info_t *nic);
 extern int _3c509b_self_test(nic_info_t *nic);
 extern int _3c509b_enable_interrupts(nic_info_t *nic);
 extern int _3c509b_disable_interrupts(nic_info_t *nic);
+extern int _3c509b_check_tx_complete(nic_info_t *nic);
+extern int _3c509b_check_rx_available(nic_info_t *nic);
 
 /* External function declarations for 3C515 */
 extern int _3c515_init(nic_info_t *nic);
@@ -761,11 +855,13 @@ extern int _3c515_cleanup(nic_info_t *nic);
 extern int _3c515_reset(nic_info_t *nic);
 extern int _3c515_send_packet(nic_info_t *nic, const uint8_t *packet, size_t length);
 extern int _3c515_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *length);
-extern bool _3c515_check_interrupt(nic_info_t *nic);
+extern int _3c515_check_interrupt(nic_info_t *nic);
 extern void _3c515_handle_interrupt(nic_info_t *nic);
 extern int _3c515_self_test(nic_info_t *nic);
 extern int _3c515_enable_interrupts(nic_info_t *nic);
 extern int _3c515_disable_interrupts(nic_info_t *nic);
+extern int _3c515_check_tx_complete(nic_info_t *nic);
+extern int _3c515_check_rx_available(nic_info_t *nic);
 
 /* Initialize vtables */
 static void init_3c509b_ops(void) {
@@ -1777,7 +1873,7 @@ int hardware_test_concurrent_operations(uint32_t test_duration_ms) {
     nic_info_t *nic;
     int tx_result;
     uint8_t rx_buffer[256];
-    uint16_t rx_length;
+    size_t rx_length;
     int rx_result;
     volatile int vi;
     int failure;
@@ -2156,7 +2252,7 @@ int hardware_test_resource_contention(uint32_t num_iterations) {
     nic_info_t *nic;
     int result;
     uint8_t rx_buffer[256];
-    uint16_t rx_length;
+    size_t rx_length;
     uint32_t iteration_time;
     volatile int vi;
 
@@ -2176,7 +2272,7 @@ int hardware_test_resource_contention(uint32_t num_iterations) {
             /* EtherType */
             test_packets[i][12] = 0x08; test_packets[i][13] = 0x00;
             /* Payload with NIC identifier */
-            sprintf((char*)&test_packets[i][14], \"CONTENTION_NIC_%d\", i);
+            sprintf((char*)&test_packets[i][14], "CONTENTION_NIC_%d", i);
         }
     }
 
@@ -2297,7 +2393,7 @@ int hardware_test_multi_nic_performance(uint32_t test_duration_ms) {
     int burst;
     int tx_result;
     uint8_t rx_buffer[1518];
-    uint16_t rx_length;
+    size_t rx_length;
     int rx_result;
     uint32_t actual_duration;
     uint32_t total_tx_packets = 0;
@@ -2555,37 +2651,39 @@ void hardware_cleanup_error_handling(void) {
  * @return 0 on success, negative on error
  */
 int hardware_create_error_context(nic_info_t *nic) {
+    nic_error_context_t *ctx;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_INFO("Creating error context for NIC %d (type: %d)", nic->index, nic->type);
-    
+
     /* Allocate error context */
-    nic_context_t *ctx = malloc(sizeof(nic_context_t));
+    ctx = malloc(sizeof(nic_error_context_t));
     if (!ctx) {
         LOG_ERROR("Failed to allocate error context for NIC %d", nic->index);
         return ERROR_NO_MEMORY;
     }
-    
+
     /* Initialize error context */
-    memset(ctx, 0, sizeof(nic_context_t));
-    
-    /* Copy basic NIC information */
-    memcpy(&ctx->nic_info, nic, sizeof(nic_info_t));
-    
+    memset(ctx, 0, sizeof(nic_error_context_t));
+
+    /* Link to NIC information (pointer, not copy) */
+    ctx->nic_info = nic;
+
     /* Initialize error statistics */
     error_handling_reset_stats(ctx);
-    
+
     /* Set initial state */
     ctx->link_up = nic->link_up;
     ctx->recovery_state = 0;
     ctx->recovery_strategy = RECOVERY_STRATEGY_NONE;
     ctx->adapter_disabled = false;
-    
+
     /* Link the context to the NIC */
     nic->error_context = ctx;
-    
+
     LOG_INFO("Error context created successfully for NIC %d", nic->index);
     return SUCCESS;
 }
@@ -2618,18 +2716,20 @@ void hardware_destroy_error_context(nic_info_t *nic) {
  * @return 0 on success, negative on error
  */
 int hardware_handle_rx_error(nic_info_t *nic, uint32_t rx_status) {
+    int result;
+
     if (!nic || !nic->error_context) {
         LOG_ERROR("Invalid NIC or missing error context for RX error handling");
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Update legacy error tracking */
     nic->error_count++;
     nic->rx_errors++;
     nic->last_error = rx_status;
-    
+
     /* Use comprehensive error handling */
-    int result = handle_rx_error(nic->error_context, rx_status);
+    result = handle_rx_error(nic->error_context, rx_status);
     
     /* Update NIC status based on error handling result */
     if (result == RECOVERY_FATAL || nic->error_context->adapter_disabled) {
@@ -2648,18 +2748,20 @@ int hardware_handle_rx_error(nic_info_t *nic, uint32_t rx_status) {
  * @return 0 on success, negative on error
  */
 int hardware_handle_tx_error(nic_info_t *nic, uint32_t tx_status) {
+    int result;
+
     if (!nic || !nic->error_context) {
         LOG_ERROR("Invalid NIC or missing error context for TX error handling");
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Update legacy error tracking */
     nic->error_count++;
     nic->tx_errors++;
     nic->last_error = tx_status;
-    
+
     /* Use comprehensive error handling */
-    int result = handle_tx_error(nic->error_context, tx_status);
+    result = handle_tx_error(nic->error_context, tx_status);
     
     /* Update NIC status based on error handling result */
     if (result == RECOVERY_FATAL || nic->error_context->adapter_disabled) {
@@ -2678,17 +2780,19 @@ int hardware_handle_tx_error(nic_info_t *nic, uint32_t tx_status) {
  * @return 0 on success, negative on error
  */
 int hardware_handle_adapter_error(nic_info_t *nic, uint8_t failure_type) {
+    int result;
+
     if (!nic || !nic->error_context) {
         LOG_ERROR("Invalid NIC or missing error context for adapter error handling");
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Update legacy error tracking */
     nic->error_count++;
     nic->last_error = failure_type;
-    
+
     /* Use comprehensive error handling */
-    int result = handle_adapter_error(nic->error_context, failure_type);
+    result = handle_adapter_error(nic->error_context, failure_type);
     
     /* Update NIC status based on error handling result */
     if (result == RECOVERY_FATAL || nic->error_context->adapter_disabled) {
@@ -2707,15 +2811,17 @@ int hardware_handle_adapter_error(nic_info_t *nic, uint8_t failure_type) {
  * @return 0 on success, negative on error
  */
 int hardware_attempt_recovery(nic_info_t *nic) {
+    int result;
+
     if (!nic || !nic->error_context) {
         LOG_ERROR("Invalid NIC or missing error context for recovery");
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_WARNING("Attempting recovery for NIC %d", nic->index);
-    
+
     /* Use comprehensive recovery system */
-    int result = attempt_adapter_recovery(nic->error_context);
+    result = attempt_adapter_recovery(nic->error_context);
     
     /* Update NIC status based on recovery result */
     if (result == RECOVERY_SUCCESS) {
@@ -2863,15 +2969,18 @@ int hardware_configure_error_thresholds(nic_info_t *nic, uint32_t max_error_rate
  * @return SUCCESS on success, error code on failure
  */
 static int hardware_register_nic_with_buffer_system(nic_info_t* nic, int nic_index) {
+    char nic_name[32];
+    const char* type_name;
+    int result;
+
     if (!nic || nic_index < 0 || nic_index >= MAX_NICS) {
         LOG_ERROR("Invalid parameters for NIC buffer registration");
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Create a descriptive NIC name */
-    char nic_name[32];
-    const char* type_name = "Unknown";
-    
+    type_name = "Unknown";
+
     switch (nic->type) {
         case NIC_TYPE_3C509B:
             type_name = "3C509B";
@@ -2883,13 +2992,13 @@ static int hardware_register_nic_with_buffer_system(nic_info_t* nic, int nic_ind
             type_name = "Unknown";
             break;
     }
-    
+
     snprintf(nic_name, sizeof(nic_name), "%s-%d", type_name, nic_index);
-    
+
     LOG_INFO("Registering NIC %d (%s) with per-NIC buffer pools", nic_index, nic_name);
-    
+
     /* Register with the buffer system */
-    int result = buffer_register_nic((nic_id_t)nic_index, nic->type, nic_name);
+    result = buffer_register_nic((nic_id_t)nic_index, nic->type, nic_name);
     if (result != SUCCESS) {
         LOG_ERROR("Failed to register NIC %d with buffer system: %d", nic_index, result);
         return result;
@@ -2907,15 +3016,17 @@ static int hardware_register_nic_with_buffer_system(nic_info_t* nic, int nic_ind
  * @param nic_index NIC index (used as NIC ID)
  */
 static void hardware_unregister_nic_from_buffer_system(int nic_index) {
+    int result;
+
     if (nic_index < 0 || nic_index >= MAX_NICS) {
         LOG_ERROR("Invalid NIC index for buffer unregistration: %d", nic_index);
         return;
     }
-    
+
     LOG_INFO("Unregistering NIC %d from buffer system", nic_index);
-    
+
     /* Unregister from the buffer system */
-    int result = buffer_unregister_nic((nic_id_t)nic_index);
+    result = buffer_unregister_nic((nic_id_t)nic_index);
     if (result != SUCCESS) {
         LOG_WARNING("Failed to unregister NIC %d from buffer system: %d", nic_index, result);
     } else {
@@ -2933,33 +3044,37 @@ static void hardware_unregister_nic_from_buffer_system(int nic_index) {
  * @return SUCCESS on success, error code on failure
  */
 int hardware_send_packet_buffered(nic_info_t *nic, const uint8_t *packet, uint16_t length) {
+    nic_id_t nic_id;
+    buffer_desc_t* tx_buffer;
+    int result;
+
     if (!nic || !packet || length == 0) {
         hardware_update_packet_stats(true, false);
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (!nic->ops || !nic->ops->send_packet) {
         hardware_update_packet_stats(true, false);
         return ERROR_NOT_SUPPORTED;
     }
-    
+
     if (!(nic->status & NIC_STATUS_ACTIVE)) {
         hardware_update_packet_stats(true, false);
         return ERROR_BUSY;
     }
-    
+
     /* Allocate buffer from per-NIC pool for this transmission */
-    nic_id_t nic_id = (nic_id_t)nic->index;
-    buffer_desc_t* tx_buffer = buffer_alloc_ethernet_frame_nic(nic_id, length, BUFFER_TYPE_TX);
-    
+    nic_id = (nic_id_t)nic->index;
+    tx_buffer = buffer_alloc_ethernet_frame_nic(nic_id, length, BUFFER_TYPE_TX);
+
     if (!tx_buffer) {
         LOG_WARNING("Failed to allocate TX buffer for NIC %d, using direct transmission", nic->index);
         /* Fall back to direct transmission without buffering */
-        int result = nic->ops->send_packet(nic, packet, length);
+        result = nic->ops->send_packet(nic, packet, length);
         hardware_update_packet_stats(true, result == SUCCESS);
         return result;
     }
-    
+
     /* Copy packet data to allocated buffer */
     if (buffer_set_data(tx_buffer, packet, length) != SUCCESS) {
         LOG_ERROR("Failed to copy packet data to TX buffer for NIC %d", nic->index);
@@ -2967,9 +3082,9 @@ int hardware_send_packet_buffered(nic_info_t *nic, const uint8_t *packet, uint16
         hardware_update_packet_stats(true, false);
         return ERROR_GENERIC;
     }
-    
+
     /* Send packet using the buffered data */
-    int result = nic->ops->send_packet(nic, (const uint8_t*)buffer_get_data_ptr(tx_buffer), length);
+    result = nic->ops->send_packet(nic, (const uint8_t*)buffer_get_data_ptr(tx_buffer), length);
     
     /* Free the buffer back to the per-NIC pool */
     buffer_free_nic_aware(nic_id, tx_buffer);
@@ -2993,48 +3108,57 @@ int hardware_send_packet_buffered(nic_info_t *nic, const uint8_t *packet, uint16
  * @return SUCCESS on success, error code on failure
  */
 int hardware_receive_packet_buffered(nic_info_t *nic, uint8_t *buffer, uint16_t *length) {
+    nic_id_t nic_id;
+    uint16_t buffer_size;
+    buffer_desc_t* rx_buffer;
+    size_t rx_buffer_len;
+    int result;
+    uint16_t copy_size;
+
     if (!nic || !buffer || !length) {
         hardware_update_packet_stats(false, false);
         return ERROR_INVALID_PARAM;
     }
-    
+
     if (!nic->ops || !nic->ops->receive_packet) {
         hardware_update_packet_stats(false, false);
         return ERROR_NOT_SUPPORTED;
     }
-    
+
     if (!(nic->status & NIC_STATUS_ACTIVE)) {
         hardware_update_packet_stats(false, false);
         return ERROR_BUSY;
     }
-    
-    nic_id_t nic_id = (nic_id_t)nic->index;
-    uint16_t buffer_size = *length;
-    
+
+    nic_id = (nic_id_t)nic->index;
+    buffer_size = *length;
+
     /* Try to allocate an optimized receive buffer using RX_COPYBREAK */
-    buffer_desc_t* rx_buffer = buffer_rx_copybreak_alloc_nic(nic_id, buffer_size);
-    
+    rx_buffer = buffer_rx_copybreak_alloc_nic(nic_id, buffer_size);
+
     if (!rx_buffer) {
         LOG_DEBUG("RX_COPYBREAK allocation failed for NIC %d, trying regular allocation", nic->index);
         /* Fall back to regular per-NIC allocation */
         rx_buffer = buffer_alloc_ethernet_frame_nic(nic_id, buffer_size, BUFFER_TYPE_RX);
     }
-    
+
     if (!rx_buffer) {
         LOG_WARNING("Failed to allocate RX buffer for NIC %d, using direct reception", nic->index);
         /* Fall back to direct reception without buffering */
-        int result = nic->ops->receive_packet(nic, buffer, length);
+        rx_buffer_len = (size_t)*length;
+        result = nic->ops->receive_packet(nic, buffer, &rx_buffer_len);
+        *length = (uint16_t)rx_buffer_len;
         hardware_update_packet_stats(false, result == SUCCESS);
         return result;
     }
-    
+
     /* Receive packet into the allocated buffer */
-    uint16_t rx_buffer_size = (uint16_t)buffer_get_size(rx_buffer);
-    int result = nic->ops->receive_packet(nic, (uint8_t*)buffer_get_data_ptr(rx_buffer), &rx_buffer_size);
-    
-    if (result == SUCCESS && rx_buffer_size > 0) {
+    rx_buffer_len = (size_t)buffer_get_size(rx_buffer);
+    result = nic->ops->receive_packet(nic, (uint8_t*)buffer_get_data_ptr(rx_buffer), &rx_buffer_len);
+
+    if (result == SUCCESS && rx_buffer_len > 0) {
         /* Copy received data to output buffer */
-        uint16_t copy_size = (rx_buffer_size < buffer_size) ? rx_buffer_size : buffer_size;
+        copy_size = (rx_buffer_len < buffer_size) ? (uint16_t)rx_buffer_len : buffer_size;
         memory_copy_optimized(buffer, buffer_get_data_ptr(rx_buffer), copy_size);
         *length = copy_size;
         
@@ -3186,94 +3310,10 @@ void hardware_monitor_and_maintain(void) {
     last_monitor_time = current_time;
 }
 
-/* ===== HAL VTABLE IMPLEMENTATION ===== */
-
-/**
- * @brief Forward declarations for assembly layer functions
- * These functions are implemented in the assembly layer (Groups 7A & 7B)
+/* NOTE: ASM HAL vtable infrastructure removed 2026-01-25.
+ * The C nic_ops_t vtable (get_3c509b_ops(), get_3c515_ops()) is the
+ * production path. See hwhal.h for HAL error codes and utilities.
  */
-
-/* 3C509B Assembly HAL functions */
-extern int __cdecl asm_3c509b_detect_hardware(struct nic_context *context);
-extern int __cdecl asm_3c509b_init_hardware(struct nic_context *context);
-extern int __cdecl asm_3c509b_reset_hardware(struct nic_context *context);
-extern int __cdecl asm_3c509b_configure_media(struct nic_context *context, int media_type);
-extern int __cdecl asm_3c509b_set_station_address(struct nic_context *context, const uint8_t *mac_addr);
-extern int __cdecl asm_3c509b_enable_interrupts(struct nic_context *context, uint16_t interrupt_mask);
-extern int __cdecl asm_3c509b_start_transceiver(struct nic_context *context);
-extern int __cdecl asm_3c509b_stop_transceiver(struct nic_context *context);
-extern int __cdecl asm_3c509b_get_link_status(struct nic_context *context);
-extern int __cdecl asm_3c509b_get_statistics(struct nic_context *context, hal_statistics_t *stats);
-extern int __cdecl asm_3c509b_set_multicast(struct nic_context *context, const hal_multicast_t *mc_list);
-extern int __cdecl asm_3c509b_set_promiscuous(struct nic_context *context, bool enable);
-
-/* 3C515-TX Assembly HAL functions */
-extern int __cdecl asm_3c515_detect_hardware(struct nic_context *context);
-extern int __cdecl asm_3c515_init_hardware(struct nic_context *context);
-extern int __cdecl asm_3c515_reset_hardware(struct nic_context *context);
-extern int __cdecl asm_3c515_configure_media(struct nic_context *context, int media_type);
-extern int __cdecl asm_3c515_set_station_address(struct nic_context *context, const uint8_t *mac_addr);
-extern int __cdecl asm_3c515_enable_interrupts(struct nic_context *context, uint16_t interrupt_mask);
-extern int __cdecl asm_3c515_start_transceiver(struct nic_context *context);
-extern int __cdecl asm_3c515_stop_transceiver(struct nic_context *context);
-extern int __cdecl asm_3c515_get_link_status(struct nic_context *context);
-extern int __cdecl asm_3c515_get_statistics(struct nic_context *context, hal_statistics_t *stats);
-extern int __cdecl asm_3c515_set_multicast(struct nic_context *context, const hal_multicast_t *mc_list);
-extern int __cdecl asm_3c515_set_promiscuous(struct nic_context *context, bool enable);
-
-/**
- * @brief Initialize HAL vtables with assembly layer function pointers
- * @return HAL_SUCCESS on success, error code otherwise
- */
-int hal_init_vtables(void) {
-    /* Initialize 3C509B HAL vtable */
-    g_3c509b_hal_vtable.detect_hardware = asm_3c509b_detect_hardware;
-    g_3c509b_hal_vtable.init_hardware = asm_3c509b_init_hardware;
-    g_3c509b_hal_vtable.reset_hardware = asm_3c509b_reset_hardware;
-    g_3c509b_hal_vtable.configure_media = asm_3c509b_configure_media;
-    g_3c509b_hal_vtable.set_station_address = asm_3c509b_set_station_address;
-    g_3c509b_hal_vtable.enable_interrupts = asm_3c509b_enable_interrupts;
-    g_3c509b_hal_vtable.start_transceiver = asm_3c509b_start_transceiver;
-    g_3c509b_hal_vtable.stop_transceiver = asm_3c509b_stop_transceiver;
-    g_3c509b_hal_vtable.get_link_status = asm_3c509b_get_link_status;
-    g_3c509b_hal_vtable.get_statistics = asm_3c509b_get_statistics;
-    g_3c509b_hal_vtable.set_multicast = asm_3c509b_set_multicast;
-    g_3c509b_hal_vtable.set_promiscuous = asm_3c509b_set_promiscuous;
-    
-    /* Initialize 3C515-TX HAL vtable */
-    g_3c515_tx_hal_vtable.detect_hardware = asm_3c515_detect_hardware;
-    g_3c515_tx_hal_vtable.init_hardware = asm_3c515_init_hardware;
-    g_3c515_tx_hal_vtable.reset_hardware = asm_3c515_reset_hardware;
-    g_3c515_tx_hal_vtable.configure_media = asm_3c515_configure_media;
-    g_3c515_tx_hal_vtable.set_station_address = asm_3c515_set_station_address;
-    g_3c515_tx_hal_vtable.enable_interrupts = asm_3c515_enable_interrupts;
-    g_3c515_tx_hal_vtable.start_transceiver = asm_3c515_start_transceiver;
-    g_3c515_tx_hal_vtable.stop_transceiver = asm_3c515_stop_transceiver;
-    g_3c515_tx_hal_vtable.get_link_status = asm_3c515_get_link_status;
-    g_3c515_tx_hal_vtable.get_statistics = asm_3c515_get_statistics;
-    g_3c515_tx_hal_vtable.set_multicast = asm_3c515_set_multicast;
-    g_3c515_tx_hal_vtable.set_promiscuous = asm_3c515_set_promiscuous;
-    
-    LOG_DEBUG("HAL vtables initialized successfully");
-    return HAL_SUCCESS;
-}
-
-/**
- * @brief Get HAL vtable for specified NIC type
- * @param nic_type NIC type identifier
- * @return Pointer to vtable, or NULL if not found
- */
-hardware_hal_vtable_t* hal_get_vtable(nic_type_t nic_type) {
-    switch (nic_type) {
-        case NIC_TYPE_3C509B:
-            return &g_3c509b_hal_vtable;
-        case NIC_TYPE_3C515TX:
-            return &g_3c515_tx_hal_vtable;
-        default:
-            LOG_ERROR("Unknown NIC type: %d", nic_type);
-            return NULL;
-    }
-}
 
 /**
  * @brief Convert HAL error code to string
@@ -3336,11 +3376,13 @@ void hardware_set_pnp_detection_results(const nic_detect_info_t *results, int co
  * @return Number of results copied
  */
 int hardware_get_pnp_detection_results(nic_detect_info_t *results, int max_count) {
+    int copy_count;
+
     if (!results || max_count <= 0) {
         return 0;
     }
-    
-    int copy_count = (g_pnp_detection_count < max_count) ? g_pnp_detection_count : max_count;
+
+    copy_count = (g_pnp_detection_count < max_count) ? g_pnp_detection_count : max_count;
     if (copy_count > 0) {
         memory_copy(results, g_pnp_detection_results, copy_count * sizeof(nic_detect_info_t));
     }
@@ -3357,121 +3399,6 @@ int hardware_get_pnp_detection_count(void) {
 }
 
 /**
- * @brief Initialize hardware error handling system
- * @return SUCCESS on success, error code otherwise
- */
-int hardware_init_error_handling(void) {
-    LOG_DEBUG("Initializing hardware error handling system");
-    
-    /* Initialize global error recovery state */
-    memory_zero(&g_error_recovery_state, sizeof(g_error_recovery_state));
-    g_error_recovery_state.primary_nic = -1;
-    g_error_recovery_state.backup_nic = -1;
-    
-    /* Initialize hardware error handling subsystem */
-    extern int error_handling_init(void);
-    int result = error_handling_init();
-    if (result != SUCCESS) {
-        LOG_ERROR("Failed to initialize error handling subsystem: %d", result);
-        return result;
-    }
-    
-    LOG_INFO("Hardware error handling system initialized successfully");
-    return SUCCESS;
-}
-
-/**
- * @brief Create error handling context for a specific NIC
- * @param nic Pointer to NIC information structure
- * @return SUCCESS on success, error code otherwise
- */
-int hardware_create_error_context(nic_info_t *nic) {
-    if (!nic || nic->index >= MAX_NICS) {
-        return ERROR_INVALID_PARAM;
-    }
-    
-    LOG_DEBUG("Creating error handling context for NIC %d", nic->index);
-    
-    /* Initialize per-NIC error tracking */
-    memory_zero(g_error_recovery_state.error_counts[nic->index], 
-               sizeof(g_error_recovery_state.error_counts[nic->index]));
-    g_error_recovery_state.last_error_time[nic->index] = 0;
-    g_error_recovery_state.consecutive_errors[nic->index] = 0;
-    g_error_recovery_state.recovery_attempts[nic->index] = 0;
-    g_error_recovery_state.last_recovery_time[nic->index] = 0;
-    
-    /* Create adapter-specific error context */
-    extern int create_adapter_error_context(nic_info_t *nic);
-    int result = create_adapter_error_context(nic);
-    if (result != SUCCESS) {
-        LOG_WARNING("Failed to create adapter error context for NIC %d: %d", 
-                   nic->index, result);
-        /* Continue - basic error handling will still work */
-    }
-    
-    LOG_DEBUG("Error handling context created for NIC %d", nic->index);
-    return SUCCESS;
-}
-
-/**
- * @brief Handle hardware error with automatic recovery
- * @param nic Pointer to NIC that experienced the error
- * @param error_type Type of error that occurred
- * @param error_data Additional error information
- * @return SUCCESS if handled/recovered, error code otherwise
- */
-int hardware_handle_error(nic_info_t *nic, int error_type, uint32_t error_data) {
-    if (!nic || nic->index >= MAX_NICS) {
-        return ERROR_INVALID_PARAM;
-    }
-    
-    /* Update error statistics */
-    uint32_t current_time = hardware_get_timestamp();
-    g_error_recovery_state.error_counts[nic->index][error_type]++;
-    g_error_recovery_state.last_error_time[nic->index] = current_time;
-    g_error_recovery_state.consecutive_errors[nic->index]++;
-    g_error_recovery_state.total_failures++;
-    
-    /* Log the error */
-    hardware_log_failure(nic, error_type, "Hardware error occurred");
-    
-    /* Determine if this is a critical failure */
-    bool is_critical = hardware_is_critical_failure(error_type);
-    
-    /* Check if we need immediate recovery */
-    if (g_error_recovery_state.consecutive_errors[nic->index] >= MAX_CONSECUTIVE_ERRORS ||
-        is_critical) {
-        
-        LOG_WARNING("Initiating error recovery for NIC %d (error type %d)", 
-                   nic->index, error_type);
-        
-        int recovery_result = hardware_recover_nic(nic, error_type);
-        if (recovery_result == SUCCESS) {
-            g_error_recovery_state.successful_recoveries++;
-            g_error_recovery_state.consecutive_errors[nic->index] = 0;
-            LOG_INFO("Successfully recovered NIC %d from error", nic->index);
-        } else {
-            LOG_ERROR("Failed to recover NIC %d from error: %d", nic->index, recovery_result);
-            
-            /* Consider failover if available */
-            if (g_num_nics > 1) {
-                hardware_attempt_failover(nic->index);
-            } else {
-                hardware_graceful_degradation(nic);
-            }
-        }
-        
-        return recovery_result;
-    }
-    
-    /* Non-critical error - just track it */
-    LOG_DEBUG("Non-critical error %d on NIC %d (consecutive: %d)", 
-             error_type, nic->index, g_error_recovery_state.consecutive_errors[nic->index]);
-    
-    return SUCCESS;
-}
-
-/**
  * @brief Get system timestamp for error tracking
  * @return Current timestamp
  */
@@ -3479,318 +3406,6 @@ static uint32_t hardware_get_timestamp(void) {
     /* Simple tick counter for DOS environment */
     static uint32_t tick_counter = 0;
     return ++tick_counter;
-}
-
-/* ============================================================================
- * Production Error Recovery Functions Implementation
- * ============================================================================ */
-
-/**
- * @brief Attempt to recover a NIC from failure
- * @param nic Pointer to failed NIC
- * @param failure_type Type of failure encountered
- * @return SUCCESS if recovery successful, error code otherwise
- */
-static int hardware_recover_nic(nic_info_t *nic, int failure_type) {
-    if (!nic) {
-        return ERROR_INVALID_PARAM;
-    }
-    
-    LOG_INFO("Attempting recovery of NIC %d from failure type %d", nic->index, failure_type);
-    
-    g_error_recovery_state.recovery_attempts[nic->index]++;
-    g_error_recovery_state.last_recovery_time[nic->index] = hardware_get_timestamp();
-    
-    /* Determine recovery strategy based on failure type */
-    int recovery_strategy = RECOVERY_SOFT_RESET;
-    
-    switch (failure_type) {
-        case HW_FAILURE_LINK_LOST:
-            recovery_strategy = RECOVERY_SOFT_RESET;
-            break;
-        case HW_FAILURE_TX_TIMEOUT:
-        case HW_FAILURE_RX_TIMEOUT:
-            recovery_strategy = RECOVERY_HARD_RESET;
-            break;
-        case HW_FAILURE_FIFO_OVERRUN:
-        case HW_FAILURE_DMA_ERROR:
-            recovery_strategy = RECOVERY_REINITIALIZE;
-            break;
-        case HW_FAILURE_REGISTER_CORRUPTION:
-        case HW_FAILURE_CRITICAL:
-            recovery_strategy = RECOVERY_REINITIALIZE;
-            break;
-        default:
-            recovery_strategy = RECOVERY_SOFT_RESET;
-            break;
-    }
-    
-    /* Execute recovery strategy */
-    int result = ERROR_HARDWARE;
-    
-    switch (recovery_strategy) {
-        case RECOVERY_SOFT_RESET:
-            LOG_DEBUG("Performing soft reset on NIC %d", nic->index);
-            if (nic->ops && nic->ops->reset) {
-                result = nic->ops->reset(nic);
-            }
-            break;
-            
-        case RECOVERY_HARD_RESET:
-            LOG_DEBUG("Performing hard reset on NIC %d", nic->index);
-            result = hardware_emergency_reset(nic);
-            break;
-            
-        case RECOVERY_REINITIALIZE:
-            LOG_DEBUG("Reinitializing NIC %d", nic->index);
-            if (nic->ops && nic->ops->cleanup) {
-                nic->ops->cleanup(nic);
-            }
-            if (nic->ops && nic->ops->init) {
-                result = nic->ops->init(nic);
-            }
-            break;
-            
-        default:
-            LOG_ERROR("Unknown recovery strategy: %d", recovery_strategy);
-            break;
-    }
-    
-    /* Validate recovery */
-    if (result == SUCCESS) {
-        result = hardware_validate_recovery(nic);
-        if (result == SUCCESS) {
-            LOG_INFO("Successfully recovered NIC %d using strategy %d", nic->index, recovery_strategy);
-        }
-    }
-    
-    if (result != SUCCESS) {
-        LOG_ERROR("Recovery failed for NIC %d (strategy %d): %d", nic->index, recovery_strategy, result);
-    }
-    
-    return result;
-}
-
-/**
- * @brief Attempt failover to backup NIC
- * @param failed_nic_index Index of failed NIC
- * @return SUCCESS if failover successful, error code otherwise
- */
-static int hardware_attempt_failover_recovery(int failed_nic_index) {
-    int backup_nic = -1;
-    int i;
-
-    if (failed_nic_index >= MAX_NICS) {
-        return ERROR_INVALID_PARAM;
-    }
-
-    LOG_WARNING("Attempting failover from NIC %d", failed_nic_index);
-
-    /* Find a suitable backup NIC */
-    for (i = 0; i < g_num_nics; i++) {
-        if (i != failed_nic_index &&
-            (g_nic_infos[i].status & NIC_STATUS_ACTIVE) &&
-            !(g_nic_infos[i].status & NIC_STATUS_ERROR)) {
-            backup_nic = i;
-            break;
-        }
-    }
-
-    if (backup_nic == -1) {
-        LOG_ERROR("No suitable backup NIC found for failover");
-        return ERROR_NOT_FOUND;
-    }
-
-    /* Update failover state */
-    g_error_recovery_state.failover_in_progress = true;
-    g_error_recovery_state.primary_nic = backup_nic;
-    g_error_recovery_state.backup_nic = failed_nic_index;
-    g_error_recovery_state.failovers++;
-
-    /* Disable failed NIC */
-    g_nic_infos[failed_nic_index].status |= NIC_STATUS_ERROR;
-    g_nic_infos[failed_nic_index].status &= ~NIC_STATUS_ACTIVE;
-    
-    /* Notify applications of the failover */
-    hardware_notify_application_error(failed_nic_index, ERROR_HARDWARE);
-    
-    LOG_INFO("Failover completed: NIC %d -> NIC %d", failed_nic_index, backup_nic);
-    
-    return SUCCESS;
-}
-
-/**
- * @brief Gracefully degrade NIC functionality
- * @param nic Pointer to failing NIC
- */
-static void hardware_graceful_degradation(nic_info_t *nic) {
-    if (!nic) {
-        return;
-    }
-    
-    LOG_WARNING("Initiating graceful degradation for NIC %d", nic->index);
-    
-    /* Reduce functionality to minimal operation */
-    nic->status |= NIC_STATUS_DEGRADED;
-    
-    /* Disable advanced features */
-    if (nic->capabilities & HW_CAP_DMA) {
-        LOG_DEBUG("Disabling DMA for NIC %d", nic->index);
-        /* Disable DMA operations - fall back to PIO */
-    }
-    
-    if (nic->capabilities & HW_CAP_FULL_DUPLEX) {
-        LOG_DEBUG("Forcing half-duplex for NIC %d", nic->index);
-        /* Force half-duplex operation */
-    }
-    
-    /* Reduce speed if possible */
-    if (nic->speed > 10) {
-        LOG_DEBUG("Reducing speed to 10Mbps for NIC %d", nic->index);
-        nic->speed = 10;
-    }
-    
-    /* Increase timeout values */
-    nic->tx_timeout = nic->tx_timeout * 2;
-    nic->rx_timeout = nic->rx_timeout * 2;
-    
-    LOG_INFO("NIC %d operating in degraded mode", nic->index);
-}
-
-/**
- * @brief Validate that recovery was successful
- * @param nic Pointer to recovered NIC
- * @return SUCCESS if validation passes, error code otherwise
- */
-static int hardware_validate_recovery(nic_info_t *nic) {
-    if (!nic) {
-        return ERROR_INVALID_PARAM;
-    }
-    
-    LOG_DEBUG("Validating recovery for NIC %d", nic->index);
-    
-    /* Check basic NIC responsiveness */
-    if (nic->ops && nic->ops->get_link_status) {
-        int link_status = nic->ops->get_link_status(nic);
-        if (link_status < 0) {
-            LOG_ERROR("NIC %d not responding to link status query", nic->index);
-            return ERROR_HARDWARE;
-        }
-    }
-    
-    /* Test basic register access */
-    /* This would be NIC-specific implementation */
-    
-    /* Clear error flags if validation passes */
-    nic->status &= ~NIC_STATUS_ERROR;
-    
-    LOG_DEBUG("Recovery validation successful for NIC %d", nic->index);
-    return SUCCESS;
-}
-
-/**
- * @brief Log failure details for diagnostics
- * @param nic Pointer to failed NIC
- * @param failure_type Type of failure
- * @param details Additional failure details
- */
-static void hardware_log_failure(nic_info_t *nic, int failure_type, const char* details) {
-    if (!nic || !details) {
-        return;
-    }
-    
-    const char* failure_names[] = {
-        "None", "Link Lost", "TX Timeout", "RX Timeout", "FIFO Overrun",
-        "DMA Error", "Register Corruption", "Interrupt Storm", "Memory Error",
-        "Thermal", "Power", "Critical"
-    };
-    
-    const char* failure_name = (failure_type < 12) ? failure_names[failure_type] : "Unknown";
-    
-    LOG_ERROR("NIC %d Failure: %s (%d) - %s", nic->index, failure_name, failure_type, details);
-    
-    /* Additional diagnostic logging */
-    LOG_DEBUG("NIC %d Status: 0x%X, Consecutive Errors: %d", 
-             nic->index, nic->status, g_error_recovery_state.consecutive_errors[nic->index]);
-}
-
-/**
- * @brief Perform emergency hardware reset
- * @param nic Pointer to NIC requiring emergency reset
- * @return SUCCESS if reset successful, error code otherwise
- */
-static int hardware_emergency_reset(nic_info_t *nic) {
-    int i;
-
-    if (!nic) {
-        return ERROR_INVALID_PARAM;
-    }
-
-    LOG_WARNING("Performing emergency reset on NIC %d", nic->index);
-
-    /* Perform low-level hardware reset */
-    /* This would involve direct register manipulation */
-
-    /* Wait for reset to complete */
-    for (i = 0; i < 100; i++) {
-        /* Delay and check for reset completion */
-        /* Implementation would be NIC-specific */
-    }
-
-    /* Reinitialize basic functionality */
-    if (nic->ops && nic->ops->init) {
-        return nic->ops->init(nic);
-    }
-
-    return SUCCESS;
-}
-
-/**
- * @brief Check if failure type is critical
- * @param failure_type Type of failure
- * @return true if critical, false otherwise
- */
-static bool hardware_is_critical_failure(int failure_type) {
-    switch (failure_type) {
-        case HW_FAILURE_REGISTER_CORRUPTION:
-        case HW_FAILURE_MEMORY_ERROR:
-        case HW_FAILURE_CRITICAL:
-        case HW_FAILURE_THERMAL:
-        case HW_FAILURE_POWER:
-            return true;
-        default:
-            return false;
-    }
-}
-
-/**
- * @brief Notify applications of hardware error
- * @param nic_index Index of NIC with error
- * @param error_type Type of error
- */
-static void hardware_notify_application_error(int nic_index, int error_type) {
-    LOG_INFO("Notifying applications of error on NIC %d (type %d)", nic_index, error_type);
-    /* Implementation would signal applications through packet driver interface */
-}
-
-/**
- * @brief Calculate recovery timeout based on failure type
- * @param failure_type Type of failure
- * @return Recovery timeout in milliseconds
- */
-static uint32_t hardware_calculate_recovery_timeout(int failure_type) {
-    switch (failure_type) {
-        case HW_FAILURE_LINK_LOST:
-            return 2000;    /* 2 seconds */
-        case HW_FAILURE_TX_TIMEOUT:
-        case HW_FAILURE_RX_TIMEOUT:
-            return 5000;    /* 5 seconds */
-        case HW_FAILURE_DMA_ERROR:
-        case HW_FAILURE_FIFO_OVERRUN:
-            return 1000;    /* 1 second */
-        default:
-            return 3000;    /* 3 seconds default */
-    }
 }
 
 /**
@@ -3861,10 +3476,12 @@ static int _3c515_check_rx_available(struct nic_info *nic);
 
 /* 3C509B specific implementations */
 static int _3c509b_check_tx_complete(struct nic_info *nic) {
+    uint16_t status;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     /* Check EL3_STATUS for TxComplete event */
-    uint16_t status = inw(nic->io_base + EL3_STATUS);
+    status = inw(nic->io_base + EL3_STATUS);
     if (status & TxComplete) {
         /* Acknowledge the interrupt */
         outw(AckIntr | TxComplete, nic->io_base + EL3_CMD);
@@ -3874,22 +3491,26 @@ static int _3c509b_check_tx_complete(struct nic_info *nic) {
 }
 
 static int _3c509b_check_rx_available(struct nic_info *nic) {
+    uint16_t rx_status;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     /* Switch to Window 1 for RX_STATUS access */
     EL3WINDOW(nic, 1);
-    uint16_t rx_status = inw(nic->io_base + 0x08); /* RX_STATUS register */
+    rx_status = inw(nic->io_base + 0x08); /* RX_STATUS register */
     return (rx_status > 0) ? 1 : 0; /* Non-zero means data available */
 }
 
 /* 3C515 specific implementations */
 static int _3c515_check_tx_complete(struct nic_info *nic) {
+    uint8_t tx_status;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     /* Switch to Window 1 for TxStatus access */
     EL3WINDOW(nic, 1);
-    uint8_t tx_status = inb(nic->io_base + 0x1B); /* TxStatus register */
-    
+    tx_status = inb(nic->io_base + 0x1B); /* TxStatus register */
+
     if (tx_status) {
         /* Clear the status by writing it back */
         outb(tx_status, nic->io_base + 0x1B);
@@ -3899,11 +3520,13 @@ static int _3c515_check_tx_complete(struct nic_info *nic) {
 }
 
 static int _3c515_check_rx_available(struct nic_info *nic) {
+    uint16_t rx_status;
+
     if (!nic) return ERROR_INVALID_PARAM;
-    
+
     /* Switch to Window 1 for RxStatus access */
     EL3WINDOW(nic, 1);
-    uint16_t rx_status = inw(nic->io_base + 0x18); /* RxStatus register */
+    rx_status = inw(nic->io_base + 0x18); /* RxStatus register */
     return (rx_status > 0) ? 1 : 0; /* Non-zero means data available */
 }
 
@@ -3921,11 +3544,15 @@ uint32_t hardware_get_last_error_time(uint8_t nic_index) {
 /* Attach a 3C589-like PCMCIA NIC using 3C509B PIO ops */
 int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket)
 {
+    nic_info_t *nic;
+    extern nic_ops_t* get_3c509b_ops(void);
+    int rc;
+
     if (g_num_nics >= MAX_NICS) {
         LOG_ERROR("Cannot attach PCMCIA NIC: max NICs reached");
         return -1;
     }
-    nic_info_t *nic = &g_nics[g_num_nics];
+    nic = &g_nic_infos[g_num_nics];
     memset(nic, 0, sizeof(*nic));
     nic->type = NIC_TYPE_3C509B; /* Reuse 3C509B ops for 3C589 PCMCIA */
     nic->io_base = io_base;
@@ -3933,10 +3560,9 @@ int hardware_attach_pcmcia_nic(uint16_t io_base, uint8_t irq, uint8_t socket)
     nic->status = NIC_STATUS_PRESENT | NIC_STATUS_INITIALIZED;
 
     /* Get 3C509B ops and initialize */
-    extern nic_ops_t* get_3c509b_ops(void);
     nic->ops = get_3c509b_ops();
     if (nic->ops && nic->ops->init) {
-        int rc = nic->ops->init(nic);
+        rc = nic->ops->init(nic);
         if (rc != SUCCESS) {
             LOG_ERROR("PCMCIA NIC init failed: %d", rc);
             memset(nic, 0, sizeof(*nic));
@@ -3954,7 +3580,7 @@ int hardware_find_nic_by_io_irq(uint16_t io_base, uint8_t irq)
 {
     int i;
     for (i = 0; i < g_num_nics; i++) {
-        if (g_nics[i].io_base == io_base && g_nics[i].irq == irq) return i;
+        if (g_nic_infos[i].io_base == io_base && g_nic_infos[i].irq == irq) return i;
     }
     return -1;
 }
@@ -3965,15 +3591,15 @@ int hardware_detach_nic_by_index(int index)
     int i;
     nic_info_t *nic;
     if (index < 0 || index >= g_num_nics) return -1;
-    nic = &g_nics[index];
+    nic = &g_nic_infos[index];
     LOG_INFO("Detaching NIC #%d (IO=0x%04X IRQ=%u)", index, nic->io_base, nic->irq);
     if (nic->ops && nic->ops->cleanup) nic->ops->cleanup(nic);
     buffer_unregister_nic(index);
     /* Compact array */
     for (i = index; i < g_num_nics - 1; i++) {
-        g_nics[i] = g_nics[i + 1];
+        g_nic_infos[i] = g_nic_infos[i + 1];
     }
-    memset(&g_nics[g_num_nics - 1], 0, sizeof(nic_info_t));
+    memset(&g_nic_infos[g_num_nics - 1], 0, sizeof(nic_info_t));
     g_num_nics--;
     return 0;
 }

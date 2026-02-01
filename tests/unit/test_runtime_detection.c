@@ -160,7 +160,7 @@ static void test_cache_coherency_detection_reliability(void) {
     
     /* Run multiple coherency tests */
     for (int i = 0; i < TEST_ITERATIONS; i++) {
-        results[i] = test_cache_coherency();
+        results[i] = test_cache_coherency_basic();
         
         /* Verify result is valid */
         ASSERT_TRUE(results[i] >= COHERENCY_OK && results[i] <= COHERENCY_UNKNOWN,
@@ -276,7 +276,7 @@ static void test_cache_mode_detection(void) {
         mode_results[i] = detect_cache_mode();
         
         /* Verify result is valid */
-        ASSERT_TRUE(mode_results[i] >= CACHE_DISABLED && mode_results[i] <= CACHE_UNKNOWN,
+        ASSERT_TRUE(mode_results[i] >= CACHE_MODE_UNKNOWN && mode_results[i] <= CACHE_MODE_DISABLED,
                     "Cache mode result should be valid");
         
         /* Count consistent results */
@@ -292,11 +292,11 @@ static void test_cache_mode_detection(void) {
     
     /* Verify cache mode matches coherency analysis */
     bool mode_matches_analysis = false;
-    if (mode_results[0] == CACHE_WRITE_BACK && g_baseline_analysis.write_back_cache) {
+    if (mode_results[0] == CACHE_MODE_WRITE_BACK && g_baseline_analysis.write_back_cache) {
         mode_matches_analysis = true;
-    } else if (mode_results[0] == CACHE_WRITE_THROUGH && !g_baseline_analysis.write_back_cache) {
+    } else if (mode_results[0] == CACHE_MODE_WRITE_THROUGH && !g_baseline_analysis.write_back_cache) {
         mode_matches_analysis = true;
-    } else if (mode_results[0] == CACHE_DISABLED && !g_baseline_analysis.cache_enabled) {
+    } else if (mode_results[0] == CACHE_MODE_DISABLED && !g_baseline_analysis.cache_enabled) {
         mode_matches_analysis = true;
     }
     
@@ -376,7 +376,7 @@ static void test_detection_performance_impact(void) {
     
     /* Test cache coherency timing */
     start_time = get_system_time_ms();
-    test_cache_coherency();
+    test_cache_coherency_basic();
     end_time = get_system_time_ms();
     ASSERT_TRUE((end_time - start_time) < 2000, "Cache coherency test should take less than 2 seconds");
     
@@ -562,15 +562,16 @@ static void simulate_cache_scenarios(void) {
     cache_mode_t mode = detect_cache_mode();
     
     switch (mode) {
-        case CACHE_WRITE_BACK:
+        case CACHE_MODE_WRITE_BACK:
             printf("  Write-back cache detected\n");
             break;
-        case CACHE_WRITE_THROUGH:
+        case CACHE_MODE_WRITE_THROUGH:
             printf("  Write-through cache detected\n");
             break;
-        case CACHE_DISABLED:
+        case CACHE_MODE_DISABLED:
             printf("  Cache disabled detected\n");
             break;
+        case CACHE_MODE_UNKNOWN:
         default:
             printf("  Cache mode unknown\n");
             break;

@@ -77,7 +77,8 @@ typedef struct nic_ops {
     int (*cleanup)(struct nic_info *nic);                  /* Cleanup/shutdown NIC */
     int (*reset)(struct nic_info *nic);                    /* Reset the NIC */
     int (*self_test)(struct nic_info *nic);                /* Self-test routine */
-    
+    int (*configure)(struct nic_info *nic, const void *config);  /* Configure NIC */
+
     /* Packet operations */
     int (*send_packet)(struct nic_info *nic, const uint8_t *packet, size_t len);
     int (*receive_packet)(struct nic_info *nic, uint8_t *buffer, size_t *len);
@@ -99,6 +100,7 @@ typedef struct nic_ops {
     
     /* Status and statistics */
     int (*get_link_status)(struct nic_info *nic);          /* Get link status */
+    int (*get_link_speed)(struct nic_info *nic);           /* Get link speed */
     int (*get_statistics)(struct nic_info *nic, void *stats);
     int (*clear_statistics)(struct nic_info *nic);         /* Clear statistics */
     
@@ -123,6 +125,10 @@ typedef struct nic_ops {
 /* This extended version adds driver state, statistics, and operations */
 #ifndef NIC_INFO_T_EXTENDED_DEFINED
 #define NIC_INFO_T_EXTENDED_DEFINED
+
+/* Pack nic_info_t to minimize DGROUP usage (internal bookkeeping only,
+ * not used for DMA descriptors or wire formats) */
+#pragma pack(push, 1)
 typedef struct nic_info {
     /* Basic information */
     nic_type_t type;                        /* Type of the NIC */
@@ -178,18 +184,64 @@ typedef struct nic_info {
     bool bus_snooping_verified;             /* Bus snooping has been verified */
     void *tx_descriptor_ring;               /* TX descriptor ring for DMA */
     void *rx_descriptor_ring;               /* RX descriptor ring for DMA */
+    uint16_t tx_ring_head;                  /* TX ring producer index */
+    uint16_t tx_ring_tail;                  /* TX ring consumer index */
+    uint16_t rx_ring_head;                  /* RX ring producer index */
+    uint16_t rx_ring_tail;                  /* RX ring consumer index */
     
     /* Error tracking (legacy) */
     uint32_t last_error;                    /* Last error code */
     uint32_t error_count;                   /* Total error count */
-    
+    uint32_t last_activity;                 /* Timestamp of last activity */
+
     /* Comprehensive error handling context */
-    nic_context_t *error_context;           /* Error handling context */
+    nic_error_context_t *error_context;     /* Error handling context */
     
     /* Multicast support */
     uint8_t multicast_count;                /* Number of multicast addresses */
     uint8_t multicast_list[16][ETH_ALEN];   /* Multicast address list */
+
+    /* PIO Cache Coherency State (Sprint 4B) */
+    uint8_t pio_cache_tier;                 /* Selected cache tier (0-4) */
+    uint8_t pio_cache_confidence;           /* Confidence in selection (0-100) */
+    uint8_t pio_cache_initialized;          /* Cache management initialized (bool) */
+    uint8_t pio_speculative_protection;     /* Speculative read protection active (bool) */
+
+    /* Media Configuration (Phase 0A integration) */
+    uint16_t media_capabilities;            /* Supported media types bitmask */
+    media_type_t current_media;             /* Currently selected media type */
+    media_type_t detected_media;            /* Auto-detected media type */
+    uint8_t media_detection_state;          /* Detection state flags */
+    uint8_t auto_negotiation_flags;         /* Auto-negotiation configuration */
+    uint8_t variant_id;                     /* NIC variant identifier */
+    uint8_t media_config_source;            /* How media was configured */
+
+    /* Advanced NIC capabilities */
+    uint8_t promiscuous_capable;            /* Supports promiscuous mode */
+    uint8_t multicast_capable;              /* Supports multicast filtering */
+    uint8_t dma_capable;                    /* DMA transfer capable */
+    uint8_t bus_master_capable;             /* Bus mastering capable */
+    uint8_t scatter_gather_capable;         /* Scatter-gather DMA capable */
+    uint8_t autoneg_capable;                /* Auto-negotiation capable */
+    uint8_t mii_capable;                    /* MII interface present */
+    uint8_t zero_copy_capable;              /* Zero-copy capable */
+    uint8_t descriptor_rings_capable;       /* Descriptor rings capable */
+    uint8_t interrupt_coalesce_capable;     /* Interrupt coalescing capable */
+    uint8_t promiscuous_dma_optimized;      /* DMA optimized for promiscuous */
+
+    /* MII/PHY configuration */
+    uint8_t phy_address;                    /* MII PHY address */
+    uint32_t phy_id;                        /* PHY identifier (OUI + model + rev) */
+
+    /* Interrupt mitigation settings */
+    uint8_t interrupt_coalesce_count;       /* Interrupt coalescing count */
+    uint8_t interrupt_coalesce_timeout;     /* Interrupt coalescing timeout (ms) */
+
+    /* EEPROM data for diagnostics */
+    uint16_t eeprom_size;                   /* EEPROM size in bytes */
+    uint16_t eeprom_data[32];               /* Cached EEPROM data (first 64 bytes) */
 } nic_info_t;
+#pragma pack(pop)
 #endif /* NIC_INFO_T_EXTENDED_DEFINED */
 
 /* Hardware detection and enumeration */
@@ -225,8 +277,8 @@ int hardware_send_packet(nic_info_t *nic, const uint8_t *packet, size_t len);
 int hardware_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *len);
 int hardware_check_tx_complete(nic_info_t *nic);
 int hardware_check_rx_ready(nic_info_t *nic);
-int hardware_pio_read(nic_info_t *nic, void far *buffer, uint16_t size);
-int hardware_dma_read(nic_info_t *nic, void far *buffer, uint16_t size);
+int hardware_pio_read(nic_info_t *nic, void FAR *buffer, uint16_t size);
+int hardware_dma_read(nic_info_t *nic, void FAR *buffer, uint16_t size);
 int hardware_set_loopback_mode(nic_info_t *nic, bool enable);
 int hardware_check_rx_available(nic_info_t *nic);
 
@@ -236,6 +288,7 @@ void hardware_handle_nic_interrupt(nic_info_t *nic);
 int hardware_check_interrupt_source(void);
 int hardware_enable_interrupts(nic_info_t *nic);
 int hardware_disable_interrupts(nic_info_t *nic);
+int hardware_clear_interrupts(nic_info_t *nic);
 
 /* Configuration functions */
 int hardware_set_mac_address(nic_info_t *nic, const uint8_t *mac);
@@ -250,6 +303,8 @@ int hardware_get_nic_statistics(nic_info_t *nic, void *stats);
 int hardware_clear_nic_statistics(nic_info_t *nic);
 void hardware_print_nic_info(const nic_info_t *nic);
 void hardware_dump_registers(const nic_info_t *nic);
+const char* hardware_nic_type_to_string(nic_type_t type);
+const char* hardware_nic_status_to_string(uint32_t status);
 
 /* NIC-specific operations retrieval */
 nic_ops_t* get_3c509b_ops(void);                /* Get 3C509B operations */

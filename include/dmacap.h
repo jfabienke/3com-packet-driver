@@ -11,24 +11,30 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../include/platform_probe.h"
-#include "../include/hardware.h"
+#include "pltprob.h"
+#include "hardware.h"
 
-/* Test result codes */
+/* Test result codes - C89 compatible, use #define for actual values */
+#define DMA_TEST_SUCCESS_VAL       0
+#define DMA_TEST_FAILED_VAL        (-1)
+#define DMA_TEST_SKIPPED_VAL       (-2)
+#define DMA_TEST_NOT_SUPPORTED_VAL (-3)
+#define DMA_TEST_TIMEOUT_VAL       (-4)
+
 typedef enum {
-    DMA_TEST_SUCCESS = 0,
-    DMA_TEST_FAILED = -1,
-    DMA_TEST_SKIPPED = -2,
-    DMA_TEST_NOT_SUPPORTED = -3,
-    DMA_TEST_TIMEOUT = -4
+    DMA_TEST_SUCCESS,           /* 0 */
+    DMA_TEST_FAILED,            /* -1 via define */
+    DMA_TEST_SKIPPED,           /* -2 via define */
+    DMA_TEST_NOT_SUPPORTED,     /* -3 via define */
+    DMA_TEST_TIMEOUT            /* -4 via define */
 } dma_test_result_t;
 
-/* Cache modes */
+/* Cache modes - C89 compatible */
 typedef enum {
-    CACHE_MODE_UNKNOWN = 0,
-    CACHE_MODE_WRITE_THROUGH,
-    CACHE_MODE_WRITE_BACK,
-    CACHE_MODE_DISABLED
+    CACHE_MODE_UNKNOWN,         /* 0 */
+    CACHE_MODE_WRITE_THROUGH,   /* 1 */
+    CACHE_MODE_WRITE_BACK,      /* 2 */
+    CACHE_MODE_DISABLED         /* 3 */
 } cache_mode_t;
 
 /* Individual test results */
@@ -206,7 +212,7 @@ void print_dma_test_results(dma_test_results_t *results);
 
 /* Phase 4.5 DMA test functions (early boot, no NIC required) */
 int test_dma_cache_coherency(dma_test_config_t *config);
-int test_bus_snooping(dma_test_config_t *config);
+int test_bus_snooping_early(dma_test_config_t *config);
 int run_dma_tests(dma_test_config_t *config);
 dma_test_results_t* get_dma_test_results(void);
 

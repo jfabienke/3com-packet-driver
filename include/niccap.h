@@ -25,33 +25,36 @@ extern "C" {
 /* Forward declarations */
 struct nic_context;
 struct nic_info;
+typedef struct nic_info nic_info_t;
 
 /**
- * @brief NIC Capability Flags Enumeration
- * 
+ * @brief NIC Capability Flags
+ *
  * These flags define the capabilities of different NIC models, enabling
  * capability-driven logic instead of scattered NIC type checks.
+ * Note: Use #defines for bitmask values (C89 compatible)
  */
-typedef enum {
-    NIC_CAP_NONE            = 0x0000,  /* No special capabilities */
-    NIC_CAP_BUSMASTER       = 0x0001,  /* DMA/Bus mastering support */
-    NIC_CAP_PLUG_PLAY       = 0x0002,  /* Plug and Play support */
-    NIC_CAP_EEPROM          = 0x0004,  /* EEPROM configuration */
-    NIC_CAP_MII             = 0x0008,  /* MII interface */
-    NIC_CAP_FULL_DUPLEX     = 0x0010,  /* Full duplex support */
-    NIC_CAP_100MBPS         = 0x0020,  /* 100 Mbps support */
-    NIC_CAP_HWCSUM          = 0x0040,  /* Hardware checksumming */
-    NIC_CAP_WAKEUP          = 0x0080,  /* Wake on LAN */
-    NIC_CAP_VLAN            = 0x0100,  /* VLAN tagging */
-    NIC_CAP_MULTICAST       = 0x0200,  /* Multicast filtering */
-    NIC_CAP_DIRECT_PIO      = 0x0400,  /* Direct PIO optimization */
-    NIC_CAP_RX_COPYBREAK    = 0x0800,  /* RX copybreak optimization */
-    NIC_CAP_INTERRUPT_MIT   = 0x1000,  /* Interrupt mitigation */
-    NIC_CAP_RING_BUFFER     = 0x2000,  /* Ring buffer support */
-    NIC_CAP_ENHANCED_STATS  = 0x4000,  /* Enhanced statistics */
-    NIC_CAP_ERROR_RECOVERY  = 0x8000,  /* Advanced error recovery */
-    NIC_CAP_FLOW_CONTROL    = 0x10000  /* 802.3x flow control support */
-} nic_capability_flags_t;
+#define NIC_CAP_NONE            0x0000U  /* No special capabilities */
+#define NIC_CAP_BUSMASTER       0x0001U  /* DMA/Bus mastering support */
+#define NIC_CAP_PLUG_PLAY       0x0002U  /* Plug and Play support */
+#define NIC_CAP_EEPROM          0x0004U  /* EEPROM configuration */
+#define NIC_CAP_MII             0x0008U  /* MII interface */
+#define NIC_CAP_FULL_DUPLEX     0x0010U  /* Full duplex support */
+#define NIC_CAP_100MBPS         0x0020U  /* 100 Mbps support */
+#define NIC_CAP_HWCSUM          0x0040U  /* Hardware checksumming */
+#define NIC_CAP_WAKEUP          0x0080U  /* Wake on LAN */
+#define NIC_CAP_VLAN            0x0100U  /* VLAN tagging */
+#define NIC_CAP_MULTICAST       0x0200U  /* Multicast filtering */
+#define NIC_CAP_DIRECT_PIO      0x0400U  /* Direct PIO optimization */
+#define NIC_CAP_RX_COPYBREAK    0x0800U  /* RX copybreak optimization */
+#define NIC_CAP_INTERRUPT_MIT   0x1000U  /* Interrupt mitigation */
+#define NIC_CAP_RING_BUFFER     0x2000U  /* Ring buffer support */
+#define NIC_CAP_ENHANCED_STATS  0x4000U  /* Enhanced statistics */
+#define NIC_CAP_ERROR_RECOVERY  0x8000U  /* Advanced error recovery */
+#define NIC_CAP_FLOW_CONTROL    0x10000UL /* 802.3x flow control support */
+#define NIC_CAP_DMA_8237        0x20000UL /* ISA 8237 DMA controller support */
+
+typedef uint32_t nic_capability_flags_t;
 
 /**
  * @brief NIC Virtual Function Table (VTable)
@@ -318,8 +321,8 @@ bool nic_validate_capabilities(const nic_context_t *ctx, nic_capability_flags_t 
  * @param irq IRQ number
  * @return 0 on success, negative on error
  */
-int nic_context_init(nic_context_t *ctx, const nic_info_entry_t *info_entry, 
-                     uint16_t io_base, uint8_t irq);
+int nic_context_init_from_info(nic_context_t *ctx, const nic_info_entry_t *info_entry,
+                               uint16_t io_base, uint8_t irq);
 
 /**
  * @brief Cleanup NIC context

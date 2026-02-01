@@ -4,7 +4,7 @@
  *
  * This module provides a unified API that combines:
  * - DMA boundary checking and bounce buffers
- * - Cache coherency management  
+ * - Cache coherency management
  * - Direction-specific operations
  * - Automatic cleanup and error handling
  *
@@ -14,11 +14,19 @@
 #include "dmamap.h"
 #include "dmabnd.h"
 #include "cacheche.h"
-#include "../include/vds.h"
-#include "../include/pltprob.h"
-#include "logging.h"
+#include "vds.h"
+#include "vds_mapping.h"
+#include "pltprob.h"
+#include "diag.h"      /* For LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR macros */
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
+
+/* External function declarations - GPT-5 device constraint validation */
+extern bool dma_validate_buffer_constraints(const char *device_name,
+                                           void *buffer, uint32_t size,
+                                           uint32_t physical_addr);
 
 /* Internal DMA mapping structure - enhanced for VDS */
 struct dma_mapping {
@@ -108,7 +116,7 @@ void dma_mapping_shutdown(void) {
     LOG_INFO("Shutting down DMA mapping layer");
     
     if (g_stats.active_mappings > 0) {
-        LOG_WARN("Shutdown with %u active mappings", g_stats.active_mappings);
+        LOG_WARNING("Shutdown with %u active mappings", g_stats.active_mappings);
     }
     
     cache_coherency_shutdown();
@@ -149,25 +157,31 @@ static dma_mapping_t* create_mapping(void *buffer, size_t len, dma_sync_directio
 
 static int setup_dma_mapping(dma_mapping_t *mapping) {
     void *dma_buffer;
-    bool force_bounce = (mapping->flags & DMA_MAP_FORCE_BOUNCE) != 0;
-    uint16_t cacheline_size = get_cache_line_size();
-    
+    bool force_bounce;
+    uint16_t cacheline_size;
+    bool needs_alignment_bounce;
+    bool force_vds;
+    uint16_t vds_flags;
+    void *bounce_buf;
+    dma_check_result_t bounce_check;
+
+    /* C89: Initialize variables after declarations */
+    force_bounce = (mapping->flags & DMA_MAP_FORCE_BOUNCE) != 0;
+    cacheline_size = get_cache_line_size();
+
     /* GPT-5 Critical: Check cacheline alignment safety */
-    bool needs_alignment_bounce = needs_bounce_for_alignment(mapping->original_buffer, 
-                                                            mapping->length, cacheline_size);
+    needs_alignment_bounce = needs_bounce_for_alignment(mapping->original_buffer,
+                                                        mapping->length, cacheline_size);
     if (needs_alignment_bounce) {
         LOG_DEBUG("DMA mapping: Cacheline alignment requires bounce buffer");
     }
-    
+
     /* Check DMA safety with framework constraints */
     /* GPT-5 CRITICAL: Use DMA safety framework for per-NIC constraint checking */
-    extern bool dma_validate_buffer_constraints(const char *device_name, 
-                                               void *buffer, uint32_t size,
-                                               uint32_t physical_addr);
     
     if (!dma_check_buffer_safety(mapping->original_buffer, mapping->length, &mapping->dma_check)) {
-        LOG_ERROR("DMA safety check failed for buffer %p len=%zu", 
-                  mapping->original_buffer, mapping->length);
+        LOG_ERROR("DMA safety check failed for buffer %p len=%lu",
+                  mapping->original_buffer, (unsigned long)mapping->length);
         g_stats.mapping_errors++;
         return DMA_MAP_ERROR_BOUNDARY;
     }
@@ -192,7 +206,7 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
         }
         
         if (!dma_buffer) {
-            LOG_ERROR("Failed to allocate bounce buffer len=%zu", mapping->length);
+            LOG_ERROR("Failed to allocate bounce buffer len=%lu", (unsigned long)mapping->length);
             g_stats.mapping_errors++;
             return DMA_MAP_ERROR_NO_BOUNCE;
         }
@@ -211,12 +225,12 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
     }
     
     /* Calculate physical address - use VDS if available and needed */
-    bool force_vds = (mapping->flags & DMA_MAP_VDS_ZEROCOPY) != 0;
+    force_vds = (mapping->flags & DMA_MAP_VDS_ZEROCOPY) != 0;
     if ((platform_get_dma_policy() == DMA_POLICY_COMMONBUF || force_vds) && !mapping->uses_bounce) {
         /* Try VDS lock for direct mapping */
-        uint16_t vds_flags = (mapping->direction == DMA_SYNC_TX) ? VDS_TX_FLAGS : VDS_RX_FLAGS;
+        vds_flags = (mapping->direction == DMA_SYNC_TX) ? VDS_TX_FLAGS : VDS_RX_FLAGS;
         
-        if (vds_lock_region(mapping->mapped_address, mapping->length, vds_flags, &mapping->vds_mapping)) {
+        if (vds_lock_region_mapped(mapping->mapped_address, mapping->length, vds_flags, &mapping->vds_mapping)) {
             mapping->phys_addr = mapping->vds_mapping.physical_addr;
             mapping->uses_vds = true;
             LOG_DEBUG("DMA: VDS lock successful - virt=%p phys=%08lX", 
@@ -227,16 +241,16 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
             if (mapping->phys_addr >= 0x1000000UL) {
                 LOG_WARNING("VDS address exceeds 16MB ISA limit: %08lX, using bounce", 
                            (unsigned long)mapping->phys_addr);
-                vds_unlock_region(&mapping->vds_mapping);
+                vds_unlock_region_mapped(&mapping->vds_mapping);
                 mapping->uses_vds = false;
                 mapping->uses_bounce = true;
                 g_stats.bounce_mappings++;
             }
             /* Check 2: 64KB boundary crossing (ISA DMA limitation) */
             else if (((mapping->phys_addr & 0xFFFFUL) + mapping->length) > 0x10000UL) {
-                LOG_WARNING("VDS buffer crosses 64KB boundary: addr=%08lX len=%zu, using bounce",
-                           (unsigned long)mapping->phys_addr, mapping->length);
-                vds_unlock_region(&mapping->vds_mapping);
+                LOG_WARNING("VDS buffer crosses 64KB boundary: addr=%08lX len=%lu, using bounce",
+                           (unsigned long)mapping->phys_addr, (unsigned long)mapping->length);
+                vds_unlock_region_mapped(&mapping->vds_mapping);
                 mapping->uses_vds = false;
                 mapping->uses_bounce = true;
                 g_stats.bounce_mappings++;
@@ -244,7 +258,7 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
             /* Check 3: Contiguity requirement for 3C515 (no scatter-gather) */
             else if (!mapping->vds_mapping.is_contiguous) {
                 LOG_WARNING("VDS returned non-contiguous mapping, 3C515 requires contiguous, using bounce");
-                vds_unlock_region(&mapping->vds_mapping);
+                vds_unlock_region_mapped(&mapping->vds_mapping);
                 mapping->uses_vds = false;
                 mapping->uses_bounce = true;
                 g_stats.bounce_mappings++;
@@ -253,7 +267,7 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
             else if (!vds_is_isa_compatible(mapping->phys_addr, mapping->length)) {
                 LOG_ERROR("VDS returned non-ISA compatible address: %08lX", 
                          (unsigned long)mapping->phys_addr);
-                vds_unlock_region(&mapping->vds_mapping);
+                vds_unlock_region_mapped(&mapping->vds_mapping);
                 mapping->uses_vds = false;
                 return DMA_MAP_ERROR_BOUNDARY;
             }
@@ -268,7 +282,6 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
     /* GPT-5 FIX: Allocate bounce buffer if VDS constraints failed */
     if (mapping->uses_bounce && mapping->mapped_address == mapping->original_buffer) {
         /* VDS failed constraints - need to allocate bounce buffer now */
-        void *bounce_buf;
         if (mapping->direction == DMA_SYNC_TX || (mapping->flags & DMA_MAP_READ)) {
             bounce_buf = dma_get_tx_bounce_buffer(mapping->length);
         } else {
@@ -293,7 +306,6 @@ static int setup_dma_mapping(dma_mapping_t *mapping) {
         mapping->phys_addr = mapping->dma_check.phys_addr;
         if (mapping->uses_bounce) {
             /* Recalculate for bounce buffer */
-            dma_check_result_t bounce_check;
             if (!dma_check_buffer_safety(mapping->mapped_address, mapping->length, &bounce_check)) {
                 LOG_ERROR("Bounce buffer safety check failed");
                 return DMA_MAP_ERROR_BOUNDARY;
@@ -360,12 +372,12 @@ void dma_unmap_tx(dma_mapping_t *mapping) {
     
     /* Release bounce buffer if used */
     if (mapping->uses_bounce) {
-        dma_return_tx_bounce_buffer(mapping->mapped_address);
+        dma_release_tx_bounce_buffer(mapping->mapped_address);
     }
     
     /* CRITICAL: Unlock VDS mapping if used (deferred from ISR) */
     if (mapping->uses_vds && mapping->vds_mapping.needs_unlock) {
-        if (!vds_unlock_region(&mapping->vds_mapping)) {
+        if (!vds_unlock_region_mapped(&mapping->vds_mapping)) {
             LOG_WARNING("VDS unlock failed for TX mapping %p", mapping);
         }
         LOG_DEBUG("VDS TX mapping unlocked");
@@ -424,12 +436,12 @@ void dma_unmap_rx(dma_mapping_t *mapping) {
     /* Copy data back if using bounce buffer */
     if (mapping->uses_bounce) {
         memcpy(mapping->original_buffer, mapping->mapped_address, mapping->length);
-        dma_return_rx_bounce_buffer(mapping->mapped_address);
+        dma_release_rx_bounce_buffer(mapping->mapped_address);
     }
     
     /* CRITICAL: Unlock VDS mapping if used (deferred from ISR) */
     if (mapping->uses_vds && mapping->vds_mapping.needs_unlock) {
-        if (!vds_unlock_region(&mapping->vds_mapping)) {
+        if (!vds_unlock_region_mapped(&mapping->vds_mapping)) {
             LOG_WARNING("VDS unlock failed for RX mapping %p", mapping);
         }
         LOG_DEBUG("VDS RX mapping unlocked");
@@ -466,12 +478,17 @@ void dma_unmap_buffer(dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
         return;
     }
-    
+
     if (mapping->direction == DMA_SYNC_TX) {
         dma_unmap_tx(mapping);
     } else {
         dma_unmap_rx(mapping);
     }
+}
+
+/* Static wrapper for internal use - alias to dma_unmap_buffer */
+static void dma_unmap(dma_mapping_t *mapping) {
+    dma_unmap_buffer(mapping);
 }
 
 /* Mapping information access */
@@ -496,25 +513,25 @@ size_t dma_mapping_get_length(const dma_mapping_t *mapping) {
     return mapping->length;
 }
 
-bool dma_mapping_uses_bounce(const dma_mapping_t *mapping) {
+int dma_mapping_uses_bounce(const dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
-        return false;
+        return 0;
     }
-    return mapping->uses_bounce;
+    return mapping->uses_bounce ? 1 : 0;
 }
 
-bool dma_mapping_is_coherent(const dma_mapping_t *mapping) {
+int dma_mapping_is_coherent(const dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
-        return false;
+        return 0;
     }
-    return mapping->is_coherent;
+    return mapping->is_coherent ? 1 : 0;
 }
 
-bool dma_mapping_uses_vds(const dma_mapping_t *mapping) {
+int dma_mapping_uses_vds(const dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
-        return false;
+        return 0;
     }
-    return mapping->uses_vds;
+    return mapping->uses_vds ? 1 : 0;
 }
 
 /* Synchronization functions */
@@ -522,34 +539,32 @@ int dma_mapping_sync_for_device(dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
         return DMA_MAP_ERROR_NOT_MAPPED;
     }
-    
+
     if (mapping->is_coherent || (mapping->flags & DMA_MAP_NO_CACHE_SYNC)) {
         return DMA_MAP_SUCCESS;
     }
-    
-    int result = dma_sync_for_device(mapping->mapped_address, mapping->length, mapping->direction);
-    if (result == 0) {
-        g_stats.cache_syncs++;
-    }
-    
-    return result == 0 ? DMA_MAP_SUCCESS : DMA_MAP_ERROR_CACHE;
+
+    /* Call direction-specific cache operation */
+    cache_sync_for_device(mapping->mapped_address, mapping->length);
+    g_stats.cache_syncs++;
+
+    return DMA_MAP_SUCCESS;
 }
 
 int dma_mapping_sync_for_cpu(dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
         return DMA_MAP_ERROR_NOT_MAPPED;
     }
-    
+
     if (mapping->is_coherent || (mapping->flags & DMA_MAP_NO_CACHE_SYNC)) {
         return DMA_MAP_SUCCESS;
     }
-    
-    int result = dma_sync_for_cpu(mapping->mapped_address, mapping->length, mapping->direction);
-    if (result == 0) {
-        g_stats.cache_syncs++;
-    }
-    
-    return result == 0 ? DMA_MAP_SUCCESS : DMA_MAP_ERROR_CACHE;
+
+    /* Call direction-specific cache operation */
+    cache_sync_for_cpu(mapping->mapped_address, mapping->length);
+    g_stats.cache_syncs++;
+
+    return DMA_MAP_SUCCESS;
 }
 
 /* Batch operations for scatter-gather */
@@ -652,48 +667,47 @@ void dma_mapping_reset_stats(void) {
 }
 
 /* Validation and testing */
-bool dma_mapping_validate(const dma_mapping_t *mapping) {
+int dma_mapping_validate(const dma_mapping_t *mapping) {
     if (!validate_mapping(mapping)) {
-        return false;
+        return 0;
     }
-    
+
     /* Additional validation checks */
     if (!mapping->mapped_address || mapping->length == 0) {
-        return false;
+        return 0;
     }
-    
+
     if (mapping->uses_bounce && mapping->mapped_address == mapping->original_buffer) {
-        return false;
+        return 0;
     }
-    
-    return true;
+
+    return 1;
 }
 
 int dma_mapping_test_coherency(void *buffer, size_t len) {
     /* Simple coherency test - write pattern, sync, verify */
-    uint8_t *test_buf = (uint8_t*)buffer;
-    uint8_t pattern = 0xAA;
+    uint8_t *test_buf;
+    uint8_t pattern;
     size_t i;
-    
+
     if (!buffer || len == 0) {
         return DMA_MAP_ERROR_INVALID_PARAM;
     }
-    
+
+    test_buf = (uint8_t*)buffer;
+    pattern = 0xAA;
+
     /* Write test pattern */
     for (i = 0; i < len; i++) {
         test_buf[i] = pattern;
     }
-    
-    /* Sync for device */
-    if (dma_sync_for_device(buffer, len, DMA_SYNC_TX) != 0) {
-        return DMA_MAP_ERROR_CACHE;
-    }
-    
-    /* Sync for CPU */
-    if (dma_sync_for_cpu(buffer, len, DMA_SYNC_RX) != 0) {
-        return DMA_MAP_ERROR_CACHE;
-    }
-    
+
+    /* Sync for device (flush cache so device sees the writes) */
+    cache_sync_for_device(buffer, len);
+
+    /* Sync for CPU (invalidate cache to see device writes) */
+    cache_sync_for_cpu(buffer, len);
+
     /* Verify pattern */
     for (i = 0; i < len; i++) {
         if (test_buf[i] != pattern) {
@@ -705,13 +719,13 @@ int dma_mapping_test_coherency(void *buffer, size_t len) {
 }
 
 /* Performance optimization */
-void dma_mapping_enable_fast_path(bool enable) {
-    g_fast_path_enabled = enable;
+void dma_mapping_enable_fast_path(int enable) {
+    g_fast_path_enabled = enable ? true : false;
     LOG_INFO("DMA mapping fast path %s", enable ? "enabled" : "disabled");
 }
 
-bool dma_mapping_is_fast_path_enabled(void) {
-    return g_fast_path_enabled;
+int dma_mapping_is_fast_path_enabled(void) {
+    return g_fast_path_enabled ? 1 : 0;
 }
 
 uint32_t dma_mapping_get_cache_hit_rate(void) {
@@ -733,17 +747,12 @@ uint32_t dma_mapping_get_cache_hit_rate(void) {
  * @param device_name NIC device name (e.g., "3C509B", "3C515TX")
  * @return Mapped DMA descriptor or NULL on failure
  */
-dma_mapping_t* dma_map_with_device_constraints(void *buffer, size_t length, 
+dma_mapping_t* dma_map_with_device_constraints(void *buffer, size_t length,
                                               dma_sync_direction_t direction,
                                               const char *device_name) {
     dma_mapping_t *mapping;
     uint32_t phys_addr;
-    
-    /* GPT-5 FIX: Remove invalid pre-check, map first then validate with real address */
-    extern bool dma_validate_buffer_constraints(const char *device_name, 
-                                               void *buffer, uint32_t size,
-                                               uint32_t physical_addr);
-    
+
     /* Map normally first */
     mapping = dma_map_buffer_flags(buffer, length, direction, 0);
     if (!mapping) {
@@ -792,68 +801,75 @@ dma_mapping_t* dma_map_from_sg_descriptor(dma_sg_descriptor_t *sg_desc, dma_sync
     if (!sg_desc) {
         return NULL;
     }
-    
+
     /* Convert scatter-gather descriptor to buffer mapping */
-    return dma_map_buffer_flags(sg_desc->buffer, sg_desc->length, direction, 0);
+    return dma_map_buffer_flags(sg_desc->original_buffer, sg_desc->total_length, direction, 0);
 }
 
 int dma_mapping_to_sg_list(const dma_mapping_t *mapping, dma_sg_descriptor_t **sg_desc) {
     dma_sg_descriptor_t *desc;
-    
+
     if (!validate_mapping(mapping) || !sg_desc) {
         return DMA_MAP_ERROR_INVALID_PARAM;
     }
-    
+
     desc = malloc(sizeof(dma_sg_descriptor_t));
     if (!desc) {
         return DMA_MAP_ERROR_NO_MEMORY;
     }
-    
-    desc->buffer = mapping->mapped_address;
-    desc->length = mapping->length;
-    desc->phys_addr = mapping->phys_addr;
-    
+
+    /* Initialize the descriptor with a single segment */
+    desc->original_buffer = mapping->mapped_address;
+    desc->total_length = (uint32_t)mapping->length;
+    desc->segment_count = 1;
+    desc->uses_bounce = mapping->uses_bounce;
+    desc->segments[0].phys_addr = mapping->phys_addr;
+    desc->segments[0].length = (uint16_t)mapping->length;
+    desc->segments[0].is_bounce = mapping->uses_bounce;
+    desc->segments[0].bounce_ptr = mapping->uses_bounce ? mapping->mapped_address : NULL;
+
     *sg_desc = desc;
     return DMA_MAP_SUCCESS;
 }
 
 /* Advanced features */
-int dma_mapping_set_cache_policy(dma_mapping_t *mapping, bool coherent) {
+int dma_mapping_set_cache_policy(dma_mapping_t *mapping, int coherent) {
     if (!validate_mapping(mapping)) {
         return DMA_MAP_ERROR_NOT_MAPPED;
     }
-    
-    mapping->is_coherent = coherent;
+
+    mapping->is_coherent = coherent ? true : false;
     if (coherent) {
         mapping->flags |= DMA_MAP_COHERENT;
     } else {
         mapping->flags &= ~DMA_MAP_COHERENT;
     }
-    
+
     return DMA_MAP_SUCCESS;
 }
 
 int dma_mapping_prefault(dma_mapping_t *mapping) {
     uint8_t *addr;
     size_t i;
-    
+    volatile uint8_t dummy;
+
     if (!validate_mapping(mapping)) {
         return DMA_MAP_ERROR_NOT_MAPPED;
     }
-    
+
     /* Touch every page to ensure it's mapped */
     addr = (uint8_t*)mapping->mapped_address;
     for (i = 0; i < mapping->length; i += 4096) {
-        volatile uint8_t dummy = addr[i];
+        dummy = addr[i];
         (void)dummy;
     }
-    
+
     /* Touch the last byte */
     if (mapping->length > 0) {
-        volatile uint8_t dummy = addr[mapping->length - 1];
+        dummy = addr[mapping->length - 1];
         (void)dummy;
     }
-    
+
     return DMA_MAP_SUCCESS;
 }
 
@@ -899,71 +915,80 @@ static uint32_t g_coherent_allocation_count = 0;
  * @return Virtual address of allocated memory, or NULL on failure
  */
 void* dma_alloc(size_t size, size_t alignment, uint32_t *phys_addr) {
-    void *virtual_addr = NULL;
-    uint32_t physical_addr = 0;
-    coherent_allocation_t *allocation = NULL;
-    
+    void *virtual_addr;
+    uint32_t physical_addr;
+    coherent_allocation_t *allocation;
+    size_t total_size;
+    void *raw_ptr;
+    uint32_t raw_addr;
+    uint32_t aligned_addr;
+    dma_check_result_t check_result;
+
+    /* Initialize */
+    virtual_addr = NULL;
+    physical_addr = 0;
+    allocation = NULL;
+
     if (size == 0 || !phys_addr) {
         LOG_ERROR("DMA alloc: Invalid parameters");
         return NULL;
     }
-    
+
     /* Validate alignment (must be power of 2) */
     if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
-        LOG_ERROR("DMA alloc: Invalid alignment %zu", alignment);
+        LOG_ERROR("DMA alloc: Invalid alignment %lu", (unsigned long)alignment);
         return NULL;
     }
-    
+
     /* Minimum alignment for DMA operations */
     if (alignment < 4) {
         alignment = 4;
     }
-    
-    LOG_DEBUG("DMA alloc: size=%zu alignment=%zu", size, alignment);
-    
+
+    LOG_DEBUG("DMA alloc: size=%lu alignment=%lu", (unsigned long)size, (unsigned long)alignment);
+
     /* Allocate extra space for alignment and tracking */
-    size_t total_size = size + alignment + sizeof(void*);
-    void *raw_ptr = malloc(total_size);
+    total_size = size + alignment + sizeof(void*);
+    raw_ptr = malloc(total_size);
     if (!raw_ptr) {
-        LOG_ERROR("DMA alloc: Failed to allocate %zu bytes", total_size);
+        LOG_ERROR("DMA alloc: Failed to allocate %lu bytes", (unsigned long)total_size);
         return NULL;
     }
-    
+
     /* GPT-5 A+: Zero the allocated memory like typical allocators */
     memset(raw_ptr, 0, total_size);
-    
-    /* Align the pointer */
-    uintptr_t raw_addr = (uintptr_t)raw_ptr;
-    uintptr_t aligned_addr = (raw_addr + sizeof(void*) + alignment - 1) & ~(alignment - 1);
-    virtual_addr = (void*)aligned_addr;
-    
+
+    /* Align the pointer - use uint32_t for DOS 16-bit compatibility */
+    raw_addr = (uint32_t)(unsigned long)raw_ptr;
+    aligned_addr = (raw_addr + sizeof(void*) + alignment - 1) & ~(alignment - 1);
+    virtual_addr = (void*)(unsigned long)aligned_addr;
+
     /* Store the original pointer before the aligned memory */
-    *((void**)(aligned_addr - sizeof(void*))) = raw_ptr;
-    
+    *((void**)(unsigned long)(aligned_addr - sizeof(void*))) = raw_ptr;
+
     /* Verify the allocation is DMA-safe */
-    dma_check_result_t check_result;
     if (!dma_check_buffer_safety(virtual_addr, size, &check_result)) {
         LOG_ERROR("DMA alloc: Safety check failed");
         free(raw_ptr);
         return NULL;
     }
-    
+
     /* GPT-5 Critical: Must be below 16MB for ISA DMA */
-    if (check_result.phys_addr >= DMA_16MB_LIMIT || 
+    if (check_result.phys_addr >= DMA_16MB_LIMIT ||
         (check_result.phys_addr + size) > DMA_16MB_LIMIT) {
         LOG_WARNING("DMA alloc: Allocated above 16MB limit, may need bounce buffer");
         /* Continue - bounce buffers will handle this */
     }
-    
+
     /* GPT-5 Critical: Must not cross 64KB boundaries */
     if (check_result.crosses_64k) {
         LOG_WARNING("DMA alloc: Allocation crosses 64KB boundary");
         /* This is a problem for ISA bus masters, but we'll continue */
     }
-    
+
     physical_addr = check_result.phys_addr;
     *phys_addr = physical_addr;
-    
+
     /* Create allocation tracking structure */
     allocation = malloc(sizeof(coherent_allocation_t));
     if (!allocation) {
@@ -971,7 +996,7 @@ void* dma_alloc(size_t size, size_t alignment, uint32_t *phys_addr) {
         free(raw_ptr);
         return NULL;
     }
-    
+
     allocation->virtual_addr = virtual_addr;
     allocation->physical_addr = physical_addr;
     allocation->size = size;
@@ -979,10 +1004,10 @@ void* dma_alloc(size_t size, size_t alignment, uint32_t *phys_addr) {
     allocation->next = g_coherent_allocations;
     g_coherent_allocations = allocation;
     g_coherent_allocation_count++;
-    
-    LOG_INFO("DMA alloc: %zu bytes at virt=%p phys=0x%08lX align=%zu (CACHEABLE - requires sync)", 
-             size, virtual_addr, physical_addr, alignment);
-    
+
+    LOG_INFO("DMA alloc: %lu bytes at virt=%p phys=0x%08lX align=%lu (CACHEABLE - requires sync)",
+             (unsigned long)size, virtual_addr, (unsigned long)physical_addr, (unsigned long)alignment);
+
     return virtual_addr;
 }
 
@@ -995,39 +1020,42 @@ void* dma_alloc(size_t size, size_t alignment, uint32_t *phys_addr) {
 void dma_free(void *addr, size_t size) {
     coherent_allocation_t **current;
     coherent_allocation_t *to_free;
-    
+    void *original_ptr;
+    size_t freed_size;
+
     if (!addr) {
         return;
     }
-    
-    LOG_DEBUG("DMA free: addr=%p size=%zu", addr, size);
-    
+
+    LOG_DEBUG("DMA free: addr=%p size=%lu", addr, (unsigned long)size);
+
     /* Find the allocation in our tracking list */
     for (current = &g_coherent_allocations; *current; current = &(*current)->next) {
         if ((*current)->virtual_addr == addr) {
             /* Validate size if provided */
             if (size > 0 && (*current)->size != size) {
-                LOG_WARNING("DMA coherent free: Size mismatch - expected %zu, got %zu", 
-                           (*current)->size, size);
+                LOG_WARNING("DMA coherent free: Size mismatch - expected %lu, got %lu",
+                           (unsigned long)(*current)->size, (unsigned long)size);
             }
-            
+
             to_free = *current;
+            freed_size = to_free->size;
             *current = to_free->next;
-            
+
             /* Retrieve the original malloc pointer */
-            void *original_ptr = *((void**)((uintptr_t)addr - sizeof(void*)));
-            
+            original_ptr = *((void**)((uint32_t)(unsigned long)addr - sizeof(void*)));
+
             LOG_DEBUG("DMA coherent free: freeing original ptr=%p", original_ptr);
-            
+
             free(original_ptr);
             free(to_free);
             g_coherent_allocation_count--;
-            
-            LOG_INFO("DMA coherent free: Released %zu bytes", to_free->size);
+
+            LOG_INFO("DMA coherent free: Released %lu bytes", (unsigned long)freed_size);
             return;
         }
     }
-    
+
     LOG_ERROR("DMA coherent free: Address %p not found in coherent allocations", addr);
 }
 
@@ -1045,8 +1073,8 @@ int dma_sync_for_device_explicit(void *buffer, size_t len, dma_sync_direction_t 
         return DMA_MAP_ERROR_INVALID_PARAM;
     }
     
-    LOG_DEBUG("DMA explicit sync for device: buffer=%p len=%zu dir=%s", 
-              buffer, len, (direction == DMA_SYNC_TX) ? "TX" : "RX");
+    LOG_DEBUG("DMA explicit sync for device: buffer=%p len=%lu dir=%s",
+              buffer, (unsigned long)len, (direction == DMA_SYNC_TX) ? "TX" : "RX");
     
     /* Use the enhanced aligned cache flush for safety */
     cache_flush_aligned_safe(buffer, len);
@@ -1071,8 +1099,8 @@ int dma_sync_for_cpu_explicit(void *buffer, size_t len, dma_sync_direction_t dir
         return DMA_MAP_ERROR_INVALID_PARAM;
     }
     
-    LOG_DEBUG("DMA explicit sync for CPU: buffer=%p len=%zu dir=%s", 
-              buffer, len, (direction == DMA_SYNC_TX) ? "TX" : "RX");
+    LOG_DEBUG("DMA explicit sync for CPU: buffer=%p len=%lu dir=%s",
+              buffer, (unsigned long)len, (direction == DMA_SYNC_TX) ? "TX" : "RX");
     
     /* For RX (device->CPU), we need cache invalidation */
     if (direction == DMA_SYNC_RX) {
@@ -1081,6 +1109,6 @@ int dma_sync_for_cpu_explicit(void *buffer, size_t len, dma_sync_direction_t dir
     }
     
     /* For TX, no additional sync needed after device access */
-    
+
     return DMA_MAP_SUCCESS;
 }

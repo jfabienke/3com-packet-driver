@@ -40,35 +40,36 @@
 
 #include <stdint.h> // For uint8_t, uint16_t, etc.
 
+// Forward declaration for nic_info (full definition in hardware.h)
+struct nic_info;
+
 // --- Function Prototypes (if not provided by common.h) ---
 // These are the standard I/O port access functions.  If your environment
 // provides these (e.g., through a DOS header file), you can remove these
 // prototypes.  If your environment uses different names, adjust accordingly.
 
-void outb(uint16_t port, uint8_t value);
-void outw(uint16_t port, uint16_t value);
-uint8_t inb(uint16_t port);
-uint16_t inw(uint16_t port);
+/* I/O functions provided by portabl.h macros (IO_OUT8, etc.)
+ * Do NOT declare outb/inb/outw/inw here - they are macros in portabl.h */
 
-// --- Error Codes ---
+/* Error Codes - C89 compatible (no explicit initializers) */
 typedef enum {
-    _3C509B_SUCCESS = 0,
-    _3C509B_ERR_NO_CARD,         // Card not detected
-    _3C509B_ERR_INIT_FAIL,      // Initialization failed
-    _3C509B_ERR_TX_TIMEOUT,      // Transmit timeout
-    _3C509B_ERR_TX_ABORTED,      // Transmission aborted (too many collisions, etc.)
-    _3C509B_ERR_TX_UNDERRUN,    // Transmit FIFO underrun
-    _3C509B_ERR_TX_JABBER,     // Jabber condition
-    _3C509B_ERR_RX_OVERRUN,    // Receive overrun
-    _3C509B_ERR_RX_CRC,         // CRC error
-    _3C509B_ERR_RX_FRAMING,    // Framing error
-    _3C509B_ERR_RX_LENGTH,     // Incorrect length field
-    _3C509B_ERR_RX_OVERSIZE,    // Packet exceeds MTU
-     _3C509B_ERR_INVALID_PACKET,    // Packet with error
-    _3C509B_ERR_RX_INCOMPLETE,  // Packet not fully received
-    _3C509B_ERR_ADAPTER_FAILURE, // Hardware failure
-    _3C509B_ERR_STATS_FULL,       // Statistics full
-    _3C509B_ERR_OTHER          // Other error
+    _3C509B_SUCCESS,            /* 0: Success */
+    _3C509B_ERR_NO_CARD,        /* Card not detected */
+    _3C509B_ERR_INIT_FAIL,      /* Initialization failed */
+    _3C509B_ERR_TX_TIMEOUT,     /* Transmit timeout */
+    _3C509B_ERR_TX_ABORTED,     /* Transmission aborted (too many collisions, etc.) */
+    _3C509B_ERR_TX_UNDERRUN,    /* Transmit FIFO underrun */
+    _3C509B_ERR_TX_JABBER,      /* Jabber condition */
+    _3C509B_ERR_RX_OVERRUN,     /* Receive overrun */
+    _3C509B_ERR_RX_CRC,         /* CRC error */
+    _3C509B_ERR_RX_FRAMING,     /* Framing error */
+    _3C509B_ERR_RX_LENGTH,      /* Incorrect length field */
+    _3C509B_ERR_RX_OVERSIZE,    /* Packet exceeds MTU */
+    _3C509B_ERR_INVALID_PACKET, /* Packet with error */
+    _3C509B_ERR_RX_INCOMPLETE,  /* Packet not fully received */
+    _3C509B_ERR_ADAPTER_FAILURE,/* Hardware failure */
+    _3C509B_ERR_STATS_FULL,     /* Statistics full */
+    _3C509B_ERR_OTHER           /* Other error */
 } _3c509b_error_t;
 
 // --- General Constants ---
@@ -142,13 +143,18 @@ typedef enum {
 #define _3C509B_W0_IRQ          0x08  // IRQ setting (bits 12-15)
 #define _3C509B_EEPROM_CMD      0x0A  // EEPROM command register
 #define _3C509B_EEPROM_DATA     0x0C  // EEPROM data register
+#define _3C509B_W0_EEPROM_COMMAND   _3C509B_EEPROM_CMD   // Alias for regacc.h
+#define _3C509B_W0_EEPROM_DATA      _3C509B_EEPROM_DATA  // Alias for regacc.h
+#define _3C509B_W0_PRODUCT_ID       0x04  // Product ID register in Window 0
 
 // EEPROM Commands (written to _3C509B_EEPROM_CMD)
 #define _3C509B_EEPROM_READ     0x80  // Read from EEPROM (OR with address)
+#define _3C509B_EEPROM_CMD_READ _3C509B_EEPROM_READ  // Alias for regacc.h
 #define _3C509B_EEPROM_WRITE    0x40  // Write to EEPROM (not used)
 #define _3C509B_EEPROM_ERASE    0xC0  // Erase EEPROM (not used)
 #define _3C509B_EEPROM_EWENB    0x30  // Enable EEPROM write/erase (not used)
 #define _3C509B_EEPROM_EWDIS    0x00  // Disable EEPROM write/erase (not used)
+#define _3C509B_EEPROM_BUSY     0x8000  // Busy bit in EEPROM status
 
 // --- Window 1: Normal Operation (TX/RX) ---
 
@@ -157,6 +163,10 @@ typedef enum {
 #define _3C509B_RX_STATUS       0x08  // RX status register
 #define _3C509B_TX_STATUS       0x0B  // TX status register
 #define _3C509B_TX_FREE         0x0C  // Free bytes in TX FIFO
+#define _3C509B_W1_TX_STATUS    _3C509B_TX_STATUS   // Alias for regacc.h
+#define _3C509B_W1_RX_STATUS    _3C509B_RX_STATUS   // Alias for regacc.h
+#define _3C509B_W1_TX_DATA      _3C509B_TX_FIFO     // Alias for regacc.h
+#define _3C509B_W1_RX_DATA      _3C509B_RX_FIFO     // Alias for regacc.h
 
 // RX Filter Bits (for _3C509B_CMD_SET_RX_FILTER, used in Window 1)
 // Based on 3Com 3C509B Reference Manual Table 3-9
@@ -205,16 +215,25 @@ typedef enum {
 #define _3C509B_TXSTAT_ERROR_MASK   0x3F  // Any error condition (bits 5-0)
 #define _3C509B_TXSTAT_SERIOUS_ERROR_MASK 0x3C  // Serious errors requiring intervention
 #define _3C509B_TXSTAT_OVERFLOW_MASK 0x06  // Status or RX overflow errors
+#define _3C509B_TXSTAT_MAXCOLL       0x08  // Alias for maximum collisions
 
 // --- Window 2: Station Address ---
 // Offsets 0-5 are used to *write* the MAC address into the NIC.
 // This is typically done *once* during initialization, *after*
 // reading the MAC address from the EEPROM.
+#define _3C509B_W2_STATION_ADDR     0x00  // Station address (6 bytes at offsets 0-5)
+
+// --- Window 3: Configuration and FIFO ---
+#define _3C509B_WINDOW_3            3     // Window 3 number
+#define _3C509B_W3_FREE_TX_BYTES    0x0C  // Free bytes in TX FIFO
+#define _3C509B_W3_RX_BYTES         0x0A  // Bytes in RX FIFO
 
 // --- Window 4: Media Control ---
 
 #define _3C509B_MEDIA_CTRL      0x0A  // Media control register
 #define _3C509B_W4_NETDIAG      0x06  // Network diagnostics
+#define _3C509B_W4_MEDIA_STATUS     _3C509B_MEDIA_CTRL  // Alias for regacc.h
+#define _3C509B_W4_MEDIA_CONTROL    _3C509B_MEDIA_CTRL  // Alias for regacc.h
 
 // Media Control Bits (written to _3C509B_MEDIA_CTRL)
 // Based on 3Com 3C509B Reference Manual Table 3-16
@@ -265,6 +284,8 @@ typedef enum {
 #define _3C509B_W6_TX_DEFERRALS    0x08 // Transmit deferrals (byte)
 #define _3C509B_W6_RX_OCTETS_LO    0x0A // Receive octets low byte (word)
 #define _3C509B_W6_TX_OCTETS_LO    0x0C // Transmit octets low byte (word)
+#define _3C509B_W6_TX_BYTES_OK     _3C509B_W6_GOOD_TX   // Alias for regacc.h
+#define _3C509B_W6_RX_BYTES_OK     _3C509B_W6_GOOD_RX   // Alias for regacc.h
 
 // --- ID Sequence (for non-PnP detection) ---
 
@@ -350,6 +371,7 @@ typedef enum {
 #define _3C509B_CMD_RX_ENABLE           0x2000  // Enable receiver
 #define _3C509B_CMD_RX_RESET            0x2800  // Reset receiver
 #define _3C509B_CMD_RX_DISCARD_TOP      0x4000  // Discard top RX packet
+#define _3C509B_CMD_RX_DISCARD          0x4000  // Alias for RX discard command
 #define _3C509B_CMD_TX_ENABLE           0x4800  // Enable transmitter
 #define _3C509B_CMD_TX_DISABLE          0x5000  // Disable transmitter  
 #define _3C509B_CMD_TX_RESET            0x5800  // Reset transmitter
@@ -377,7 +399,7 @@ typedef enum {
     outw((uint16_t)((base) + _3C509B_WINDOW_CMD_PORT), (uint16_t)(0x0800 | (w)))
 
 // RX packet validation
-#define _3C509B_MIN_PACKET_SIZE      14      // Minimum valid packet (headers only)
+#define _3C509B_MIN_HEADER_SIZE      14      // Minimum valid packet (headers only)
 #define _3C509B_MAX_PACKET_SIZE      1514    // Maximum Ethernet frame size
 
 // Hardware state flags
@@ -455,7 +477,7 @@ void direct_pio_outsw(const void* src_buffer, uint16_t dst_port, uint16_t word_c
  * @param payload_len Payload length
  * @return 0 on success, negative on error
  */
-int send_packet_direct_pio_with_header(nic_info_t *nic, const uint8_t *dest_mac, 
+int send_packet_direct_pio_with_header(struct nic_info *nic, const uint8_t *dest_mac,
                                       uint16_t ethertype, const void* payload, uint16_t payload_len);
 
 #endif /* _3C509B_H_ */

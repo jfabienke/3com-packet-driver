@@ -13,13 +13,16 @@
 bits 16
 cpu 286                             ; Base compatibility level
 
-; External data references
-extern _vds_pool                    ; VDS buffer pool
-extern _bounce_pool                 ; Bounce buffer pool
-extern _cpu_type                    ; CPU type for gating
-extern _nic_io_base                 ; NIC I/O base address
-extern _saved_int_mask              ; Saved interrupt mask
-extern _mask_method                 ; How interrupts were masked
+; C symbol naming bridge (maps C symbols to symbol_)
+%include "csym.inc"
+
+; External data references (C symbols mapped via csym.inc)
+extern vds_pool                     ; VDS buffer pool
+extern bounce_pool                  ; Bounce buffer pool
+extern cpu_type                     ; CPU type for gating
+extern nic_io_base                  ; NIC I/O base address
+extern saved_int_mask               ; Saved interrupt mask
+extern mask_method                  ; How interrupts were masked
 
 ; Public exports
 global vds_lock_stub
@@ -64,7 +67,7 @@ vds_lock_stub:
         ; Buffer already locked at init, just mark as in-use
         mov     bx, ax
         shl     bx, 4               ; Multiply by struct size (16)
-        mov     byte [_vds_pool + bx + 14], 1  ; Set in_use flag
+        mov     byte [vds_pool + bx + 14], 1  ; Set in_use flag
 
         clc                         ; Success
         jmp     .done
@@ -255,7 +258,7 @@ safe_disable_interrupts:
         push    dx
 
         ; Check CPU type
-        cmp     byte [_cpu_type], CPU_386
+        cmp     byte [cpu_type], CPU_386
         jb      .use_cli            ; 286 or below - simple CLI
 
         ; 386+ - Need to check V86 mode
@@ -274,22 +277,22 @@ safe_disable_interrupts:
 
         ; V86 with IOPL<3 - mask at device
         cpu 286
-        mov     dx, [_nic_io_base]
+        mov     dx, [nic_io_base]
         add     dx, INT_MASK_REG
         in      al, dx
-        mov     [_saved_int_mask], al
+        mov     [saved_int_mask], al
         or      al, 0FFh            ; Mask all interrupts
         out     dx, al
-        mov     byte [_mask_method], 1
-        jmp     .done
+        mov     byte [mask_method], 1
+        jmp     .disable_done
 
 .use_cli_386:
         cpu 286
 .use_cli:
         cli
-        mov     byte [_mask_method], 0
+        mov     byte [mask_method], 0
 
-.done:
+.disable_done:
         pop     dx
         pop     ax
         ret
@@ -302,20 +305,20 @@ safe_enable_interrupts:
         push    ax
         push    dx
 
-        cmp     byte [_mask_method], 0
+        cmp     byte [mask_method], 0
         je      .use_sti
 
         ; Restore device mask
-        mov     dx, [_nic_io_base]
+        mov     dx, [nic_io_base]
         add     dx, INT_MASK_REG
-        mov     al, [_saved_int_mask]
+        mov     al, [saved_int_mask]
         out     dx, al
-        jmp     .done
+        jmp     .enable_done
 
 .use_sti:
         sti
 
-.done:
+.enable_done:
         pop     dx
         pop     ax
         ret
@@ -325,11 +328,12 @@ safe_enable_interrupts:
 ; Size: ~45 bytes
 ;-----------------------------------------------------------------------------
 serialize_after_smc:
-        ; Flush prefetch queue
-        jmp     short $+2
+        ; Flush prefetch queue (unconditional short jump flushes prefetch on 8086-486)
+        jmp     short .flush_done
+.flush_done:
 
         ; Check CPU type for serialization method
-        cmp     byte [_cpu_type], CPU_486
+        cmp     byte [cpu_type], CPU_486
         jb      .use_far_ret        ; 286/386 - use far return
 
         ; 486+ - Check for CPUID
@@ -338,7 +342,7 @@ serialize_after_smc:
         jz      .use_far_ret
 
         ; CPUID available - use it for serialization
-        cpu 486
+        cpu 586
         xor     eax, eax
         cpuid
         cpu 286
@@ -359,7 +363,7 @@ serialize_after_smc:
 ;-----------------------------------------------------------------------------
 check_cpuid_available:
         ; First check if we're on 386+
-        cmp     byte [_cpu_type], CPU_386
+        cmp     byte [cpu_type], CPU_386
         jb      .no_cpuid           ; 286 - no CPUID
 
         ; 386+ - Check EFLAGS.ID bit
@@ -410,19 +414,19 @@ get_vds_buffer:
 .search:
         mov     bx, ax
         shl     bx, 4               ; Multiply by struct size
-        cmp     byte [_vds_pool + bx + 14], 0  ; Check in_use flag
+        cmp     byte [vds_pool + bx + 14], 0  ; Check in_use flag
         je      .found
 
         inc     ax
         loop    .search
 
         mov     ax, -1              ; No buffer available
-        jmp     short .done
+        jmp     short .vds_search_done
 
 .found:
         ; AX contains buffer index
 
-.done:
+.vds_search_done:
         pop     cx
         pop     bx
         ret
@@ -451,7 +455,7 @@ release_vds_buffer:
 
         ; Search through VDS pool for matching physical address
         xor     cx, cx              ; Entry counter
-        mov     si, _vds_pool       ; SI = pool base address
+        mov     si, vds_pool       ; SI = pool base address
 
 .search_loop:
         cmp     cx, 32              ; VDS_POOL_SIZE = 32
@@ -500,7 +504,7 @@ release_vds_buffer:
 get_bounce_buffer:
         ; For now, return first bounce buffer
         ; TODO: Implement proper pool management
-        mov     ax, _bounce_pool
+        mov     ax, bounce_pool
         shr     ax, 4               ; Convert to segment (assuming aligned)
         ret
 
@@ -511,7 +515,7 @@ get_bounce_buffer:
 get_rx_bounce_buffer:
         ; For now, return first bounce buffer
         ; TODO: Track which buffer was used for RX
-        mov     ax, _bounce_pool
+        mov     ax, bounce_pool
         shr     ax, 4               ; Convert to segment (assuming aligned)
         ret
 
@@ -535,7 +539,7 @@ use_bounce_for_64kb:
 ;
 ; Input:  ES:DI = destination buffer
 ;         CX = word count
-;         [_nic_io_base] = NIC I/O base address
+;         [nic_io_base] = NIC I/O base address
 ; Output: ES:DI advanced by bytes transferred
 ; Uses:   AX, CX, DX, DI
 ;-----------------------------------------------------------------------------
@@ -544,7 +548,7 @@ pio_transfer:
         push    dx
 
         ; Get NIC I/O base address
-        mov     dx, [_nic_io_base]
+        mov     dx, [nic_io_base]
         ; Note: For 3C509B/3C515, RX FIFO is at base+0 (offset 0)
 
         ; Clear direction flag for forward string ops

@@ -54,7 +54,7 @@ typedef enum {
 /**
  * @brief Buffer pool statistics for per-NIC tracking
  */
-typedef struct {
+typedef struct buffer_pool_stats {
     /* Allocation statistics */
     uint32_t total_allocations;         /* Total buffer allocations */
     uint32_t total_frees;               /* Total buffer frees */

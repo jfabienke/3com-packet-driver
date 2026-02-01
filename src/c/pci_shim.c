@@ -53,6 +53,11 @@ typedef struct {
 #define BROKEN_WRITE_WORD       0x1000  /* B10C Write Config Word */
 #define BROKEN_WRITE_DWORD      0x2000  /* B10D Write Config Dword */
 
+/*
+ * Init-only BIOS database. With -zc compiler flag, the string
+ * literals go to code segment automatically.
+ */
+
 /* Known broken BIOS database */
 static const broken_bios_entry_t broken_bios_db[] = {
     /* Award BIOSes */

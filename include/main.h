@@ -23,12 +23,12 @@ extern "C" {
 
 /* Bus type enumeration */
 typedef enum {
-    BUS_ISA = 0,
-    BUS_EISA,
-    BUS_MCA,
-    BUS_PCI,
-    BUS_VLB,
-    BUS_PCMCIA
+    BUS_ISA,      /* 0 */
+    BUS_EISA,     /* 1 */
+    BUS_MCA,      /* 2 */
+    BUS_PCI,      /* 3 */
+    BUS_VLB,      /* 4 */
+    BUS_PCMCIA    /* 5 */
 } bus_type_t;
 
 /* Error codes */

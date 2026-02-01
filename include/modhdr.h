@@ -15,6 +15,7 @@
 #define MODULE_HEADER_H
 
 #include <stdint.h>
+#include "cpudet.h"  /* For cpu_info_t */
 
 /* Module signature - identifies valid packet driver module */
 #define MODULE_SIGNATURE    "PKTDRV"
@@ -61,9 +62,12 @@ typedef struct {
     uint16_t required_memory;              /* Required resident memory */
     uint8_t  cpu_requirements;             /* Minimum CPU (2=286, 3=386, etc) */
     uint8_t  nic_type;                     /* NIC type (0=any, 1=3C509, 2=3C515) */
-    
-    /* Reserved for alignment (37 bytes) */
-    uint8_t  reserved[37];                 /* Future use / padding */
+
+    /* Capability flags (2 bytes) - JIT module selection criteria */
+    uint16_t cap_flags;                    /* Capability requirement flags */
+
+    /* Reserved for alignment (35 bytes) */
+    uint8_t  reserved[35];                 /* Future use / padding */
 } module_header_t;
 
 /* Verify structure is exactly 64 bytes */
@@ -83,6 +87,66 @@ typedef enum {
     SAFETY_FLAG_CLFLUSH    = 0x10,  /* Can use CLFLUSH if available */
     SAFETY_FLAG_WBINVD     = 0x20,  /* Can use WBINVD if available */
 } safety_flags_t;
+
+/* Module capability requirement flags (cap_flags field in module_header_t) */
+#define MOD_CAP_ISA_DMA         0x0001  /* Requires ISA DMA channel */
+#define MOD_CAP_BUSMASTER_DMA   0x0002  /* Requires bus-master DMA */
+#define MOD_CAP_WBINVD          0x0004  /* Requires WBINVD (486+) */
+#define MOD_CAP_CLFLUSH         0x0008  /* Requires CLFLUSH (Pentium+) */
+#define MOD_CAP_PCI_BUS         0x0010  /* Requires PCI bus */
+#define MOD_CAP_BOUNCE_BUF      0x0020  /* Requires bounce buffer support */
+#define MOD_CAP_VDS             0x0040  /* Requires VDS services */
+#define MOD_CAP_XMS             0x0080  /* Requires XMS memory */
+#define MOD_CAP_DESC_RING       0x0100  /* Requires DMA descriptor rings */
+#define MOD_CAP_SNOOP           0x0200  /* Requires PCI cache snoop */
+
+/* NIC type identifiers for module selection */
+#define MOD_NIC_ANY             0x00
+#define MOD_NIC_3C509B          0x01
+#define MOD_NIC_3C515           0x02
+#define MOD_NIC_VORTEX          0x03    /* 3C590/595/597 PCI PIO */
+#define MOD_NIC_BOOMERANG       0x04    /* 3C900/905 PCI DMA */
+#define MOD_NIC_CYCLONE         0x05    /* 3C905B/920 PCI DMA+csum */
+#define MOD_NIC_TORNADO         0x06    /* 3C905C/556 PCI DMA+SG+VLAN */
+
+/* Module IDs for selection */
+typedef enum {
+    /* Core (always included) */
+    MOD_ISR = 0,
+    MOD_IRQ,
+    MOD_PKTBUF,
+    MOD_DATA,
+    /* NIC-specific (mutually exclusive) */
+    MOD_3C509B,
+    MOD_3C515,
+    MOD_VORTEX,
+    MOD_BOOMERANG,
+    MOD_CYCLONE,
+    MOD_TORNADO,
+    /* DMA/Transfer */
+    MOD_PIO,
+    MOD_DMA_ISA,
+    MOD_DMA_BUSMASTER,
+    MOD_DMA_DESCRING,
+    MOD_DMA_BOUNCE,
+    /* Cache coherency */
+    MOD_CACHE_NONE,
+    MOD_CACHE_WBINVD,
+    MOD_CACHE_CLFLUSH,
+    MOD_CACHE_SNOOP,
+    /* CPU-optimized copy */
+    MOD_COPY_8086,
+    MOD_COPY_286,
+    MOD_COPY_386,
+    MOD_COPY_PENT,
+    /* Sentinel */
+    MOD_COUNT
+} module_id_t;
+
+/* JIT patch types (extends existing patch_type_t) */
+#define PATCH_TYPE_IMM16        0x06    /* 16-bit immediate (IRQ, DMA ch) */
+#define PATCH_TYPE_IMM8         0x07    /* 8-bit immediate */
+#define PATCH_TYPE_RELOC_NEAR   0x08    /* Near CALL/JMP relocation */
 
 /* Patch table entry structure */
 typedef struct {
@@ -135,7 +199,8 @@ module_header_\name:
     .word   required_mem_\name   ; Required memory
     .byte   2                    ; CPU requirement (286 minimum)
     .byte   \nic                 ; NIC type
-    .space  37, 0                ; Reserved padding
+    .word   0                    ; cap_flags (set per module)
+    .space  35, 0                ; Reserved padding
 .endm
 
 ; Patch point macro for assembly
@@ -151,7 +216,7 @@ patch_point_\name:
 
 /* Function prototypes for module management */
 int validate_module_header(const module_header_t* header);
-int apply_module_patches(module_header_t* header, uint8_t cpu_type);
+int apply_module_patches(module_header_t* header, const cpu_info_t* cpu_info);
 uint16_t calculate_resident_size(const module_header_t* header);
 
 #endif /* MODULE_HEADER_H */

@@ -24,7 +24,7 @@
 
 /* DMA allocation information */
 typedef struct {
-    void *virt_addr;            /* Virtual address for CPU access */
+    void far *virt_addr;        /* Virtual address for CPU access (far pointer) */
     uint32_t phys_addr;         /* Physical address for DMA */
     uint32_t size;              /* Allocated size */
     uint32_t alignment;         /* Alignment used */

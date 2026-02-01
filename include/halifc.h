@@ -18,43 +18,45 @@ struct packet_buffer;
 struct dma_descriptor;
 
 /* HAL Error Codes */
+/* Note: Negative values not representable in C89 enum without initializers.
+ * Use positive codes with HAL_SUCCESS=0 as base. Check via >= HAL_SUCCESS. */
 typedef enum {
-    HAL_SUCCESS = 0,
-    HAL_ERROR_NOT_FOUND = -1,
-    HAL_ERROR_INVALID_PARAM = -2,
-    HAL_ERROR_NO_MEMORY = -3,
-    HAL_ERROR_TIMEOUT = -4,
-    HAL_ERROR_NO_LINK = -5,
-    HAL_ERROR_DMA_FAILURE = -6,
-    HAL_ERROR_BUSY = -7,
-    HAL_ERROR_NOT_SUPPORTED = -8
+    HAL_SUCCESS,                /* 0: Success */
+    HAL_ERROR_NOT_FOUND,        /* 1: Device not found */
+    HAL_ERROR_INVALID_PARAM,    /* 2: Invalid parameter */
+    HAL_ERROR_NO_MEMORY,        /* 3: Out of memory */
+    HAL_ERROR_TIMEOUT,          /* 4: Operation timeout */
+    HAL_ERROR_NO_LINK,          /* 5: No link */
+    HAL_ERROR_DMA_FAILURE,      /* 6: DMA failure */
+    HAL_ERROR_BUSY,             /* 7: Device busy */
+    HAL_ERROR_NOT_SUPPORTED     /* 8: Not supported */
 } hal_error_t;
 
 /* NIC Model Types */
 typedef enum {
-    NIC_MODEL_UNKNOWN = 0,
-    NIC_MODEL_3C509B,
-    NIC_MODEL_3C515TX,
-    NIC_MODEL_3C509B_COMBO,
-    NIC_MODEL_3C515TX_ISA
+    NIC_MODEL_UNKNOWN,          /* 0: Unknown NIC */
+    NIC_MODEL_3C509B,           /* 1: 3C509B */
+    NIC_MODEL_3C515TX,          /* 2: 3C515-TX */
+    NIC_MODEL_3C509B_COMBO,     /* 3: 3C509B Combo */
+    NIC_MODEL_3C515TX_ISA       /* 4: 3C515-TX ISA */
 } nic_model_t;
 
 /* Media Types */
 typedef enum {
-    MEDIA_TYPE_NONE = 0,
-    MEDIA_TYPE_10BASE_T,
-    MEDIA_TYPE_10BASE_2,
-    MEDIA_TYPE_10BASE_5,
-    MEDIA_TYPE_100BASE_TX,
-    MEDIA_TYPE_100BASE_FX,
-    MEDIA_TYPE_AUTO
+    MEDIA_TYPE_NONE,            /* 0: No media */
+    MEDIA_TYPE_10BASE_T,        /* 1: 10BASE-T */
+    MEDIA_TYPE_10BASE_2,        /* 2: 10BASE-2 */
+    MEDIA_TYPE_10BASE_5,        /* 3: 10BASE-5 */
+    MEDIA_TYPE_100BASE_TX,      /* 4: 100BASE-TX */
+    MEDIA_TYPE_100BASE_FX,      /* 5: 100BASE-FX */
+    MEDIA_TYPE_AUTO             /* 6: Auto-detect */
 } media_type_t;
 
 /* Link State */
 typedef enum {
-    LINK_STATE_DOWN = 0,
-    LINK_STATE_UP,
-    LINK_STATE_NEGOTIATING
+    LINK_STATE_DOWN,            /* 0: Link down */
+    LINK_STATE_UP,              /* 1: Link up */
+    LINK_STATE_NEGOTIATING      /* 2: Negotiating */
 } link_state_t;
 
 /* Interrupt Status Flags */

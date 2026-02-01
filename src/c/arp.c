@@ -14,6 +14,9 @@
 #include "logging.h"
 #include "memory.h"
 
+/* External declarations for hardware state */
+extern uint8_t g_local_mac[6];
+
 /* Global ARP state */
 arp_cache_t g_arp_cache;
 arp_stats_t g_arp_stats;
@@ -30,6 +33,8 @@ static uint8_t g_max_retries = ARP_MAX_RETRIES;
 static uint32_t arp_get_timestamp(void);
 static int arp_send_packet(const arp_packet_t *arp_pkt, uint8_t nic_index, bool broadcast);
 static void arp_update_cache_stats(bool hit);
+static bool arp_can_proxy_for_ip(const ip_addr_t *ip);
+static int arp_send_response(const ip_addr_t *target_ip, const uint8_t *src_mac, const uint8_t *dest_mac);
 
 /* ARP initialization and cleanup */
 int arp_init(void) {
@@ -95,6 +100,7 @@ bool arp_is_enabled(void) {
 /* ARP cache management */
 int arp_cache_init(arp_cache_t *cache, uint16_t max_entries) {
     int i;
+    arp_cache_entry_t *entry;
 
     if (!cache) {
         return ERROR_INVALID_PARAM;
@@ -116,7 +122,7 @@ int arp_cache_init(arp_cache_t *cache, uint16_t max_entries) {
     /* Initialize free list */
     cache->free_list = NULL;
     for (i = 0; i < max_entries; i++) {
-        arp_cache_entry_t *entry = &cache->entries[i];
+        entry = &cache->entries[i];
         memory_zero(entry, sizeof(arp_cache_entry_t));
         entry->state = ARP_STATE_FREE;
         entry->next = cache->free_list;
@@ -427,11 +433,11 @@ int arp_handle_request(const arp_packet_t *arp_pkt, uint8_t src_nic) {
     if (g_proxy_arp_enabled) {
         /* Implement proxy ARP logic */
         g_arp_stats.proxy_requests++;
-        
+
         /* Check if we can respond as proxy for this IP */
-        if (arp_can_proxy_for_ip(target_ip)) {
+        if (arp_can_proxy_for_ip(&target_ip)) {
             /* Send proxy ARP response */
-            arp_send_response(target_ip, g_local_mac, &request_header.src_mac);
+            arp_send_response(&target_ip, g_local_mac, arp_pkt->sender_hw);
             return SUCCESS;
         }
     }
@@ -494,10 +500,16 @@ int arp_send_request(const ip_addr_t *target_ip, uint8_t nic_index) {
     ip_addr_t local_ip;
     subnet_info_t *subnet;
     arp_packet_t arp_pkt;
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uint8_t zero_mac[ETH_ALEN] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t broadcast_mac[ETH_ALEN];
+    uint8_t zero_mac[ETH_ALEN];
     int result;
     arp_cache_entry_t *entry;
+
+    /* Initialize MAC addresses - C89 compliant */
+    broadcast_mac[0] = 0xFF; broadcast_mac[1] = 0xFF; broadcast_mac[2] = 0xFF;
+    broadcast_mac[3] = 0xFF; broadcast_mac[4] = 0xFF; broadcast_mac[5] = 0xFF;
+    zero_mac[0] = 0x00; zero_mac[1] = 0x00; zero_mac[2] = 0x00;
+    zero_mac[3] = 0x00; zero_mac[4] = 0x00; zero_mac[5] = 0x00;
 
     if (!target_ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
@@ -588,8 +600,12 @@ int arp_send_reply(const ip_addr_t *target_ip, const uint8_t *target_mac,
 int arp_send_gratuitous(const ip_addr_t *ip, uint8_t nic_index) {
     nic_info_t *nic;
     arp_packet_t arp_pkt;
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t broadcast_mac[ETH_ALEN];
     int result;
+
+    /* Initialize broadcast MAC - C89 compliant */
+    broadcast_mac[0] = 0xFF; broadcast_mac[1] = 0xFF; broadcast_mac[2] = 0xFF;
+    broadcast_mac[3] = 0xFF; broadcast_mac[4] = 0xFF; broadcast_mac[5] = 0xFF;
 
     if (!ip || !arp_is_enabled()) {
         return ERROR_INVALID_PARAM;
@@ -817,9 +833,13 @@ static uint32_t arp_get_timestamp(void) {
 static int arp_send_packet(const arp_packet_t *arp_pkt, uint8_t nic_index, bool broadcast) {
     nic_info_t *nic;
     uint8_t frame[ETH_HEADER_LEN + sizeof(arp_packet_t)];
-    uint8_t broadcast_mac[ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t broadcast_mac[ETH_ALEN];
     const uint8_t *dest_mac;
     int result;
+
+    /* Initialize broadcast MAC - C89 compliant */
+    broadcast_mac[0] = 0xFF; broadcast_mac[1] = 0xFF; broadcast_mac[2] = 0xFF;
+    broadcast_mac[3] = 0xFF; broadcast_mac[4] = 0xFF; broadcast_mac[5] = 0xFF;
 
     if (!arp_pkt) {
         return ERROR_INVALID_PARAM;
@@ -963,31 +983,33 @@ int arp_process_received_packet(const uint8_t *packet, uint16_t length, uint8_t 
 int arp_wait_for_resolution(const ip_addr_t *ip, uint32_t timeout_ms) {
     arp_cache_entry_t *entry;
 
+    (void)timeout_ms; /* Unused in simplified implementation */
+
     /* Implement waiting with timeout - simplified implementation */
     if (!ip) return ERROR_INVALID_PARAM;
 
     /* In full implementation would poll cache with timeout */
-    entry = arp_cache_lookup(&g_arp_cache, ip);
+    entry = arp_cache_lookup(ip);
     return entry ? SUCCESS : ERROR_TIMEOUT;
 }
 
 int arp_add_proxy_entry(const ip_addr_t *ip, uint8_t nic_index) {
+    (void)nic_index; /* Unused in simplified implementation */
+
     /* Implement proxy entry management */
     if (!ip) return ERROR_INVALID_PARAM;
-    
+
     /* Add to proxy table - simplified implementation */
     LOG_INFO("Adding proxy ARP entry for IP");
     return SUCCESS;
-    return ERROR_NOT_SUPPORTED;
 }
 
 int arp_remove_proxy_entry(const ip_addr_t *ip) {
     /* Implement proxy entry removal */
     if (!ip) return ERROR_INVALID_PARAM;
-    
+
     LOG_INFO("Removing proxy ARP entry");
     return SUCCESS;
-    return ERROR_NOT_SUPPORTED;
 }
 
 void arp_print_stats(void) {
@@ -1003,14 +1025,15 @@ void arp_print_stats(void) {
 
 void arp_print_cache(void) {
     int i;
+    arp_cache_entry_t *entry;
 
     /* Implement cache printing */
     printf("ARP Cache:\n");
     for (i = 0; i < g_arp_cache.max_entries; i++) {
-        arp_cache_entry_t *entry = &g_arp_cache.entries[i];
+        entry = &g_arp_cache.entries[i];
         if (entry->flags & ARP_FLAG_VALID) {
             printf("  Entry %d: IP=%d.%d.%d.%d MAC=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                   i, entry->ip.octets[0], entry->ip.octets[1], 
+                   i, entry->ip.octets[0], entry->ip.octets[1],
                    entry->ip.octets[2], entry->ip.octets[3],
                    entry->mac[0], entry->mac[1], entry->mac[2],
                    entry->mac[3], entry->mac[4], entry->mac[5]);
@@ -1043,11 +1066,12 @@ void arp_dump_cache_entry(const arp_cache_entry_t *entry) {
 
 void arp_dump_cache(void) {
     int i;
+    arp_cache_entry_t *entry;
 
     /* Implement cache dumping */
     printf("Complete ARP Cache Dump:\n");
     for (i = 0; i < g_arp_cache.max_entries; i++) {
-        arp_cache_entry_t *entry = &g_arp_cache.entries[i];
+        entry = &g_arp_cache.entries[i];
         if (entry->flags & ARP_FLAG_VALID) {
             printf("Entry %d: ", i);
             arp_dump_cache_entry(entry);
@@ -1077,20 +1101,21 @@ int arp_register_with_pipeline(void) {
 /* Helper functions for ARP implementation */
 static bool arp_can_proxy_for_ip(const ip_addr_t *ip) {
     int i;
+    nic_info_t *nic;
 
     if (!ip) return false;
 
     /* Conservative proxy ARP - only proxy for configured subnets */
     /* Check if IP is in same subnet as any of our NICs */
     for (i = 0; i < hardware_get_nic_count(); i++) {
-        nic_info_t *nic = hardware_get_nic(i);
+        nic = hardware_get_nic(i);
         if (nic && hardware_is_nic_active(i)) {
             /* In a full implementation, would check IP/subnet configuration */
             /* For now, be conservative and don't proxy by default */
             /* This prevents security issues from promiscuous proxying */
         }
     }
-    
+
     /* Conservative default: don't proxy unless explicitly configured */
     return false;
 }
@@ -1103,6 +1128,6 @@ static int arp_send_response(const ip_addr_t *target_ip, const uint8_t *src_mac,
     /* Send ARP response - simplified implementation */
     LOG_DEBUG("Sending ARP response for proxy request");
     g_arp_stats.responses_sent++;
-    
+
     return SUCCESS;
 }

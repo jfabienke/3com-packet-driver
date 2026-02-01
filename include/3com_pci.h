@@ -16,7 +16,9 @@
 
 #include <stdint.h>
 #include "common.h"
+#include "nicctx.h"   /* For complete nic_context_t definition */
 #include "nic_init.h"
+#include "packet.h"  /* For packet_t, packet_buffer_t */
 
 /* Generation identification flags */
 #define IS_VORTEX       0x01    /* 3c59x Vortex - PIO only */

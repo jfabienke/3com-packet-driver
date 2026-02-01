@@ -29,8 +29,6 @@ extern "C" {
 #include <stdbool.h>
 
 /* Forward declarations */
-struct hardware_hal_vtable;
-typedef struct hardware_hal_vtable hardware_hal_vtable_t;
 
 /* Pack structures for DOS compatibility */
 #pragma pack(push, 1)
@@ -43,15 +41,17 @@ typedef struct hardware_hal_vtable hardware_hal_vtable_t;
 
 /* NIC operational states */
 typedef enum {
-    NIC_STATE_UNINITIALIZED = 0,
-    NIC_STATE_DETECTED      = 1,
-    NIC_STATE_INITIALIZED   = 2,
-    NIC_STATE_ACTIVE        = 3,
-    NIC_STATE_SUSPENDED     = 4,
-    NIC_STATE_ERROR         = 5
+    NIC_STATE_UNINITIALIZED,  /* 0: Not initialized */
+    NIC_STATE_DETECTED,       /* 1: Hardware detected */
+    NIC_STATE_INITIALIZED,    /* 2: Initialized */
+    NIC_STATE_ACTIVE,         /* 3: Active and operational */
+    NIC_STATE_SUSPENDED,      /* 4: Suspended */
+    NIC_STATE_ERROR           /* 5: Error state */
 } nic_state_t;
 
 /* DMA descriptor structure for 3C515-TX */
+#ifndef DMA_DESCRIPTOR_T_DEFINED
+#define DMA_DESCRIPTOR_T_DEFINED
 typedef struct dma_descriptor {
     uint32_t next_ptr;          /* Physical address of next descriptor */
     uint32_t status;            /* Status and control bits */
@@ -59,6 +59,7 @@ typedef struct dma_descriptor {
     uint16_t buffer_length;     /* Buffer length */
     uint16_t packet_length;     /* Packet length (RX only) */
 } dma_descriptor_t;
+#endif /* DMA_DESCRIPTOR_T_DEFINED */
 
 /* Ring buffer management */
 typedef struct ring_buffer {
@@ -72,44 +73,48 @@ typedef struct ring_buffer {
 } ring_buffer_t;
 
 /* EEPROM configuration structure */
+/* EEPROM configuration - only define if not already defined elsewhere */
+#ifndef EEPROM_CONFIG_T_DEFINED
+#define EEPROM_CONFIG_T_DEFINED
 typedef struct eeprom_config {
     /* Header information */
     uint16_t checksum;          /* EEPROM checksum */
     uint16_t product_id;        /* Product identification */
     uint16_t manufacture_date;  /* Manufacturing date code */
     uint16_t manufacture_div;   /* Manufacturing division */
-    
+
     /* Station address */
     uint8_t  station_addr[6];   /* Permanent station address */
     uint16_t addr_checksum;     /* Station address checksum */
-    
+
     /* Configuration options */
     uint16_t config_control;    /* Configuration control word */
     uint16_t resource_config;   /* Resource configuration */
     uint16_t software_info;     /* Software information */
     uint16_t compatibility;     /* Compatibility level */
-    
+
     /* 3C515-TX specific fields */
     uint16_t bus_master_ctrl;   /* Bus master control */
     uint16_t media_options;     /* Media options available */
     uint16_t full_duplex;       /* Full duplex capabilities */
     uint16_t auto_select;       /* Auto media selection */
-    
+
     /* 3C509B specific fields */
     uint16_t connector_type;    /* Physical connector type */
     uint16_t xcvr_select;       /* Transceiver selection */
     uint16_t link_beat;         /* Link beat enable */
     uint16_t jabber_guard;      /* Jabber protection */
-    
+
     /* Additional configuration */
     uint16_t reserved[4];       /* Reserved for future use */
-    
+
     /* Validation fields */
     bool valid;                 /* Configuration is valid */
     uint8_t version;           /* Configuration version */
     uint8_t flags;             /* Configuration flags */
     uint8_t reserved2;         /* Padding for alignment */
 } eeprom_config_t;
+#endif /* EEPROM_CONFIG_T_DEFINED */
 
 /* Hardware capabilities structure */
 typedef struct nic_capabilities {
@@ -176,40 +181,39 @@ typedef struct nic_runtime_config {
     uint16_t reserved;          /* Padding */
 } nic_runtime_config_t;
 
-/* Primary NIC context structure */
+/* Primary NIC context structure - only define if not already defined */
+#ifndef NIC_CONTEXT_FULL_DEFINED
+#define NIC_CONTEXT_FULL_DEFINED 1
 typedef struct nic_context {
     /* Basic identification */
     nic_type_t nic_type;               /* NIC type identifier */
     nic_state_t state;                 /* Current operational state */
     uint8_t nic_index;                 /* NIC index (0-based) */
     uint8_t irq_line;                  /* IRQ line number */
-    
+
     /* Hardware addressing */
     uint16_t io_base;                  /* Base I/O address */
     uint16_t io_range;                 /* I/O address range */
     uint32_t mem_base;                 /* Memory base (if used) */
     uint32_t mem_size;                 /* Memory size */
-    
-    /* HAL vtable pointer */
-    hardware_hal_vtable_t *hal_vtable; /* Function pointer table */
-    
+
     /* Configuration data */
     eeprom_config_t eeprom_config;     /* EEPROM configuration */
     nic_capabilities_t capabilities;    /* Hardware capabilities */
     nic_runtime_config_t runtime_config; /* Runtime configuration */
-    
+
     /* DMA resources (3C515-TX only) */
     ring_buffer_t tx_ring;             /* TX descriptor ring */
     ring_buffer_t rx_ring;             /* RX descriptor ring */
     uint32_t dma_coherent_base;        /* DMA coherent memory base */
     uint16_t dma_coherent_size;        /* DMA coherent memory size */
-    
+
     /* Buffer management */
     void *tx_buffer_pool;              /* TX buffer pool */
     void *rx_buffer_pool;              /* RX buffer pool */
     uint16_t tx_buffer_count;          /* Available TX buffers */
     uint16_t rx_buffer_count;          /* Available RX buffers */
-    
+
     /* Statistics and counters */
     uint32_t packets_tx;               /* Packets transmitted */
     uint32_t packets_rx;               /* Packets received */
@@ -218,32 +222,33 @@ typedef struct nic_context {
     uint32_t errors_tx;                /* TX errors */
     uint32_t errors_rx;                /* RX errors */
     uint32_t interrupts_handled;       /* Interrupts handled */
-    
+
     /* Link state tracking */
     bool link_up;                      /* Link is up */
     uint32_t link_up_time;             /* Time link came up */
     uint32_t link_down_time;           /* Time link went down */
     uint32_t link_state_changes;       /* Link state changes */
-    
+
     /* Error handling integration */
-    nic_context_t *error_context;      /* Error handling context */
+    struct nic_context *error_context; /* Error handling context - use struct for self-ref */
     uint32_t last_error_time;          /* Last error timestamp */
     uint16_t consecutive_errors;        /* Consecutive error count */
     uint8_t recovery_level;            /* Current recovery level */
     uint8_t error_flags;               /* Error status flags */
-    
+
     /* Private data pointer for NIC-specific extensions */
     void *private_data;                /* NIC-specific data */
     uint16_t private_data_size;        /* Size of private data */
-    
+
     /* Timing and performance */
     uint32_t init_time;                /* Initialization timestamp */
     uint32_t last_activity_time;       /* Last activity timestamp */
     uint16_t performance_flags;        /* Performance optimization flags */
-    
+
     /* Reserved for future expansion */
     uint8_t reserved[16];              /* Reserved bytes */
 } nic_context_t;
+#endif /* NIC_CONTEXT_FULL_DEFINED */
 
 #pragma pack(pop)
 

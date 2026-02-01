@@ -12,6 +12,7 @@
 #define _3C515_H_
 
 #include <common.h>  // Assumes uint8_t, uint16_t, uint32_t, etc.
+#include "eeprom.h"  // For eeprom_config_t
 
 /* Forward declarations for DMA types */
 typedef struct dma_fragment dma_fragment_t;
@@ -113,39 +114,46 @@ typedef struct dma_mapping dma_mapping_t;  /* GPT-5 Critical: DMA mapping lifeti
 // --- Window 0: EEPROM Access ---
 
 #define _3C515_TX_W0_IRQ         0x08   // Window 0 IRQ register
-#define _3C515_TX_W0_EEPROM_CMD  0x200A // EEPROM command
-#define _3C515_TX_W0_EEPROM_DATA 0x200C // EEPROM data
+#define _3C515_TX_W0_EEPROM_CMD  0x0A   // EEPROM command (corrected offset)
+#define _3C515_TX_W0_EEPROM_DATA 0x0C   // EEPROM data (corrected offset)
+#define _3C515_TX_W0_EEPROM_COMMAND  _3C515_TX_W0_EEPROM_CMD   // Alias for regacc.h
 
 // EEPROM Commands (written to _3C515_TX_W0_EEPROM_CMD)
 #define _3C515_TX_EEPROM_READ     0x80  // EEPROM read command
+#define _3C515_TX_EEPROM_CMD_READ _3C515_TX_EEPROM_READ  // Alias for regacc.h
 #define _3C515_TX_EEPROM_WRITE    0x40  // EEPROM write command (not used)
 #define _3C515_TX_EEPROM_ERASE    0xC0  // EEPROM erase command (not used)
 #define _3C515_TX_EEPROM_EWENB    0x30  // EEPROM enable writing/erasing (not used)
 #define _3C515_TX_EEPROM_EWDIS    0x00  // EEPROM disable writing/erasing (not used)
+#define _3C515_TX_EEPROM_BUSY     0x8000  // Busy bit in EEPROM status
 
 // EEPROM Read Timings
 #define _3C515_TX_EEPROM_READ_DELAY  162 // microseconds
 
 // EEPROM locations for MAC address and configuration
+// Note: C89 compatible - sequential values start at 0
+// EtherLink3ID is at offset 7, use #define for non-sequential
 enum eeprom_offset {
-    PhysAddr01 = 0,    // MAC bytes 0-1
-    PhysAddr23 = 1,    // MAC bytes 2-3  
-    PhysAddr45 = 2,    // MAC bytes 4-5
-    ModelID = 3,       // Device model ID
-    EtherLink3ID = 7   // 3Com ID (0x6d50)
+    PhysAddr01,        /* 0: MAC bytes 0-1 */
+    PhysAddr23,        /* 1: MAC bytes 2-3 */
+    PhysAddr45,        /* 2: MAC bytes 4-5 */
+    ModelID            /* 3: Device model ID */
 };
+#define EtherLink3ID  7   /* 3Com ID offset (0x6d50) - non-sequential */
 
 // Transceiver types for media selection
+// Note: C89 compatible - sequential values start at 0
+// XCVR_Default is at 8, use #define for non-sequential
 enum xcvr_types {
-    XCVR_10baseT = 0,
-    XCVR_AUI = 1,
-    XCVR_10baseTOnly = 2,
-    XCVR_10base2 = 3,
-    XCVR_100baseTx = 4,
-    XCVR_100baseFx = 5,
-    XCVR_MII = 6,
-    XCVR_Default = 8
+    XCVR_10baseT,      /* 0: 10Base-T */
+    XCVR_AUI,          /* 1: AUI */
+    XCVR_10baseTOnly,  /* 2: 10Base-T only */
+    XCVR_10base2,      /* 3: 10Base-2 (coax) */
+    XCVR_100baseTx,    /* 4: 100Base-TX */
+    XCVR_100baseFx,    /* 5: 100Base-FX */
+    XCVR_MII           /* 6: MII */
 };
+#define XCVR_Default  8   /* Default transceiver - non-sequential */
 
 // Performance and timing constants
 #define MAX_INTERRUPT_WORK 32    // Max events per interrupt
@@ -186,13 +194,16 @@ enum xcvr_types {
 #define _3C515_TX_W7_UP_POLL           0x41C   // RX poll demand
 #define _3C515_TX_W7_DOWN_POLL         0x408   // TX poll demand
 
-// DMA descriptor format (bus master mode)
+/* DMA descriptor format (bus master mode) */
+#ifndef DMA_DESCRIPTOR_T_DEFINED
+#define DMA_DESCRIPTOR_T_DEFINED
 typedef struct {
-    uint32_t next;          // Physical address of next descriptor
-    uint32_t status;        // Status and packet length
-    uint32_t addr;          // Physical address of data buffer
-    uint32_t length;        // Buffer length and control bits
+    uint32_t next;          /* Physical address of next descriptor */
+    uint32_t status;        /* Status and packet length */
+    uint32_t addr;          /* Physical address of data buffer */
+    uint32_t length;        /* Buffer length and control bits */
 } dma_descriptor_t;
+#endif /* DMA_DESCRIPTOR_T_DEFINED */
 
 // DMA descriptor status bits
 #define _3C515_TX_DMA_DESC_COMPLETE    0x00008000  // Descriptor complete
@@ -234,6 +245,10 @@ typedef struct {
 #define _3C515_TX_TX_FREE       0x1C  // Free bytes in TX FIFO
 #define _3C515_TX_RX_ERRORS    0x14  // RX Errors
 #define _3C515_TX_W1_TIMER     0x1A  // Timer
+#define _3C515_TX_W1_TX_DATA    _3C515_TX_TX_FIFO   // Alias for regacc.h
+#define _3C515_TX_W1_RX_DATA    _3C515_TX_RX_FIFO   // Alias for regacc.h
+#define _3C515_TX_W1_TX_STATUS  _3C515_TX_TX_STATUS // Alias for regacc.h
+#define _3C515_TX_W1_RX_STATUS  _3C515_TX_RX_STATUS // Alias for regacc.h
 
 // RX_STATUS bits (read from _3C515_TX_RX_STATUS)
 #define _3C515_TX_RXSTAT_INCOMPLETE   0x8000 // Not completely received
@@ -260,6 +275,7 @@ typedef struct {
 // --- Window 2: Station Address ---
 // Offsets 0-5 are used to *write* the MAC address into the NIC.
 // This is typically done *once* during initialization.
+#define _3C515_TX_W2_STATION_ADDR   0x00  // Station address (6 bytes at offsets 0-5)
 
 // --- Window 3: Configuration ---
 
@@ -287,6 +303,8 @@ typedef struct {
 #define _3C515_TX_W4_MEDIA      0x0A // Media control
 #define _3C515_TX_W4_MII_READ   0x0800 // MII read command
 #define _3C515_TX_W4_MII_WRITE  0x0A00 // MII write command
+#define _3C515_TX_W4_MEDIA_STATUS   _3C515_TX_W4_MEDIA  // Alias for regacc.h
+#define _3C515_TX_W4_MEDIA_CONTROL  _3C515_TX_W4_MEDIA  // Alias for regacc.h
 
 // Media Bits (_3C515_TX_W4_MEDIA)
 #define _3C515_TX_MEDIA_SQE         0x0008 // Enable SQE error counting for AUI
@@ -312,6 +330,9 @@ typedef struct {
 #define _3C515_TX_W7_MASTER_ADDR    0x00 // Bus Master transfer physical address
 #define _3C515_TX_W7_MASTER_LEN     0x06 // Bus Master transfer length (bytes)
 #define _3C515_TX_W7_MASTER_STATUS  0x0C // Bus Master status
+#define _3C515_TX_W7_MASTER_ADDRESS _3C515_TX_W7_MASTER_ADDR    // Alias for regacc.h
+#define _3C515_TX_W7_MASTER_LENGTH  _3C515_TX_W7_MASTER_LEN     // Alias for regacc.h
+#define _3C515_TX_W7_MASTER_CONTROL 0x10 // Bus Master control register
 
 // Aliased registers (Window 7 and others)
 #define _3C515_TX_PKT_STATUS        0x400  // Packet status (alias for W7_MASTER_ADDR)
@@ -341,6 +362,10 @@ typedef struct {
     /* GPT-5 CRITICAL: Attach mapping to descriptor for proper lifetime management */
     dma_mapping_t *mapping;  // DMA mapping attached to this descriptor (freed on completion)
 } _3c515_tx_tx_desc_t;
+
+/* Compatibility aliases for consistent naming in enhring.h */
+typedef _3c515_tx_tx_desc_t _3c515_tx_desc_t;  /* TX descriptor alias */
+typedef _3c515_tx_rx_desc_t _3c515_rx_desc_t;  /* RX descriptor alias */
 
 // --- Descriptor Status Bits ---
 
@@ -382,30 +407,31 @@ typedef struct {
 
 /**
  * @brief Enhanced NIC context structure with complete configuration state
+ * Note: Named _3c515_nic_context_t to avoid conflict with nic_context_t in errhndl.h
  */
-typedef struct {
+typedef struct _3c515_nic_context {
     /* Basic hardware configuration */
     uint16_t io_base;                       // I/O base address
     uint8_t irq;                            // IRQ number
-    
+
     /* Ring buffer management */
     _3c515_tx_tx_desc_t *tx_desc_ring;      // TX descriptor ring
     _3c515_tx_rx_desc_t *rx_desc_ring;      // RX descriptor ring
     uint32_t tx_index;                      // Current transmit descriptor index
     uint32_t rx_index;                      // Current receive descriptor index
     uint8_t *buffers;                       // Contiguous buffer memory
-    
+
     /* Enhanced configuration */
     eeprom_config_t eeprom_config;          // Hardware configuration from EEPROM
     media_config_t media_config;            // Media configuration state
-    
+
     /* Hardware state tracking */
     uint8_t hardware_ready;                 // Hardware initialization complete flag
     uint8_t driver_active;                  // Driver active state
     uint32_t last_config_validation;        // Last configuration validation time
     uint32_t last_stats_update;             // Last statistics update time
     uint32_t last_link_check;               // Last link status check time
-    
+
     /* Statistics collection */
     uint32_t tx_packets;                    // Transmitted packets
     uint32_t rx_packets;                    // Received packets
@@ -415,17 +441,17 @@ typedef struct {
     uint32_t rx_errors;                     // Reception errors
     uint32_t link_changes;                  // Link state changes
     uint32_t config_errors;                 // Configuration errors
-    
+
     /* Advanced features */
     uint16_t interrupt_mask;                // Current interrupt mask
     uint8_t full_duplex_enabled;            // Full duplex mode active
     uint8_t dma_enabled;                    // Bus master DMA enabled
     uint8_t stats_enabled;                  // Hardware statistics enabled
     uint8_t link_monitoring_enabled;        // Link monitoring active
-    
+
     /* Error handling integration */
     void *error_context;                    // Error handling context
-} nic_context_t;
+} _3c515_nic_context_t;
 
 // --- Complete Hardware Initialization API ---
 
@@ -439,7 +465,7 @@ typedef struct {
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int complete_3c515_initialization(nic_context_t *ctx);
+int complete_3c515_initialization(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Enhanced initialization with complete hardware setup
@@ -491,13 +517,13 @@ int _3c515_enhanced_test_scatter_gather(void);
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int periodic_configuration_validation(nic_context_t *ctx);
+int periodic_configuration_validation(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Get current NIC context for integration with other systems
  * @return Pointer to NIC context or NULL if not initialized
  */
-nic_context_t *get_3c515_context(void);
+_3c515_nic_context_t *get_3c515_context(void);
 
 /**
  * @brief Get hardware configuration information
@@ -506,7 +532,7 @@ nic_context_t *get_3c515_context(void);
  * @param buffer_size Size of the buffer
  * @return Number of characters written to buffer, negative on error
  */
-int get_hardware_config_info(nic_context_t *ctx, char *buffer, size_t buffer_size);
+int get_hardware_config_info(_3c515_nic_context_t *ctx, char *buffer, size_t buffer_size);
 
 // --- Hardware Configuration Step Functions ---
 
@@ -515,7 +541,7 @@ int get_hardware_config_info(nic_context_t *ctx, char *buffer, size_t buffer_siz
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int read_and_parse_eeprom(nic_context_t *ctx);
+int read_and_parse_eeprom(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Configure media type from EEPROM data
@@ -523,56 +549,56 @@ int read_and_parse_eeprom(nic_context_t *ctx);
  * @param media Pointer to media configuration structure
  * @return 0 on success, negative error code on failure
  */
-int configure_media_type(nic_context_t *ctx, media_config_t *media);
+int configure_media_type(_3c515_nic_context_t *ctx, media_config_t *media);
 
 /**
  * @brief Configure full-duplex support (Window 3, MAC Control)
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int configure_full_duplex(nic_context_t *ctx);
+int configure_full_duplex(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Setup comprehensive interrupt mask
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int setup_interrupt_mask(nic_context_t *ctx);
+int setup_interrupt_mask(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Configure bus master DMA settings
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int configure_bus_master_dma(nic_context_t *ctx);
+int configure_bus_master_dma(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Enable hardware statistics collection (Window 6)
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int enable_hardware_statistics(nic_context_t *ctx);
+int enable_hardware_statistics(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Setup link status monitoring
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int setup_link_monitoring(nic_context_t *ctx);
+int setup_link_monitoring(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Validate complete hardware configuration
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int validate_hardware_configuration(nic_context_t *ctx);
+int validate_hardware_configuration(_3c515_nic_context_t *ctx);
 
 /**
  * @brief Reset NIC hardware to known state
  * @param ctx Pointer to NIC context structure
  * @return 0 on success, negative error code on failure
  */
-int reset_nic_hardware(nic_context_t *ctx);
+int reset_nic_hardware(_3c515_nic_context_t *ctx);
 
 // --- Configuration Constants ---
 

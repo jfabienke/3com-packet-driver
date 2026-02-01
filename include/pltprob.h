@@ -1,8 +1,7 @@
 #ifndef PLATFORM_PROBE_H
 #define PLATFORM_PROBE_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
 
 /* Platform Detection and DMA Policy Module
  * 
@@ -13,11 +12,11 @@
  * - Conservative DMA policy enforcement
  */
 
-/* DMA Policy Types */
+/* DMA Policy Types - C89 compatible */
 typedef enum {
-    DMA_POLICY_DIRECT = 0,      /* Real mode - direct physical access allowed */
-    DMA_POLICY_COMMONBUF,       /* V86 + VDS - use VDS services for DMA */
-    DMA_POLICY_FORBID           /* V86 without VDS - no DMA allowed */
+    DMA_POLICY_DIRECT,          /* 0: Real mode - direct physical access allowed */
+    DMA_POLICY_COMMONBUF,       /* 1: V86 + VDS - use VDS services for DMA */
+    DMA_POLICY_FORBID           /* 2: V86 without VDS - no DMA allowed */
 } dma_policy_t;
 
 /* Platform Probe Results */
@@ -143,9 +142,14 @@ const char *platform_get_environment_desc(const platform_probe_result_t *result)
  */
 bool platform_validate_policy_for_nic(int nic_type, dma_policy_t policy);
 
-/* NIC Type Constants for Policy Validation */
+/* NIC Type Constants for Policy Validation - use enum values from nic_defs.h */
+/* Note: These are now provided as enum values in nic_defs.h */
+#ifndef NIC_TYPE_3C509B
 #define NIC_TYPE_3C509B     1   /* 3Com 3C509B (PIO only) */
+#endif
+#ifndef NIC_TYPE_3C515_TX
 #define NIC_TYPE_3C515_TX   2   /* 3Com 3C515-TX (bus-master) */
+#endif
 
 /* Platform Capability Flags */
 #define PLATFORM_CAP_REAL_MODE      0x0001  /* Real mode environment */

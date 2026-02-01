@@ -27,26 +27,27 @@ extern "C" {
 #include "config.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "cpudet.h"    /* For cpu_type_t */
 
 /* Test mode enumeration */
 typedef enum {
-    BM_TEST_MODE_FULL = 0,      /* Full 45-second test */
-    BM_TEST_MODE_QUICK = 1      /* Quick 10-second test */
+    BM_TEST_MODE_FULL,          /* Full 45-second test */
+    BM_TEST_MODE_QUICK          /* Quick 10-second test */
 } busmaster_test_mode_t;
 
 /* Test phase enumeration */
 typedef enum {
-    BM_TEST_BASIC = 0,          /* Basic functionality tests */
-    BM_TEST_STRESS = 1,         /* Stress testing phase */
-    BM_TEST_STABILITY = 2       /* Long-duration stability testing */
+    BM_TEST_BASIC,              /* Basic functionality tests */
+    BM_TEST_STRESS,             /* Stress testing phase */
+    BM_TEST_STABILITY           /* Long-duration stability testing */
 } busmaster_test_phase_t;
 
 /* Confidence level enumeration */
 typedef enum {
-    BM_CONFIDENCE_FAILED = 0,   /* Testing failed - use PIO */
-    BM_CONFIDENCE_LOW = 1,      /* Low confidence - recommend PIO */
-    BM_CONFIDENCE_MEDIUM = 2,   /* Medium confidence - conditional use */
-    BM_CONFIDENCE_HIGH = 3      /* High confidence - safe to use */
+    BM_CONFIDENCE_FAILED,       /* Testing failed - use PIO */
+    BM_CONFIDENCE_LOW,          /* Low confidence - recommend PIO */
+    BM_CONFIDENCE_MEDIUM,       /* Medium confidence - conditional use */
+    BM_CONFIDENCE_HIGH          /* High confidence - safe to use */
 } busmaster_confidence_t;
 
 /* Individual test scoring maximums */
@@ -89,11 +90,11 @@ typedef enum {
 
 /**
  * @brief Comprehensive bus mastering test results structure
- * 
+ *
  * Contains detailed results from all phases of bus mastering capability testing
  * with 0-552 point scoring system and confidence level determination.
  */
-typedef struct {
+typedef struct busmaster_test_results {
     /* Overall test results */
     uint16_t confidence_score;          /* Total confidence score (0-552) */
     busmaster_confidence_t confidence_level; /* Confidence level determination */

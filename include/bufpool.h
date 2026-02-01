@@ -13,10 +13,10 @@
 
 /* Buffer types */
 typedef enum {
-    BUFFER_SMALL = 0,       /* 256 bytes */
-    BUFFER_MEDIUM = 1,      /* 512 bytes */
-    BUFFER_LARGE = 2,       /* 1536 bytes (MTU) */
-    BUFFER_TYPES = 3
+    BUFFER_SMALL,           /* 256 bytes */
+    BUFFER_MEDIUM,          /* 512 bytes */
+    BUFFER_LARGE,           /* 1536 bytes (MTU) */
+    BUFFER_TYPES
 } buffer_type_t;
 
 /* Buffer pool statistics */

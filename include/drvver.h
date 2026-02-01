@@ -84,15 +84,18 @@ typedef struct {
 #define DRIVER_FEATURE_STATISTICS       BIT(7)  /* Statistics collection */
 
 /* Compatibility check results */
+/* Note: C89 compatible - no explicit enum values. Use #defines for error codes. */
 typedef enum {
-    DRIVER_COMPAT_COMPATIBLE = 0,       /* Fully compatible */
-    DRIVER_COMPAT_MINOR_DIFF = 1,       /* Minor differences, should work */
-    DRIVER_COMPAT_MAJOR_DIFF = 2,       /* Major differences, may work */
-    DRIVER_COMPAT_INCOMPATIBLE = -1,    /* Incompatible, will not work */
-    DRIVER_COMPAT_VERSION_TOO_OLD = -2, /* Driver too old */
-    DRIVER_COMPAT_VERSION_TOO_NEW = -3, /* Driver too new */
-    DRIVER_COMPAT_MISSING_FEATURES = -4 /* Required features missing */
+    DRIVER_COMPAT_COMPATIBLE,           /* 0: Fully compatible */
+    DRIVER_COMPAT_MINOR_DIFF,           /* 1: Minor differences, should work */
+    DRIVER_COMPAT_MAJOR_DIFF            /* 2: Major differences, may work */
 } driver_compatibility_t;
+
+/* Error codes for compatibility checks (negative values not allowed in C89 enums) */
+#define DRIVER_COMPAT_INCOMPATIBLE      (-1)    /* Incompatible, will not work */
+#define DRIVER_COMPAT_VERSION_TOO_OLD   (-2)    /* Driver too old */
+#define DRIVER_COMPAT_VERSION_TOO_NEW   (-3)    /* Driver too new */
+#define DRIVER_COMPAT_MISSING_FEATURES  (-4)    /* Required features missing */
 
 /* Version checking functions */
 

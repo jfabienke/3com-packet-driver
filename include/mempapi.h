@@ -52,20 +52,34 @@ extern "C" {
  *============================================================================*/
 
 typedef enum {
-    MEMPOOL_SUCCESS             =  0,   /**< Operation successful */
-    MEMPOOL_ERROR_INVALID_PARAM = -1,   /**< Invalid parameter */
-    MEMPOOL_ERROR_OUT_OF_MEMORY = -2,   /**< Insufficient memory */
-    MEMPOOL_ERROR_ALIGNMENT     = -3,   /**< Alignment violation */
-    MEMPOOL_ERROR_BOUNDARY      = -4,   /**< 64KB boundary violation */
-    MEMPOOL_ERROR_SIZE_LIMIT    = -5,   /**< Size exceeds limits */
-    MEMPOOL_ERROR_NOT_FOUND     = -6,   /**< Buffer not found */
-    MEMPOOL_ERROR_ALREADY_LOCKED= -7,   /**< Buffer already locked */
-    MEMPOOL_ERROR_NOT_LOCKED    = -8,   /**< Buffer not locked */
-    MEMPOOL_ERROR_CORRUPTION    = -9,   /**< Buffer corruption detected */
-    MEMPOOL_ERROR_NOT_INITIALIZED=-10,  /**< Memory pool not initialized */
-    MEMPOOL_ERROR_QUOTA_EXCEEDED = -11, /**< Module quota exceeded */
-    MEMPOOL_ERROR_ISA_LIMIT     = -12   /**< Above 16MB ISA limit */
+    MEMPOOL_SUCCESS,               /**< 0: Operation successful */
+    MEMPOOL_ERROR_INVALID_PARAM,   /**< 1: Invalid parameter */
+    MEMPOOL_ERROR_OUT_OF_MEMORY,   /**< 2: Insufficient memory */
+    MEMPOOL_ERROR_ALIGNMENT,       /**< 3: Alignment violation */
+    MEMPOOL_ERROR_BOUNDARY,        /**< 4: 64KB boundary violation */
+    MEMPOOL_ERROR_SIZE_LIMIT,      /**< 5: Size exceeds limits */
+    MEMPOOL_ERROR_NOT_FOUND,       /**< 6: Buffer not found */
+    MEMPOOL_ERROR_ALREADY_LOCKED,  /**< 7: Buffer already locked */
+    MEMPOOL_ERROR_NOT_LOCKED,      /**< 8: Buffer not locked */
+    MEMPOOL_ERROR_CORRUPTION,      /**< 9: Buffer corruption detected */
+    MEMPOOL_ERROR_NOT_INITIALIZED, /**< 10: Memory pool not initialized */
+    MEMPOOL_ERROR_QUOTA_EXCEEDED,  /**< 11: Module quota exceeded */
+    MEMPOOL_ERROR_ISA_LIMIT        /**< 12: Above 16MB ISA limit */
 } mempool_result_t;
+
+/* Error code defines for functions returning int */
+#define MEMPOOL_ERR_INVALID_PARAM   (-1)
+#define MEMPOOL_ERR_OUT_OF_MEMORY   (-2)
+#define MEMPOOL_ERR_ALIGNMENT       (-3)
+#define MEMPOOL_ERR_BOUNDARY        (-4)
+#define MEMPOOL_ERR_SIZE_LIMIT      (-5)
+#define MEMPOOL_ERR_NOT_FOUND       (-6)
+#define MEMPOOL_ERR_ALREADY_LOCKED  (-7)
+#define MEMPOOL_ERR_NOT_LOCKED      (-8)
+#define MEMPOOL_ERR_CORRUPTION      (-9)
+#define MEMPOOL_ERR_NOT_INITIALIZED (-10)
+#define MEMPOOL_ERR_QUOTA_EXCEEDED  (-11)
+#define MEMPOOL_ERR_ISA_LIMIT       (-12)
 
 /*============================================================================
  * MEMORY TYPE AND FLAG DEFINITIONS
@@ -75,35 +89,58 @@ typedef enum {
  * @brief Memory tier preference for allocation
  */
 typedef enum {
-    MEMPOOL_TIER_XMS        = 0x01,     /**< XMS extended memory */
-    MEMPOOL_TIER_UMB        = 0x02,     /**< Upper memory blocks */
-    MEMPOOL_TIER_CONVENTIONAL = 0x04,   /**< Conventional memory */
-    MEMPOOL_TIER_AUTO       = 0x07,     /**< Automatic tier selection */
-    MEMPOOL_TIER_DMA_CAPABLE = 0x10     /**< Must be DMA-capable */
+    MEMPOOL_TIER_NONE,         /**< 0: No tier specified */
+    MEMPOOL_TIER_XMS,          /**< 1: XMS extended memory */
+    MEMPOOL_TIER_UMB,          /**< 2: Upper memory blocks */
+    MEMPOOL_TIER_CONVENTIONAL, /**< 3: Conventional memory */
+    MEMPOOL_TIER_AUTO,         /**< 4: Automatic tier selection */
+    MEMPOOL_TIER_DMA_CAPABLE   /**< 5: Must be DMA-capable */
 } mempool_tier_t;
+
+/* Memory tier bitmask values for flag operations */
+#define MEMPOOL_TIER_FLAG_XMS          0x01
+#define MEMPOOL_TIER_FLAG_UMB          0x02
+#define MEMPOOL_TIER_FLAG_CONVENTIONAL 0x04
+#define MEMPOOL_TIER_FLAG_AUTO         0x07
+#define MEMPOOL_TIER_FLAG_DMA_CAPABLE  0x10
 
 /**
  * @brief Memory allocation flags
  */
 typedef enum {
-    MEMPOOL_FLAG_ZERO       = 0x0001,   /**< Zero-initialize memory */
-    MEMPOOL_FLAG_ALIGN      = 0x0002,   /**< Enforce alignment */
-    MEMPOOL_FLAG_DMA_SAFE   = 0x0004,   /**< DMA-safe allocation */
-    MEMPOOL_FLAG_ISR_SAFE   = 0x0008,   /**< ISR-safe try-lock only */
-    MEMPOOL_FLAG_PERSISTENT = 0x0010,   /**< Long-lived allocation */
-    MEMPOOL_FLAG_TEMPORARY  = 0x0020,   /**< Short-lived allocation */
-    MEMPOOL_FLAG_POOLED     = 0x0040,   /**< Use pool allocation */
-    MEMPOOL_FLAG_GUARD      = 0x0080    /**< Add guard patterns */
+    MEMPOOL_FLAG_NONE,       /**< 0: No flags */
+    MEMPOOL_FLAG_ZERO,       /**< 1: Zero-initialize memory */
+    MEMPOOL_FLAG_ALIGN,      /**< 2: Enforce alignment */
+    MEMPOOL_FLAG_DMA_SAFE,   /**< 3: DMA-safe allocation */
+    MEMPOOL_FLAG_ISR_SAFE,   /**< 4: ISR-safe try-lock only */
+    MEMPOOL_FLAG_PERSISTENT, /**< 5: Long-lived allocation */
+    MEMPOOL_FLAG_TEMPORARY,  /**< 6: Short-lived allocation */
+    MEMPOOL_FLAG_POOLED,     /**< 7: Use pool allocation */
+    MEMPOOL_FLAG_GUARD       /**< 8: Add guard patterns */
 } mempool_flags_t;
+
+/* Memory pool flag bitmask values for flag operations */
+#define MEMPOOL_FLAG_BIT_ZERO       0x0001
+#define MEMPOOL_FLAG_BIT_ALIGN      0x0002
+#define MEMPOOL_FLAG_BIT_DMA_SAFE   0x0004
+#define MEMPOOL_FLAG_BIT_ISR_SAFE   0x0008
+#define MEMPOOL_FLAG_BIT_PERSISTENT 0x0010
+#define MEMPOOL_FLAG_BIT_TEMPORARY  0x0020
+#define MEMPOOL_FLAG_BIT_POOLED     0x0040
+#define MEMPOOL_FLAG_BIT_GUARD      0x0080
 
 /**
  * @brief DMA device types for optimization
  */
 typedef enum {
-    MEMPOOL_DMA_DEVICE_NETWORK  = 0x01, /**< Network interface */
-    MEMPOOL_DMA_DEVICE_STORAGE  = 0x02, /**< Storage device */
-    MEMPOOL_DMA_DEVICE_GENERIC  = 0xFF  /**< Generic DMA device */
+    MEMPOOL_DMA_DEVICE_NONE,     /**< 0: No device */
+    MEMPOOL_DMA_DEVICE_NETWORK,  /**< 1: Network interface */
+    MEMPOOL_DMA_DEVICE_STORAGE,  /**< 2: Storage device */
+    MEMPOOL_DMA_DEVICE_GENERIC   /**< 3: Generic DMA device */
 } mempool_dma_device_t;
+
+/* Legacy value for generic device compatibility */
+#define MEMPOOL_DMA_DEVICE_GENERIC_LEGACY 0xFF
 
 /*============================================================================
  * BUFFER DESCRIPTORS AND HANDLES

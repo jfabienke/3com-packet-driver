@@ -34,26 +34,30 @@
 
 /* Transfer modes */
 typedef enum {
-    XFER_MODE_AUTO = 0,         /* Auto-detect best mode */
-    XFER_MODE_PIO,              /* Programmed I/O */
-    XFER_MODE_BUS_MASTER        /* DMA bus mastering */
+    XFER_MODE_AUTO,             /* 0: Auto-detect best mode */
+    XFER_MODE_PIO,              /* 1: Programmed I/O */
+    XFER_MODE_BUS_MASTER        /* 2: DMA bus mastering */
 } transfer_mode_t;
 
-/* NIC types */
+/* NIC types - only define if nic_defs.h not already included */
+#ifndef _NIC_DEFS_H_
 typedef enum {
-    NIC_UNKNOWN = 0,
-    NIC_3C509B,                 /* EtherLink III (10 Mbps, PIO only) */
-    NIC_3C515_TX                /* Fast EtherLink (10/100, BM capable) */
+    NIC_UNKNOWN,                /* 0: Unknown NIC */
+    NIC_3C509B,                 /* 1: EtherLink III (10 Mbps, PIO only) */
+    NIC_3C515_TX                /* 2: Fast EtherLink (10/100, BM capable) */
 } nic_type_t;
+#endif
 
 /* CPU classes for optimization */
+/* Note: Values match CPU generation numbers for compatibility */
 typedef enum {
-    CPU_8086 = 0,               /* Not supported (need 286+) */
-    CPU_80286 = 2,              /* Minimum supported */
-    CPU_80386 = 3,              /* 32-bit capable */
-    CPU_80486 = 4,              /* Cache, BSWAP */
-    CPU_PENTIUM = 5,            /* Dual pipeline */
-    CPU_PENTIUM4 = 6            /* CLFLUSH support */
+    CPU_8086,                   /* 0: Not supported (need 286+) */
+    CPU_80186,                  /* 1: Not supported (need 286+) */
+    CPU_80286,                  /* 2: Minimum supported */
+    CPU_80386,                  /* 3: 32-bit capable */
+    CPU_80486,                  /* 4: Cache, BSWAP */
+    CPU_PENTIUM,                /* 5: Dual pipeline */
+    CPU_PENTIUM4                /* 6: CLFLUSH support */
 } cpu_class_t;
 
 /* Buffer configuration structure */

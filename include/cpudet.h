@@ -9,34 +9,66 @@
 #ifndef CPU_DETECT_H
 #define CPU_DETECT_H
 
+/* C89 compatibility - include portability header first */
+#include "portabl.h" /* For FAR, bool, compiler portability */
+
+/* Try standard headers, fallback to portabl.h types */
+#ifdef __WATCOMC__
+/* Watcom C89 mode: portabl.h provides types */
+#else
 #include <stdint.h>
+#include <stdbool.h>
+#endif
+
+#include "dmacap.h"  /* For cache_mode_t */
 
 /* Success/error codes */
 #define SUCCESS             0
 #define ERROR_CPU_UNKNOWN   -1
 
-/* CPU type identifiers */
+/* CPU detection type identifiers - C89 compatible (sequential values)
+ * Note: Use CPU_DET_ prefix to avoid conflict with CPU_TYPE_* macros in init.h */
 typedef enum {
-    CPU_TYPE_8086       = 0,     /* 8086/8088 - no cache management */
-    CPU_TYPE_80186      = 1,     /* 80186/80188 - ENTER/LEAVE, PUSHA/POPA */
-    CPU_TYPE_80286      = 2,     /* 80286 - no cache management */
-    CPU_TYPE_80386      = 3,     /* 80386 - external cache, no coherency */
-    CPU_TYPE_80486      = 4,     /* 80486 - WBINVD available */
-    CPU_TYPE_CPUID_CAPABLE = 5,  /* Has CPUID - use family/model for details */
-    CPU_TYPE_UNKNOWN    = 0xFF
+    CPU_DET_8086,               /* 0: 8086/8088 - no cache management */
+    CPU_DET_80186,              /* 1: 80186/80188 - ENTER/LEAVE, PUSHA/POPA */
+    CPU_DET_80286,              /* 2: 80286 - no cache management */
+    CPU_DET_80386,              /* 3: 80386 - external cache, no coherency */
+    CPU_DET_80486,              /* 4: 80486 - WBINVD available */
+    CPU_DET_CPUID_CAPABLE,      /* 5: Has CPUID - use family/model for details */
+    CPU_DET_UNKNOWN             /* 6: Unknown CPU type */
 } cpu_type_t;
 
-/* CPU vendor identifiers */
+/* Compatibility aliases for existing code */
+#define CPU_TYPE_DETECTED_8086     CPU_DET_8086
+#define CPU_TYPE_DETECTED_80186    CPU_DET_80186
+#define CPU_TYPE_DETECTED_80286    CPU_DET_80286
+#define CPU_TYPE_DETECTED_80386    CPU_DET_80386
+#define CPU_TYPE_DETECTED_80486    CPU_DET_80486
+#define CPU_TYPE_DETECTED_CPUID    CPU_DET_CPUID_CAPABLE
+#define CPU_TYPE_DETECTED_UNKNOWN  CPU_DET_UNKNOWN
+
+/* Short aliases for legacy code */
+#define CPU_TYPE_8086          CPU_DET_8086
+#define CPU_TYPE_80186         CPU_DET_80186
+#define CPU_TYPE_80286         CPU_DET_80286
+#define CPU_TYPE_80386         CPU_DET_80386
+#define CPU_TYPE_80486         CPU_DET_80486
+#define CPU_TYPE_PENTIUM       CPU_DET_CPUID_CAPABLE
+#define CPU_TYPE_PENTIUM_PRO   CPU_DET_CPUID_CAPABLE
+#define CPU_TYPE_CPUID_CAPABLE CPU_DET_CPUID_CAPABLE
+#define CPU_TYPE_UNKNOWN       CPU_DET_UNKNOWN
+
+/* CPU vendor identifiers - C89 compatible (sequential values) */
 typedef enum {
-    VENDOR_INTEL        = 0,
-    VENDOR_AMD          = 1,
-    VENDOR_CYRIX        = 2,
-    VENDOR_NEXGEN       = 3,
-    VENDOR_UMC          = 4,
-    VENDOR_TRANSMETA    = 5,
-    VENDOR_RISE         = 6,
-    VENDOR_VIA          = 7,
-    VENDOR_UNKNOWN      = 0xFF
+    VENDOR_INTEL,                /* 0 */
+    VENDOR_AMD,                  /* 1 */
+    VENDOR_CYRIX,                /* 2 */
+    VENDOR_NEXGEN,               /* 3 */
+    VENDOR_UMC,                  /* 4 */
+    VENDOR_TRANSMETA,            /* 5 */
+    VENDOR_RISE,                 /* 6 */
+    VENDOR_VIA,                  /* 7 */
+    VENDOR_UNKNOWN               /* 8: Unknown vendor */
 } cpu_vendor_t;
 
 /* CPU optimization level flags (for runtime code path selection) */
@@ -69,6 +101,10 @@ typedef enum {
 #define CPU_FEATURE_CLFLUSH         0x4000  /* P4+ CLFLUSH instruction */
 #define CPU_FEATURE_V86_MODE        0x8000  /* Running in V86 mode */
 #define CPU_FEATURE_WBINVD_SAFE     0x10000 /* WBINVD safe to use (not V86) */
+#define CPU_FEATURE_TSC             0x20000 /* Pentium+ Time Stamp Counter */
+
+/* CPUID EDX bit features (Pentium+) */
+#define CPU_FEATURE_CX8             0x40000 /* CMPXCHG8B instruction (CPUID EDX bit 8) */
 
 /* CPU information structure */
 typedef struct {
@@ -89,6 +125,7 @@ typedef struct {
     uint16_t    l1_code_size;    /* L1 instruction cache size in KB */
     uint16_t    l2_size;         /* L2 cache size in KB */
     uint8_t     cache_line_size; /* Cache line size in bytes */
+    cache_mode_t cache_mode;     /* Detected cache mode */
     /* Boolean flags for features */
     bool        has_clflush;     /* CLFLUSH available (checked via CPUID) */
     bool        has_wbinvd;      /* WBINVD available (486+) */
@@ -102,6 +139,9 @@ typedef struct {
     bool        is_hypervisor;   /* Running under hypervisor/VM */
 } cpu_info_t;
 
+/* Global CPU info - defined in main.c */
+extern cpu_info_t g_cpu_info;
+
 /* Function prototypes */
 int cpu_detect_init(void);
 const cpu_info_t* cpu_get_info(void);
@@ -110,6 +150,15 @@ const char* cpu_type_to_string(cpu_type_t type);
 uint8_t cpu_get_family(void);
 uint8_t cpu_get_optimization_level(void);  /* Returns CPU_OPT_* value */
 int cpu_is_8086(void);  /* Returns 1 if 8086/8088, 0 otherwise */
+
+/**
+ * @brief Check if CPU has a specific feature
+ * @param feature Feature flag from CPU_FEATURE_* defines
+ * @return 1 if feature present, 0 otherwise
+ */
+static inline int cpu_has_feature(uint32_t feature) {
+    return (g_cpu_info.features & feature) ? 1 : 0;
+}
 
 /* Assembly helpers (implemented in cpu_detect.asm) */
 extern int cpu_detect_main(void);
@@ -124,7 +173,7 @@ extern int asm_has_cpuid(void);
 extern void asm_get_cpuid_info(uint32_t level, uint32_t* eax, uint32_t* ebx, 
                                uint32_t* ecx, uint32_t* edx);
 extern uint8_t asm_get_cpu_vendor(void);
-extern char far* asm_get_cpu_vendor_string(void);
+extern char FAR* asm_get_cpu_vendor_string(void);
 extern int asm_has_cyrix_extensions(void);
 extern uint8_t asm_get_cpu_model(void);
 extern uint8_t asm_get_cpu_stepping(void);

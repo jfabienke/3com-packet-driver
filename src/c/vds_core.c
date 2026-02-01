@@ -8,14 +8,21 @@
  */
 
 #include <dos.h>
+#include <i86.h>     /* For _enable, _disable */
 #include <string.h>
 #include <stdlib.h>
 #include "../../include/vds_core.h"
+#include "../../include/vds_mapping.h"
 #include "../../include/cpudet.h"
-#include "../../include/logging.h"
+#include "../../include/diag.h"   /* For LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR */
 
 /* VDS interrupt vector */
 #define VDS_INT_VECTOR  0x4B
+
+/* VDS function code for releasing buffer (not in vds_core.h) */
+#ifndef VDS_FUNC_RELEASE_BUFFER
+#define VDS_FUNC_RELEASE_BUFFER 0x8108
+#endif
 
 /* Timeout protection (from vds_mapping.c) */
 #define VDS_RETRY_COUNT 3
@@ -28,7 +35,7 @@ static vds_core_stats_t vds_stats = {0};
 
 /* Forward declarations */
 static bool detect_vds_presence(void);
-static void delay_ms(uint16_t ms);
+static void vds_delay_ms(uint16_t ms);
 static int vds_populate_sg_list(vds_raw_lock_result_t* result);
 
 /* 64K boundary and chunking support */
@@ -37,8 +44,10 @@ static int vds_populate_sg_list(vds_raw_lock_result_t* result);
 
 /**
  * Check if address range crosses 64K boundary
+ * Note: This is a local static function - vds.h has an inline version
+ * with same name but different signature, so we use a unique name here.
  */
-static bool crosses_64k_boundary(uint32_t addr, uint32_t size)
+static bool vds_core_crosses_64k(uint32_t addr, uint32_t size)
 {
     uint32_t start_64k = addr & ~0xFFFF;
     uint32_t end_64k = (addr + size - 1) & ~0xFFFF;
@@ -57,7 +66,7 @@ static bool validate_isa_constraints(uint32_t addr, uint32_t size)
     }
     
     /* Check 64K boundary crossing */
-    if (crosses_64k_boundary(addr, size)) {
+    if (vds_core_crosses_64k(addr, size)) {
         LOG_WARNING("VDS: Buffer crosses 64K boundary (0x%08lX, size %lu)", addr, size);
         return false;
     }
@@ -70,17 +79,21 @@ static bool validate_isa_constraints(uint32_t addr, uint32_t size)
  */
 int vds_core_init(void)
 {
+    const cpu_info_t* cpu;
+    union REGS regs;
+    struct SREGS sregs;
+
     if (vds_core_initialized) {
         return 0;
     }
-    
+
     /* Clear capabilities */
     memset(&vds_capabilities, 0, sizeof(vds_capabilities));
     memset(&vds_stats, 0, sizeof(vds_stats));
-    
+
     /* Use existing CPU detection to check V86 mode */
-    const cpu_info_t* cpu = cpu_get_info();
-    
+    cpu = cpu_get_info();
+
     if (!cpu->in_v86_mode) {
         LOG_INFO("VDS: Not in V86 mode - VDS not needed (CPU: %s)", cpu->cpu_name);
         vds_capabilities.present = false;
@@ -99,9 +112,6 @@ int vds_core_init(void)
     }
     
     /* Get VDS version and capabilities */
-    union REGS regs;
-    struct SREGS sregs;
-    
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
     
@@ -182,7 +192,9 @@ static bool detect_vds_presence(void)
 {
     void far* vector;
     uint32_t vector_addr;
-    
+    union REGS regs;
+    struct SREGS sregs;
+
     /* Get INT 4Bh vector */
     _disable();
     vector = _dos_getvect(VDS_INT_VECTOR);
@@ -202,11 +214,8 @@ static bool detect_vds_presence(void)
         LOG_DEBUG("VDS: INT 4Bh vector invalid (0x%08lX)", vector_addr);
         return false;
     }
-    
+
     /* Try a simple VDS call to verify it's really there */
-    union REGS regs;
-    struct SREGS sregs;
-    
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
     
@@ -221,7 +230,7 @@ static bool detect_vds_presence(void)
 /**
  * Raw VDS lock region with timeout protection
  */
-uint8_t vds_core_lock_region(void far* linear_addr, uint32_t size, 
+uint8_t vds_core_lock_region(void far* linear_addr, uint32_t size,
                              uint16_t flags, vds_transfer_direction_t direction,
                              vds_raw_lock_result_t* result)
 {
@@ -230,7 +239,8 @@ uint8_t vds_core_lock_region(void far* linear_addr, uint32_t size,
     vds_raw_descriptor_t desc;
     uint8_t retry_count = 0;
     uint16_t error_code = VDS_RAW_SUCCESS;  /* 16-bit error code */
-    
+    uint16_t ax_flags;
+
     if (!result) {
         return VDS_RAW_INVALID_PARAMS;
     }
@@ -297,7 +307,7 @@ uint8_t vds_core_lock_region(void far* linear_addr, uint32_t size,
             result->actual_length = desc.region_size;  /* VDS returns actual locked size */
             
             /* Parse AX register flags per VDS specification */
-            uint16_t ax_flags = regs.x.ax;
+            ax_flags = regs.x.ax;
             LOG_DEBUG("VDS: Lock succeeded with AX flags: 0x%04X", ax_flags);
             result->is_scattered = (ax_flags & 0x02) != 0;  /* Bit 1: scatter/gather */
             
@@ -375,7 +385,7 @@ uint8_t vds_core_lock_region(void far* linear_addr, uint32_t size,
         
         /* Delay before retry */
         if (retry_count < VDS_RETRY_COUNT - 1) {
-            delay_ms(VDS_RETRY_DELAY);
+            vds_delay_ms(VDS_RETRY_DELAY);
             LOG_DEBUG("VDS: Lock retry %d (error: 0x%02X)", retry_count + 1, error_code);
         }
     }
@@ -440,7 +450,7 @@ uint8_t vds_core_unlock_region(uint16_t lock_handle)
 /**
  * Copy data to VDS ALTERNATE buffer before DMA write
  */
-uint16_t vds_core_copy_to_alternate(uint16_t lock_handle, void far* source, 
+uint16_t vds_core_copy_to_alternate(uint16_t lock_handle, void far* source,
                                     uint32_t size, uint32_t offset)
 {
     union REGS regs;
@@ -448,34 +458,38 @@ uint16_t vds_core_copy_to_alternate(uint16_t lock_handle, void far* source,
     vds_copy_descriptor_t desc;
     uint32_t remaining = size;
     uint32_t current_offset = offset;
-    
+    uint32_t base_linear;
+    uint32_t processed = 0;  /* Track bytes processed in linear space */
+    uint32_t chunk_size;
+    uint32_t chunk_linear;
+    uint16_t error;
+
     /* Defensive check - avoid no-op INT call */
     if (size == 0) {
         LOG_DEBUG("VDS: Zero-size copy requested, returning success");
         return VDS_RAW_SUCCESS;
     }
-    
+
     /* Overflow validation - ensure offset + size doesn't overflow */
     if (offset > 0xFFFFFFFFUL - size) {
         LOG_ERROR("VDS: Offset + size would overflow (offset: 0x%08lX, size: 0x%08lX)",
                  offset, size);
         return VDS_RAW_INVALID_SIZE;
     }
-    
+
     /* Calculate base linear address once - avoid far pointer arithmetic! */
-    uint32_t base_linear = ((uint32_t)FP_SEG(source) << 4) + FP_OFF(source);
-    uint32_t processed = 0;  /* Track bytes processed in linear space */
-    
+    base_linear = ((uint32_t)FP_SEG(source) << 4) + FP_OFF(source);
+
     if (!vds_capabilities.present) {
         /* No VDS - no copy needed */
         return VDS_RAW_SUCCESS;
     }
-    
+
     /* Implement chunking for large copies */
     while (remaining > 0) {
-        uint32_t chunk_size = (remaining > MAX_COPY_CHUNK) ? MAX_COPY_CHUNK : remaining;
-        uint32_t chunk_linear = base_linear + processed;
-        
+        chunk_size = (remaining > MAX_COPY_CHUNK) ? MAX_COPY_CHUNK : remaining;
+        chunk_linear = base_linear + processed;
+
         /* Check for 20-bit wrap (real mode 1MB boundary) */
         if ((chunk_linear & 0xFFFFF) + chunk_size > 0x100000) {
             /* Would wrap past 1MB - limit chunk to avoid wrap */
@@ -485,29 +499,29 @@ uint16_t vds_core_copy_to_alternate(uint16_t lock_handle, void far* source,
                 return VDS_RAW_BOUNDARY_VIOLATION;
             }
         }
-    
+
         /* Setup proper copy descriptor per VDS specification */
         memset(&desc, 0, sizeof(desc));
         desc.region_size = chunk_size;          /* Size for this chunk */
         desc.offset = current_offset;            /* Offset within locked region */
         desc.buffer_id = lock_handle;            /* Lock handle */
-        
+
         /* Calculate linear address from base plus processed bytes */
         desc.client_linear = base_linear + processed;  /* Correct linear calculation */
         desc.reserved = 0;                /* Must be zero */
-        
+
         /* Call VDS function 0x8109 - Copy to DMA buffer */
         regs.x.ax = VDS_FUNC_COPY_TO_BUFFER;
         regs.x.dx = lock_handle;  /* Some VDS implementations also check DX */
         segread(&sregs);
         sregs.es = FP_SEG(&desc);
         regs.x.di = FP_OFF(&desc);  /* ES:DI points to descriptor */
-        
+
         int86x(VDS_INT_VECTOR, &regs, &regs, &sregs);
-        
+
         /* Check carry flag first */
         if (regs.x.cflag) {
-            uint16_t error = regs.x.ax;  /* 16-bit error code */
+            error = regs.x.ax;  /* 16-bit error code */
             LOG_ERROR("VDS: Copy to ALTERNATE buffer failed (error: 0x%04X)", error);
             return error;  /* Return full 16-bit error code */
         }
@@ -530,7 +544,7 @@ uint16_t vds_core_copy_to_alternate(uint16_t lock_handle, void far* source,
 /**
  * Copy data from VDS ALTERNATE buffer after DMA read
  */
-uint16_t vds_core_copy_from_alternate(uint16_t lock_handle, void far* dest, 
+uint16_t vds_core_copy_from_alternate(uint16_t lock_handle, void far* dest,
                                       uint32_t size, uint32_t offset)
 {
     union REGS regs;
@@ -538,34 +552,38 @@ uint16_t vds_core_copy_from_alternate(uint16_t lock_handle, void far* dest,
     vds_copy_descriptor_t desc;
     uint32_t remaining = size;
     uint32_t current_offset = offset;
-    
+    uint32_t base_linear;
+    uint32_t processed = 0;  /* Track bytes processed in linear space */
+    uint32_t chunk_size;
+    uint32_t chunk_linear;
+    uint16_t error;
+
     /* Defensive check - avoid no-op INT call */
     if (size == 0) {
         LOG_DEBUG("VDS: Zero-size copy requested, returning success");
         return VDS_RAW_SUCCESS;
     }
-    
+
     /* Overflow validation - ensure offset + size doesn't overflow */
     if (offset > 0xFFFFFFFFUL - size) {
         LOG_ERROR("VDS: Offset + size would overflow (offset: 0x%08lX, size: 0x%08lX)",
                  offset, size);
         return VDS_RAW_INVALID_SIZE;
     }
-    
+
     /* Calculate base linear address once - avoid far pointer arithmetic! */
-    uint32_t base_linear = ((uint32_t)FP_SEG(dest) << 4) + FP_OFF(dest);
-    uint32_t processed = 0;  /* Track bytes processed in linear space */
-    
+    base_linear = ((uint32_t)FP_SEG(dest) << 4) + FP_OFF(dest);
+
     if (!vds_capabilities.present) {
         /* No VDS - no copy needed */
         return VDS_RAW_SUCCESS;
     }
-    
+
     /* Implement chunking for large copies */
     while (remaining > 0) {
-        uint32_t chunk_size = (remaining > MAX_COPY_CHUNK) ? MAX_COPY_CHUNK : remaining;
-        uint32_t chunk_linear = base_linear + processed;
-        
+        chunk_size = (remaining > MAX_COPY_CHUNK) ? MAX_COPY_CHUNK : remaining;
+        chunk_linear = base_linear + processed;
+
         /* Check for 20-bit wrap (real mode 1MB boundary) */
         if ((chunk_linear & 0xFFFFF) + chunk_size > 0x100000) {
             /* Would wrap past 1MB - limit chunk to avoid wrap */
@@ -575,29 +593,29 @@ uint16_t vds_core_copy_from_alternate(uint16_t lock_handle, void far* dest,
                 return VDS_RAW_BOUNDARY_VIOLATION;
             }
         }
-        
+
         /* Setup proper copy descriptor per VDS specification */
         memset(&desc, 0, sizeof(desc));
         desc.region_size = chunk_size;          /* Size for this chunk */
         desc.offset = current_offset;            /* Offset within locked region */
         desc.buffer_id = lock_handle;            /* Lock handle */
-        
+
         /* Calculate linear address from base plus processed bytes */
         desc.client_linear = base_linear + processed;  /* Correct linear calculation */
         desc.reserved = 0;                /* Must be zero */
-        
+
         /* Call VDS function 0x810A - Copy from DMA buffer */
         regs.x.ax = VDS_FUNC_COPY_FROM_BUFFER;
         regs.x.dx = lock_handle;  /* Some VDS implementations also check DX */
         segread(&sregs);
         sregs.es = FP_SEG(&desc);
         regs.x.di = FP_OFF(&desc);  /* ES:DI points to descriptor */
-        
+
         int86x(VDS_INT_VECTOR, &regs, &regs, &sregs);
-        
+
         /* Check carry flag first */
         if (regs.x.cflag) {
-            uint16_t error = regs.x.ax;  /* 16-bit error code */
+            error = regs.x.ax;  /* 16-bit error code */
             LOG_ERROR("VDS: Copy from ALTERNATE buffer failed (error: 0x%04X)", error);
             return error;  /* Return full 16-bit error code */
         }
@@ -627,7 +645,8 @@ uint16_t vds_core_get_sg_list(uint16_t lock_handle, vds_sg_entry_t far* sg_list,
     struct SREGS sregs;
     vds_sg_descriptor_t desc;
     uint16_t entries_returned;
-    
+    uint16_t error;
+
     if (!vds_capabilities.supports_scatter) {
         return VDS_RAW_NOT_SUPPORTED;
     }
@@ -653,7 +672,7 @@ uint16_t vds_core_get_sg_list(uint16_t lock_handle, vds_sg_entry_t far* sg_list,
     
     /* Check carry flag first */
     if (regs.x.cflag) {
-        uint16_t error = regs.x.ax;
+        error = regs.x.ax;
         LOG_ERROR("VDS: Get S/G list failed (error: 0x%04X)", error);
         *actual_entries = 0;
         return error;  /* Return full 16-bit error code */
@@ -712,17 +731,20 @@ static int vds_populate_sg_list(vds_raw_lock_result_t* result)
         }
         
         /* Copy from far to near buffer - portable approach */
-        /* Use movedata for maximum compiler compatibility */
-        movedata(FP_SEG(temp_list), FP_OFF(temp_list),
-                _DS, (unsigned)result->sg_list,
-                actual_count * sizeof(vds_sg_entry_t));
+        /* Use movedata with FP_SEG on local var to get DS */
+        {
+            char dummy;  /* Local variable to get data segment */
+            movedata(FP_SEG(temp_list), FP_OFF(temp_list),
+                    FP_SEG(&dummy), (unsigned)result->sg_list,
+                    actual_count * sizeof(vds_sg_entry_t));
+        }
         result->sg_count = actual_count;
         
         /* Log S/G details */
         LOG_DEBUG("VDS: S/G list with %u entries:", actual_count);
         {
-            int i;
-            for (i = 0; i < actual_count && i < 3; i++) {
+            int i;  /* C89: declaration at start of block */
+            for (i = 0; i < (int)actual_count && i < 3; i++) {
                 LOG_DEBUG("  [%d] Phys: 0x%08lX, Size: %lu",
                          i, temp_list[i].physical_addr, temp_list[i].size);
             }
@@ -843,7 +865,8 @@ uint16_t vds_core_copy_to_buffer(uint16_t buffer_id, void far* src, uint32_t siz
     union REGS regs;
     struct SREGS sregs;
     vds_copy_descriptor_t desc;
-    
+    uint16_t error;
+
     /* Validate size to prevent overflow */
     if (size == 0 || size > 0x00100000UL) {  /* Max 1MB for copy */
         LOG_ERROR("VDS: Invalid copy size (size: 0x%08lX)", size);
@@ -876,11 +899,11 @@ uint16_t vds_core_copy_to_buffer(uint16_t buffer_id, void far* src, uint32_t siz
         LOG_DEBUG("VDS: Copied %lu bytes to buffer 0x%04X", size, buffer_id);
         return VDS_RAW_SUCCESS;
     }
-    
-    uint16_t error = regs.x.ax;  /* 16-bit error code */
+
+    error = regs.x.ax;  /* 16-bit error code */
     LOG_ERROR("VDS: Copy to buffer failed (id: 0x%04X, error: 0x%04X)",
              buffer_id, error);
-    
+
     return error;
 }
 
@@ -892,7 +915,8 @@ uint16_t vds_core_copy_from_buffer(uint16_t buffer_id, void far* dst, uint32_t s
     union REGS regs;
     struct SREGS sregs;
     vds_copy_descriptor_t desc;
-    
+    uint16_t error;
+
     /* Validate size to prevent overflow */
     if (size == 0 || size > 0x00100000UL) {  /* Max 1MB for copy */
         LOG_ERROR("VDS: Invalid copy size (size: 0x%08lX)", size);
@@ -925,11 +949,11 @@ uint16_t vds_core_copy_from_buffer(uint16_t buffer_id, void far* dst, uint32_t s
         LOG_DEBUG("VDS: Copied %lu bytes from buffer 0x%04X", size, buffer_id);
         return VDS_RAW_SUCCESS;
     }
-    
-    uint16_t error = regs.x.ax;  /* 16-bit error code */
+
+    error = regs.x.ax;  /* 16-bit error code */
     LOG_ERROR("VDS: Copy from buffer failed (id: 0x%04X, error: 0x%04X)",
              buffer_id, error);
-    
+
     return error;
 }
 
@@ -986,22 +1010,117 @@ void vds_core_reset_stats(void)
 }
 
 /**
- * Simple delay in milliseconds
+ * Simple delay in milliseconds (internal to VDS core)
  */
-static void delay_ms(uint16_t ms)
+static void vds_delay_ms(uint16_t ms)
 {
     /* Use BIOS timer tick count (18.2 Hz) */
     uint16_t ticks = (ms * 182) / 10000;  /* Convert ms to ticks */
     uint32_t start_ticks;
     uint32_t current_ticks;
-    
+
     _disable();
     start_ticks = *(uint32_t far*)MK_FP(0x0040, 0x006C);  /* BIOS timer */
     _enable();
-    
+
     do {
         _disable();
         current_ticks = *(uint32_t far*)MK_FP(0x0040, 0x006C);
         _enable();
     } while ((current_ticks - start_ticks) < ticks);
+}
+
+/**
+ * @brief Lock a memory region and populate vds_mapping_t structure
+ *
+ * This is a higher-level wrapper around vds_lock_region that fills
+ * the vds_mapping_t structure used by the DMA mapping layer.
+ *
+ * @param addr Virtual address to lock
+ * @param size Size in bytes
+ * @param flags VDS flags (VDS_TX_FLAGS or VDS_RX_FLAGS)
+ * @param mapping Output mapping structure to fill
+ * @return true on success, false on failure
+ */
+bool vds_lock_region_mapped(void *addr, uint32_t size, uint16_t flags, vds_mapping_t *mapping)
+{
+    uint8_t result;
+    uint16_t segment;
+    uint16_t offset;
+
+    if (!mapping || !addr || size == 0) {
+        return false;
+    }
+
+    /* Initialize the mapping structure */
+    vds_mapping_init(mapping);
+
+    /* Convert near pointer to segment:offset for VDS */
+    segment = FP_SEG(addr);
+    offset = FP_OFF(addr);
+
+    /* Setup the DDS structure */
+    mapping->dds.size = size;
+    mapping->dds.segment = segment;
+    mapping->dds.offset = offset;
+
+    /* Call the raw VDS lock function */
+    result = vds_lock_region((void far *)MK_FP(segment, offset), size, &mapping->dds);
+
+    if (result == VDS_SUCCESS) {
+        /* Populate the mapping structure from the DDS */
+        mapping->physical_addr = mapping->dds.physical;
+        mapping->virtual_addr = addr;
+        mapping->size = size;
+        mapping->is_locked = 1;
+        mapping->needs_unlock = 1;
+        /* VDS returns contiguity info in flags - assume contiguous for simple locks */
+        mapping->is_contiguous = 1;
+        mapping->flags = (uint8_t)flags;
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Unlock a VDS mapping
+ *
+ * @param mapping The mapping to unlock
+ * @return true on success, false on failure
+ */
+bool vds_unlock_region_mapped(vds_mapping_t *mapping)
+{
+    uint8_t result;
+
+    if (!mapping || !mapping->is_locked) {
+        return false;
+    }
+
+    /* Call the raw VDS unlock function */
+    result = vds_unlock_region(&mapping->dds);
+
+    if (result == VDS_SUCCESS) {
+        mapping->is_locked = 0;
+        mapping->needs_unlock = 0;
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Check if physical address range is ISA compatible
+ *
+ * Validates that a physical address range meets ISA DMA requirements:
+ * - Below 16MB (24-bit addressing)
+ * - Does not cross 64KB boundaries
+ *
+ * @param physical_addr Physical start address
+ * @param size Size of the region
+ * @return true if ISA compatible, false otherwise
+ */
+bool vds_is_isa_compatible(uint32_t physical_addr, uint32_t size)
+{
+    return validate_isa_constraints(physical_addr, size);
 }

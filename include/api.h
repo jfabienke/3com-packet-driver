@@ -71,6 +71,7 @@ extern "C" {
 #define API_ERR_QOS_NOT_SUPPORTED   -13
 #define API_ERR_LOAD_BALANCE_FAILED -14
 #define API_ERR_TOPOLOGY_CHANGED    -15
+#define API_ERR_NOT_READY           -16
 
 /* Packet Driver structures */
 typedef struct {
@@ -82,6 +83,7 @@ typedef struct {
     uint8_t extended;           /* Extended functions supported */
     uint8_t high_performance;   /* High performance mode */
     char name[16];              /* Driver name */
+    uint16_t active_handles;    /* Number of active handles */
 } pd_driver_info_t;
 
 typedef struct {
@@ -110,7 +112,11 @@ typedef struct {
     uint32_t errors_in;         /* Receive errors */
     uint32_t errors_out;        /* Transmit errors */
     uint32_t packets_lost;      /* Packets dropped */
+    uint32_t packets_dropped;   /* Alias for packets_lost (for diag compatibility) */
 } pd_statistics_t;
+
+/* Alias for handle-specific statistics (used by diagnostics) */
+typedef pd_statistics_t pd_handle_stats_t;
 
 /* Phase 3 Extended Structures */
 
@@ -321,6 +327,7 @@ int api_register_error_handler(uint16_t handle, void far *error_handler);
 int api_notify_topology_change(uint8_t event_type, uint8_t affected_nic);
 int api_initiate_graceful_degradation(uint8_t failed_nic);
 int api_coordinate_recovery_with_routing(uint8_t failed_nic);
+int api_update_nic_utilization(uint8_t nic_index, uint32_t packet_size);
 
 #ifdef __cplusplus
 }

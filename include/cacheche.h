@@ -13,8 +13,8 @@
 #ifndef CACHE_COHERENCY_ENHANCED_H
 #define CACHE_COHERENCY_ENHANCED_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "portabl.h"   /* C89 compatibility: bool, uint32_t, etc. */
+#include <stddef.h>    /* size_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,18 +26,26 @@ extern "C" {
 #define CPUID_FEAT_MFENCE       (1UL << 26)    /* Memory fence (with SSE2) */
 
 /* Cache management tiers - GPT-5 Enhanced */
+/* Note: cache_tier_t may already be defined by cachecoh.h with compatible values */
+#ifndef _CACHE_TIER_T_DEFINED
+#define _CACHE_TIER_T_DEFINED
 typedef enum {
     CACHE_TIER_1_CLFLUSH,       /* Pentium 4+ with CLFLUSH instruction */
     CACHE_TIER_2_WBINVD,        /* 486+ with WBINVD (emergency use only) */
     CACHE_TIER_3_SOFTWARE,      /* 386 with software coherency tricks */
     CACHE_TIER_4_DISABLED       /* 286 or broken cache - no cache ops */
 } cache_tier_t;
+#endif /* _CACHE_TIER_T_DEFINED */
 
 /* DMA direction for cache operations - GPT-5 Critical */
 typedef enum {
     DMA_SYNC_FOR_DEVICE,        /* CPU → Device (TX): Flush dirty lines */
     DMA_SYNC_FOR_CPU            /* Device → CPU (RX): Invalidate stale lines */
 } dma_sync_direction_t;
+
+/* Compatibility aliases for TX/RX naming convention */
+#define DMA_SYNC_TX     DMA_SYNC_FOR_DEVICE
+#define DMA_SYNC_RX     DMA_SYNC_FOR_CPU
 
 /* Cache line size constants - GPT-5 Critical Alignment Fix */
 #define CACHE_LINE_SIZE_DEFAULT     32      /* Conservative default (bytes) */
@@ -116,8 +124,15 @@ bool probe_rx_cache_coherency(void);
 void free_probe_result(coherency_probe_result_t *result);
 
 /* Direction-specific cache operations - GPT-5 API */
-void dma_sync_for_device(void *buffer, size_t len);
-void dma_sync_for_cpu(void *buffer, size_t len);
+/* Note: These are cache-layer wrappers, not to be confused with dma.h functions */
+void cache_sync_for_device(void *buffer, size_t len);
+void cache_sync_for_cpu(void *buffer, size_t len);
+
+/* Compatibility macros - only if dma.h not already included */
+#ifndef DMA_H  /* Avoid conflict with dma.h */
+#define dma_sync_for_device_simple(buf, len) cache_sync_for_device((buf), (len))
+#define dma_sync_for_cpu_simple(buf, len) cache_sync_for_cpu((buf), (len))
+#endif
 
 /* Legacy compatibility functions */
 void cache_flush_range(void *buffer, size_t len);
@@ -138,6 +153,7 @@ bool is_buffer_cacheline_aligned(const void *buffer, size_t len, uint16_t cachel
 bool needs_bounce_for_alignment(const void *buffer, size_t len, uint16_t cacheline_size);
 size_t get_aligned_buffer_size(size_t len, uint16_t cacheline_size);
 void* align_buffer_to_cacheline(void *buffer, uint16_t cacheline_size);
+void cache_flush_aligned_safe(void *buffer, size_t len);
 
 /* GPT-5 Critical: WBINVD performance coalescing functions */
 void cache_enable_coalescing(bool enable);
@@ -185,18 +201,18 @@ static inline bool has_memory_fences(void) {
 }
 
 /**
- * @brief Get cache line size for operations
+ * @brief Get cache line size for operations (C89 compatible)
  */
-static inline uint16_t get_cache_line_size(void) {
+static uint16_t get_cache_line_size(void) {
     extern uint16_t g_cache_line_size;
     return g_cache_line_size ? g_cache_line_size : 32; /* Default 32 bytes */
 }
 
 /**
- * @brief Check if hardware is cache coherent
+ * @brief Check if hardware is cache coherent (C89 compatible)
  */
-static inline bool is_hardware_coherent(void) {
-    extern bool g_hardware_coherent;
+static int is_hardware_coherent(void) {
+    extern int g_hardware_coherent;
     return g_hardware_coherent;
 }
 
@@ -208,7 +224,7 @@ extern void asm_sfence(void);
 extern void asm_lfence(void);
 
 /* CPUID detection functions */
-extern bool asm_has_cpuid(void);
+extern int asm_has_cpuid(void);
 extern uint32_t asm_cpuid_get_features_edx(void);
 extern uint32_t asm_cpuid_get_features_ecx(void);
 
@@ -221,14 +237,14 @@ extern uint32_t asm_cpuid_get_features_ecx(void);
 #define CACHE_FLUSH_FOR_DMA_TX(buf, len) \
     do { \
         if (!is_hardware_coherent()) { \
-            dma_sync_for_device((buf), (len)); \
+            cache_sync_for_device((buf), (len)); \
         } \
     } while(0)
 
 #define CACHE_INVALIDATE_FOR_DMA_RX(buf, len) \
     do { \
         if (!is_hardware_coherent()) { \
-            dma_sync_for_cpu((buf), (len)); \
+            cache_sync_for_cpu((buf), (len)); \
         } \
     } while(0)
 

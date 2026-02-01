@@ -59,10 +59,10 @@ extern "C" {
 
 /* VDS Translation types (bits 2-3 of AX register after lock) */
 typedef enum {
-    VDS_TRANS_DIRECT = 0,       /* Direct mapping - no translation needed */
-    VDS_TRANS_REMAPPED = 1,     /* Remapped - address translated but no copy needed */
-    VDS_TRANS_ALTERNATE = 2,    /* Alternate buffer - copy required after DMA */
-    VDS_TRANS_UNKNOWN = 3       /* Reserved/unknown */
+    VDS_TRANS_DIRECT,           /* 0: Direct mapping - no translation needed */
+    VDS_TRANS_REMAPPED,         /* 1: Remapped - address translated but no copy needed */
+    VDS_TRANS_ALTERNATE,        /* 2: Alternate buffer - copy required after DMA */
+    VDS_TRANS_UNKNOWN           /* 3: Reserved/unknown */
 } vds_translation_type_t;
 
 /* VDS capability flags */
@@ -146,9 +146,9 @@ typedef struct {
 
 /* Transfer direction for DMA operations */
 typedef enum {
-    VDS_DIR_HOST_TO_DEVICE = 0, /* Write to device (needs pre-copy) */
-    VDS_DIR_DEVICE_TO_HOST = 1, /* Read from device (needs post-copy) */
-    VDS_DIR_BIDIRECTIONAL = 2   /* Both directions (needs both copies) */
+    VDS_DIR_HOST_TO_DEVICE,     /* 0: Write to device (needs pre-copy) */
+    VDS_DIR_DEVICE_TO_HOST,     /* 1: Read from device (needs post-copy) */
+    VDS_DIR_BIDIRECTIONAL       /* 2: Both directions (needs both copies) */
 } vds_transfer_direction_t;
 
 /* Raw lock result */

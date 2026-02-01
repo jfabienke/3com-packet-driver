@@ -10,18 +10,19 @@
 ;; - EEPROM access
 ;; - PHY management
 ;; - Hardware reset/initialization
+;;
+;; Converted to NASM syntax - 2026-01-23
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-        .8086                           ; Base compatibility
-        .386                            ; Enable 386+ instructions (REP INSB/OUTSB)
-        .model small
+        bits 16
+        cpu 386                         ; Enable 386+ instructions (REP INSB/OUTSB)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; CPU Optimization Constants and Macros
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; External CPU optimization level from packet_ops.asm
-EXTRN current_cpu_opt:BYTE
+extern current_cpu_opt
 
 ; CPU optimization level constants (must match packet_ops.asm)
 OPT_8086            EQU 0       ; 8086/8088 baseline (no 186+ instructions)
@@ -32,50 +33,48 @@ OPT_16BIT           EQU 1       ; 186+ optimizations (INS/OUTS available)
 ; Input: ES:DI = dest buffer, DX = port, CX = byte count
 ; Clobbers: AL, CX, DI
 ;------------------------------------------------------------------------------
-REP_INSB_SAFE MACRO
-        LOCAL use_insb, insb_loop, done
+%macro REP_INSB_SAFE 0
         push bx
         mov bl, [current_cpu_opt]
         test bl, OPT_16BIT
         pop bx
-        jnz use_insb
+        jnz %%use_insb
         ;; 8086 path: manual loop
-        jcxz done
-insb_loop:
+        jcxz %%done
+%%insb_loop:
         in al, dx
         stosb
-        loop insb_loop
-        jmp short done
-use_insb:
+        loop %%insb_loop
+        jmp short %%done
+%%use_insb:
         rep insb
-done:
-ENDM
+%%done:
+%endmacro
 
 ;------------------------------------------------------------------------------
 ; REP_OUTSB_SAFE - Output byte array to port (8086-compatible)
 ; Input: DS:SI = source buffer, DX = port, CX = byte count
 ; Clobbers: AL, CX, SI
 ;------------------------------------------------------------------------------
-REP_OUTSB_SAFE MACRO
-        LOCAL use_outsb, outsb_loop, done
+%macro REP_OUTSB_SAFE 0
         push bx
         mov bl, [current_cpu_opt]
         test bl, OPT_16BIT
         pop bx
-        jnz use_outsb
+        jnz %%use_outsb
         ;; 8086 path: manual loop
-        jcxz done
-outsb_loop:
+        jcxz %%done
+%%outsb_loop:
         lodsb
         out dx, al
-        loop outsb_loop
-        jmp short done
-use_outsb:
+        loop %%outsb_loop
+        jmp short %%done
+%%use_outsb:
         rep outsb
-done:
-ENDM
+%%done:
+%endmacro
 
-        .code
+        segment _TEXT class=CODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Module Header (64 bytes)
@@ -83,7 +82,7 @@ ENDM
         align 16
 module_header:
 hardware_module_header:                  ; Export for C code
-        public  hardware_module_header   ; Make visible to patch_apply.c
+        global  hardware_module_header   ; Make visible to patch_apply.c
         db      'PKTDRV',0              ; 7+1 bytes: Signature
         db      1, 0                    ; 2 bytes: Version 1.0
         dw      hot_section_start       ; 2 bytes: Hot start
@@ -96,7 +95,7 @@ hardware_module_header:                  ; Export for C code
         dw      1024                    ; 2 bytes: Required memory (1KB)
         db      2                       ; 1 byte: Min CPU (286)
         db      0                       ; 1 byte: NIC type (any)
-        db      37 dup(0)               ; 37 bytes: Reserved
+        times 37 db 0                   ; 37 bytes: Reserved
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; HOT SECTION - Resident hardware access routines
@@ -105,12 +104,12 @@ hardware_module_header:                  ; Export for C code
 hot_section_start:
 
         ; Public exports
-        public  hw_read_register
-        public  hw_write_register
-        public  hw_read_eeprom
-        public  hw_reset_nic
-        public  hw_read_block
-        public  hw_write_block
+        global  hw_read_register
+        global  hw_write_register
+        global  hw_read_eeprom
+        global  hw_reset_nic
+        global  hw_read_block
+        global  hw_write_block
 
         ; Constants
         EEPROM_BUSY     equ     0x8000
@@ -500,7 +499,7 @@ hw_init:
         push    dx
 
         ; Display hardware init message
-        mov     dx, offset init_msg
+        mov     dx, init_msg
         mov     ah, 9
         int     21h
 
@@ -522,7 +521,7 @@ cold_section_end:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Data Section
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        .data
+        segment _DATA class=DATA
 
         ; Hardware configuration
 nic_io_base         dw      0300h           ; Default I/O base
@@ -530,5 +529,3 @@ detected_io_base    dw      0               ; From detection
 
         ; Module size
 module_size         equ     cold_section_end - module_header
-
-        end

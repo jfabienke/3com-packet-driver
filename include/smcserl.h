@@ -91,25 +91,27 @@ void smc_print_status(void);
 
 /* Error codes for SMC operations */
 typedef enum {
-    SMC_SUCCESS = 0,
-    SMC_ERROR_NOT_INITIALIZED,
-    SMC_ERROR_INVALID_SITE,
-    SMC_ERROR_INVALID_PARAMS,
-    SMC_ERROR_PATCH_FAILED,
-    SMC_ERROR_ALREADY_PATCHED,
-    SMC_ERROR_NOT_PATCHED,
-    SMC_ERROR_VERIFICATION_FAILED
+    SMC_SUCCESS,                /* 0: Success */
+    SMC_ERROR_NOT_INITIALIZED,  /* 1: Not initialized */
+    SMC_ERROR_INVALID_SITE,     /* 2: Invalid site */
+    SMC_ERROR_INVALID_PARAMS,   /* 3: Invalid parameters */
+    SMC_ERROR_PATCH_FAILED,     /* 4: Patch failed */
+    SMC_ERROR_ALREADY_PATCHED,  /* 5: Already patched */
+    SMC_ERROR_NOT_PATCHED,      /* 6: Not patched */
+    SMC_ERROR_VERIFICATION_FAILED /* 7: Verification failed */
 } smc_error_t;
 
 /* Patch type identifiers for safety operations */
+/* Note: Values start at 1 to distinguish from uninitialized (0) */
 typedef enum {
-    SMC_PATCH_TYPE_VDS_LOCK = 1,        /* VDS buffer locking */
-    SMC_PATCH_TYPE_VDS_UNLOCK = 2,      /* VDS buffer unlocking */
-    SMC_PATCH_TYPE_CACHE_FLUSH = 3,     /* Cache flush operation */
-    SMC_PATCH_TYPE_BOUNCE_BUFFER = 4,   /* Bounce buffer operation */
-    SMC_PATCH_TYPE_CHECK_64KB = 5,      /* 64KB boundary check */
-    SMC_PATCH_TYPE_SAFE_INT = 6,        /* Safe interrupt handling */
-    SMC_PATCH_TYPE_NOP = 7              /* No operation (remove patch) */
+    SMC_PATCH_TYPE_RESERVED,            /* 0: Reserved/uninitialized */
+    SMC_PATCH_TYPE_VDS_LOCK,            /* 1: VDS buffer locking */
+    SMC_PATCH_TYPE_VDS_UNLOCK,          /* 2: VDS buffer unlocking */
+    SMC_PATCH_TYPE_CACHE_FLUSH,         /* 3: Cache flush operation */
+    SMC_PATCH_TYPE_BOUNCE_BUFFER,       /* 4: Bounce buffer operation */
+    SMC_PATCH_TYPE_CHECK_64KB,          /* 5: 64KB boundary check */
+    SMC_PATCH_TYPE_SAFE_INT,            /* 6: Safe interrupt handling */
+    SMC_PATCH_TYPE_NOP                  /* 7: No operation (remove patch) */
 } smc_patch_type_t;
 
 #endif /* SMC_SERIALIZATION_H */

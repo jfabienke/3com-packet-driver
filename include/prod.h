@@ -140,7 +140,7 @@ enum {
 /* Keep existing debug functionality */
 #include "logging.h"
 #include "diag.h"
-#include "debug.h"
+/* Note: debug.h removed - functionality covered by diag.h */
 
 #define OPTIMIZE_SIZE
 #define COLD_SECTION

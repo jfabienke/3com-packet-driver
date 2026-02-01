@@ -36,41 +36,63 @@
 
 /**
  * @brief Memory type enumeration for DOS environment
+ * Note: Values are bitmask flags, must use #defines for C89 compatibility
  */
 typedef enum {
-    MEMORY_TYPE_CONVENTIONAL = 0x01,  /**< Conventional memory (0-640KB) */
-    MEMORY_TYPE_UMB          = 0x02,  /**< Upper Memory Block (640KB-1MB) */
-    MEMORY_TYPE_XMS          = 0x04,  /**< Extended Memory (XMS) */
-    MEMORY_TYPE_MODULE       = 0x08,  /**< Module-specific memory */
-    MEMORY_TYPE_BUFFER       = 0x10,  /**< Packet buffer memory */
-    MEMORY_TYPE_TEMP         = 0x20,  /**< Temporary allocation */
-    MEMORY_TYPE_PERSISTENT   = 0x40,  /**< Persistent (TSR) allocation */
-    MEMORY_TYPE_DMA_COHERENT = 0x80   /**< DMA-coherent memory */
+    MEMORY_TYPE_CONVENTIONAL,  /**< 0: Conventional memory (0-640KB) */
+    MEMORY_TYPE_UMB,           /**< 1: Upper Memory Block (640KB-1MB) */
+    MEMORY_TYPE_XMS,           /**< 2: Extended Memory (XMS) */
+    MEMORY_TYPE_MODULE,        /**< 3: Module-specific memory */
+    MEMORY_TYPE_BUFFER,        /**< 4: Packet buffer memory */
+    MEMORY_TYPE_TEMP,          /**< 5: Temporary allocation */
+    MEMORY_TYPE_PERSISTENT,    /**< 6: Persistent (TSR) allocation */
+    MEMORY_TYPE_DMA_COHERENT   /**< 7: DMA-coherent memory */
 } memory_type_t;
+
+/* Memory type bitmask values for flag operations */
+#define MEMORY_TYPE_FLAG_CONVENTIONAL  0x01
+#define MEMORY_TYPE_FLAG_UMB           0x02
+#define MEMORY_TYPE_FLAG_XMS           0x04
+#define MEMORY_TYPE_FLAG_MODULE        0x08
+#define MEMORY_TYPE_FLAG_BUFFER        0x10
+#define MEMORY_TYPE_FLAG_TEMP          0x20
+#define MEMORY_TYPE_FLAG_PERSISTENT    0x40
+#define MEMORY_TYPE_FLAG_DMA_COHERENT  0x80
 
 /**
  * @brief Memory allocation priority
  */
 typedef enum {
-    MEMORY_PRIORITY_LOW     = 0,  /**< Low priority allocation */
-    MEMORY_PRIORITY_NORMAL  = 1,  /**< Normal priority allocation */
-    MEMORY_PRIORITY_HIGH    = 2,  /**< High priority allocation */
-    MEMORY_PRIORITY_URGENT  = 3   /**< Urgent allocation (core systems) */
+    MEMORY_PRIORITY_LOW,     /**< 0: Low priority allocation */
+    MEMORY_PRIORITY_NORMAL,  /**< 1: Normal priority allocation */
+    MEMORY_PRIORITY_HIGH,    /**< 2: High priority allocation */
+    MEMORY_PRIORITY_URGENT   /**< 3: Urgent allocation (core systems) */
 } memory_priority_t;
 
 /**
  * @brief Memory allocation flags
+ * Note: Values are bitmask flags, use #defines for actual values
  */
 typedef enum {
-    MEMORY_FLAG_ZERO     = 0x0001,  /**< Zero-initialize memory */
-    MEMORY_FLAG_ALIGN    = 0x0002,  /**< Align to specified boundary */
-    MEMORY_FLAG_MOVEABLE = 0x0004,  /**< Memory can be moved/compacted */
-    MEMORY_FLAG_LOCKABLE = 0x0008,  /**< Memory can be locked */
-    MEMORY_FLAG_SHAREABLE= 0x0010,  /**< Memory can be shared */
-    MEMORY_FLAG_READABLE = 0x0020,  /**< Memory is readable */
-    MEMORY_FLAG_WRITABLE = 0x0040,  /**< Memory is writable */
-    MEMORY_FLAG_EXECUTABLE=0x0080   /**< Memory is executable */
+    MEMORY_FLAG_ZERO,       /**< 0: Zero-initialize memory */
+    MEMORY_FLAG_ALIGN,      /**< 1: Align to specified boundary */
+    MEMORY_FLAG_MOVEABLE,   /**< 2: Memory can be moved/compacted */
+    MEMORY_FLAG_LOCKABLE,   /**< 3: Memory can be locked */
+    MEMORY_FLAG_SHAREABLE,  /**< 4: Memory can be shared */
+    MEMORY_FLAG_READABLE,   /**< 5: Memory is readable */
+    MEMORY_FLAG_WRITABLE,   /**< 6: Memory is writable */
+    MEMORY_FLAG_EXECUTABLE  /**< 7: Memory is executable */
 } memory_flags_t;
+
+/* Memory flag bitmask values for flag operations */
+#define MEMORY_FLAG_BIT_ZERO       0x0001
+#define MEMORY_FLAG_BIT_ALIGN      0x0002
+#define MEMORY_FLAG_BIT_MOVEABLE   0x0004
+#define MEMORY_FLAG_BIT_LOCKABLE   0x0008
+#define MEMORY_FLAG_BIT_SHAREABLE  0x0010
+#define MEMORY_FLAG_BIT_READABLE   0x0020
+#define MEMORY_FLAG_BIT_WRITABLE   0x0040
+#define MEMORY_FLAG_BIT_EXECUTABLE 0x0080
 
 /* ============================================================================
  * Memory Block Information
@@ -285,22 +307,28 @@ typedef uint8_t (*buffer_release_fn)(packet_buffer_t* buffer);
 
 /**
  * @brief DMA operation direction
+ * Note: dma_direction_t values match DMA_DIRECTION_* macros in dma.h
  */
 typedef enum {
-    DMA_DIRECTION_TO_DEVICE   = 0x01,  /**< CPU to device (TX) */
-    DMA_DIRECTION_FROM_DEVICE = 0x02,  /**< Device to CPU (RX) */
-    DMA_DIRECTION_BIDIRECTIONAL = 0x03 /**< Bidirectional */
+    DMA_DIR_NONE,           /**< 0: No direction */
+    DMA_DIR_TO_DEVICE,      /**< 1: CPU to device (TX) */
+    DMA_DIR_FROM_DEVICE,    /**< 2: Device to CPU (RX) */
+    DMA_DIR_BIDIRECTIONAL   /**< 3: Bidirectional */
 } dma_direction_t;
 
 /**
  * @brief DMA device type for cache management
  */
 typedef enum {
-    DMA_DEVICE_NETWORK   = 0x01,  /**< Network interface */
-    DMA_DEVICE_STORAGE   = 0x02,  /**< Storage device */
-    DMA_DEVICE_AUDIO     = 0x03,  /**< Audio device */
-    DMA_DEVICE_GENERIC   = 0xFF   /**< Generic DMA device */
+    DMA_DEVICE_NONE,      /**< 0: No device */
+    DMA_DEVICE_NETWORK,   /**< 1: Network interface */
+    DMA_DEVICE_STORAGE,   /**< 2: Storage device */
+    DMA_DEVICE_AUDIO,     /**< 3: Audio device */
+    DMA_DEVICE_GENERIC    /**< 4: Generic DMA device */
 } dma_device_type_t;
+
+/* Legacy value for generic device compatibility */
+#define DMA_DEVICE_GENERIC_LEGACY 0xFF
 
 /**
  * @brief DMA operation descriptor
@@ -476,20 +504,33 @@ static inline void* memory_alloc_persistent(memory_services_t* mem, size_t size)
 
 /**
  * @brief Memory operation result codes
+ * Note: Negative values not supported in C89 enums, use defines
  */
 typedef enum {
-    MEMORY_SUCCESS           = 0,   /**< Operation successful */
-    MEMORY_ERROR_OUT_OF_MEMORY = -1, /**< Out of memory */
-    MEMORY_ERROR_INVALID_PTR = -2,  /**< Invalid pointer */
-    MEMORY_ERROR_INVALID_SIZE = -3, /**< Invalid size */
-    MEMORY_ERROR_ALIGNMENT   = -4,  /**< Alignment error */
-    MEMORY_ERROR_FRAGMENTED  = -5,  /**< Memory too fragmented */
-    MEMORY_ERROR_LOCKED      = -6,  /**< Memory is locked */
-    MEMORY_ERROR_NOT_FOUND   = -7,  /**< Memory block not found */
-    MEMORY_ERROR_PERMISSION  = -8,  /**< Permission denied */
-    MEMORY_ERROR_DOUBLE_FREE = -9,  /**< Attempt to free already freed memory */
-    MEMORY_ERROR_CORRUPTION  = -10  /**< Memory corruption detected */
+    MEMORY_SUCCESS,              /**< 0: Operation successful */
+    MEMORY_ERROR_OUT_OF_MEMORY,  /**< 1: Out of memory */
+    MEMORY_ERROR_INVALID_PTR,    /**< 2: Invalid pointer */
+    MEMORY_ERROR_INVALID_SIZE,   /**< 3: Invalid size */
+    MEMORY_ERROR_ALIGNMENT,      /**< 4: Alignment error */
+    MEMORY_ERROR_FRAGMENTED,     /**< 5: Memory too fragmented */
+    MEMORY_ERROR_LOCKED,         /**< 6: Memory is locked */
+    MEMORY_ERROR_NOT_FOUND,      /**< 7: Memory block not found */
+    MEMORY_ERROR_PERMISSION,     /**< 8: Permission denied */
+    MEMORY_ERROR_DOUBLE_FREE,    /**< 9: Attempt to free already freed memory */
+    MEMORY_ERROR_CORRUPTION      /**< 10: Memory corruption detected */
 } memory_result_t;
+
+/* Error code defines for functions returning int */
+#define MEMORY_ERR_OUT_OF_MEMORY  (-1)
+#define MEMORY_ERR_INVALID_PTR    (-2)
+#define MEMORY_ERR_INVALID_SIZE   (-3)
+#define MEMORY_ERR_ALIGNMENT      (-4)
+#define MEMORY_ERR_FRAGMENTED     (-5)
+#define MEMORY_ERR_LOCKED         (-6)
+#define MEMORY_ERR_NOT_FOUND      (-7)
+#define MEMORY_ERR_PERMISSION     (-8)
+#define MEMORY_ERR_DOUBLE_FREE    (-9)
+#define MEMORY_ERR_CORRUPTION     (-10)
 
 /**
  * @brief Get human-readable error string

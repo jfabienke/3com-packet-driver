@@ -27,9 +27,21 @@ static bool g_bounce_pools_initialized = false;
 /* Statistics tracking - updated from ISR */
 static dma_boundary_stats_t g_boundary_stats = {0};
 
-/* Critical section protection - use proper save/restore */
-#define ENTER_CRITICAL() irq_flags_t _saved_flags = irq_save()
-#define EXIT_CRITICAL()  irq_restore(_saved_flags)
+/* Critical section protection - use portable flag save/restore from portabl.h */
+/* Undefine the macro versions from common.h to use our inline assembly versions */
+/* C89: Variable must be declared at block start, so we use a macro that requires
+ * the caller to declare 'unsigned short _saved_flags' at start of function */
+#undef ENTER_CRITICAL
+#undef EXIT_CRITICAL
+#define DECLARE_CRITICAL_FLAGS unsigned short _saved_flags
+#define ENTER_CRITICAL() _saved_flags = save_flags_cli()
+#define EXIT_CRITICAL()  restore_flags(_saved_flags)
+
+/* Logging macros - map to logging.h functions */
+#define LOG_ERROR   log_error
+#define LOG_WARNING log_warning
+#define LOG_INFO    log_info
+#define LOG_DEBUG   log_debug
 
 /**
  * @brief Enhanced DMA buffer safety check - GPT-5 Implementation
@@ -41,7 +53,7 @@ static dma_boundary_stats_t g_boundary_stats = {0};
  * - Memory region classification
  * - Alignment validation
  */
-bool dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result) {
+int dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result) {
     if (!buffer || len == 0) {
         return false;
     }
@@ -98,12 +110,14 @@ bool dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *resul
         g_boundary_stats.isa_24bit_violations++;
     }
     
-    /* Determine memory region */
-    memory_region_t region = detect_memory_region(buffer);
-    result->in_conventional = (region == MEM_REGION_CONVENTIONAL);
-    result->in_umb = (region == MEM_REGION_UMB);
-    result->in_xms = (region == MEM_REGION_XMS);
-    
+    {
+        /* C89: Use block scope for declarations */
+        memory_region_t region = detect_memory_region(buffer);
+        result->in_conventional = (region == MEM_REGION_CONVENTIONAL);
+        result->in_umb = (region == MEM_REGION_UMB);
+        result->in_xms = (region == MEM_REGION_XMS);
+    }
+
     /* Check alignment */
     result->alignment_error = result->phys_addr & 0x03; /* 4-byte alignment check */
     if (result->alignment_error) {
@@ -111,13 +125,15 @@ bool dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *resul
         g_boundary_stats.alignment_violations++;
     }
     
-    /* GPT-5 Critical: Enhanced physical memory validation */
-    bool physical_safe = verify_physical_contiguity(buffer, len, result);
-    bool direct_dma_safe = is_safe_for_direct_dma(buffer, len);
-    
-    /* GPT-5 A: Force bounce for 64KB crossing on 3C515-TX ISA bus master */
-    /* The 3C515-TX cannot handle DMA transfers that cross 64KB boundaries */
-    bool force_bounce_3c515 = result->crosses_64k;  /* Always bounce on 64KB crossing for ISA DMA */
+    {
+        /* C89: Use block scope for declarations */
+        /* GPT-5 Critical: Enhanced physical memory validation */
+        bool physical_safe = verify_physical_contiguity(buffer, len, result);
+        bool direct_dma_safe = is_safe_for_direct_dma(buffer, len);
+
+        /* GPT-5 A: Force bounce for 64KB crossing on 3C515-TX ISA bus master */
+        /* The 3C515-TX cannot handle DMA transfers that cross 64KB boundaries */
+        bool force_bounce_3c515 = result->crosses_64k;  /* Always bounce on 64KB crossing for ISA DMA */
     
     /* Determine if bounce buffer is needed - GPT-5 Enhanced */
     result->needs_bounce = force_bounce_3c515 ||     /* GPT-5 A: 3C515 64KB boundary constraint */
@@ -146,19 +162,20 @@ bool dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *resul
         }
     }
     
-    /* Update statistics */
-    g_boundary_stats.total_checks++;
-    if (result->in_conventional) {
-        g_boundary_stats.conventional_hits++;
+        /* Update statistics */
+        g_boundary_stats.total_checks++;
+        if (result->in_conventional) {
+            g_boundary_stats.conventional_hits++;
+        }
+        if (result->in_umb) {
+            g_boundary_stats.umb_rejections++;
+        }
+        if (result->in_xms) {
+            g_boundary_stats.xms_rejections++;
+        }
+
+        return !result->needs_bounce;
     }
-    if (result->in_umb) {
-        g_boundary_stats.umb_rejections++;
-    }
-    if (result->in_xms) {
-        g_boundary_stats.xms_rejections++;
-    }
-    
-    return !result->needs_bounce;
 }
 
 /**
@@ -209,7 +226,7 @@ memory_region_t detect_memory_region(void *buffer) {
  * @brief Check if memory region is safe for DMA
  * GPT-5: Restrict DMA to conventional memory only
  */
-bool is_dma_safe_memory_region(void *buffer, size_t len) {
+int is_dma_safe_memory_region(void *buffer, size_t len) {
     memory_region_t region = detect_memory_region(buffer);
     uint32_t phys_addr = far_ptr_to_phys((void far *)buffer);
     
@@ -258,49 +275,53 @@ int dma_init_bounce_pools(void) {
     {
         int i;
         for (i = 0; i < DMA_TX_POOL_SIZE; i++) {
-        /* Allocate with extra space for alignment */
-        void *raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
-        if (!raw_buffer) {
-            LOG_ERROR("DMA: Failed to allocate TX bounce buffer %d", i);
-            return -1;
-        }
-        
-        /* Align buffer */
-        uintptr_t aligned_addr = ((uintptr_t)raw_buffer + DMA_POOL_ALIGNMENT - 1) & 
-                                ~(DMA_POOL_ALIGNMENT - 1);
-        g_tx_bounce_pool.buffers[i] = (void*)aligned_addr;
-        g_tx_bounce_pool.phys_addrs[i] = far_ptr_to_phys((void far*)aligned_addr);
-        g_tx_bounce_pool.in_use[i] = false;
-        
-        /* GPT-5 A: Verify bounce buffer meets all requirements */
-        dma_check_result_t check;
-        if (!dma_check_buffer_safety(g_tx_bounce_pool.buffers[i], 
-                                   DMA_BOUNCE_BUFFER_SIZE, &check)) {
-            LOG_ERROR("DMA: TX bounce buffer %d failed safety check", i);
-            return -1;
-        }
-        
-        /* GPT-5 A: Ensure bounce buffer meets critical constraints */
-        if (check.phys_addr > ISA_DMA_MAX_ADDR ||
-            (check.phys_addr + DMA_BOUNCE_BUFFER_SIZE - 1) > ISA_DMA_MAX_ADDR) {
-            LOG_ERROR("DMA: TX bounce buffer %d exceeds ISA 24-bit limit (0x%08lX)", 
-                     i, check.phys_addr);
-            return -1;
-        }
-        
-        if (check.crosses_64k) {
-            LOG_ERROR("DMA: TX bounce buffer %d crosses 64KB boundary (0x%08lX)", 
-                     i, check.phys_addr);
-            return -1;
-        }
-        
-        if (!check.is_contiguous) {
-            LOG_ERROR("DMA: TX bounce buffer %d not physically contiguous", i);
-            return -1;
-        }
-        
-        LOG_DEBUG("DMA: TX bounce buffer %d: virt=%p phys=0x%08lX",
-                 i, g_tx_bounce_pool.buffers[i], g_tx_bounce_pool.phys_addrs[i]);
+            /* C89: All declarations at start of block */
+            void *raw_buffer;
+            uintptr_t aligned_addr;
+            dma_check_result_t check;
+
+            /* Allocate with extra space for alignment */
+            raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
+            if (!raw_buffer) {
+                LOG_ERROR("DMA: Failed to allocate TX bounce buffer %d", i);
+                return -1;
+            }
+
+            /* Align buffer */
+            aligned_addr = ((uintptr_t)raw_buffer + DMA_POOL_ALIGNMENT - 1) &
+                                    ~((uintptr_t)DMA_POOL_ALIGNMENT - 1);
+            g_tx_bounce_pool.buffers[i] = (void*)aligned_addr;
+            g_tx_bounce_pool.phys_addrs[i] = far_ptr_to_phys((void far*)aligned_addr);
+            g_tx_bounce_pool.in_use[i] = false;
+
+            /* GPT-5 A: Verify bounce buffer meets all requirements */
+            if (!dma_check_buffer_safety(g_tx_bounce_pool.buffers[i],
+                                       DMA_BOUNCE_BUFFER_SIZE, &check)) {
+                LOG_ERROR("DMA: TX bounce buffer %d failed safety check", i);
+                return -1;
+            }
+
+            /* GPT-5 A: Ensure bounce buffer meets critical constraints */
+            if (check.phys_addr > ISA_DMA_MAX_ADDR ||
+                (check.phys_addr + DMA_BOUNCE_BUFFER_SIZE - 1) > ISA_DMA_MAX_ADDR) {
+                LOG_ERROR("DMA: TX bounce buffer %d exceeds ISA 24-bit limit (0x%08lX)",
+                         i, check.phys_addr);
+                return -1;
+            }
+
+            if (check.crosses_64k) {
+                LOG_ERROR("DMA: TX bounce buffer %d crosses 64KB boundary (0x%08lX)",
+                         i, check.phys_addr);
+                return -1;
+            }
+
+            if (!check.is_contiguous) {
+                LOG_ERROR("DMA: TX bounce buffer %d not physically contiguous", i);
+                return -1;
+            }
+
+            LOG_DEBUG("DMA: TX bounce buffer %d: virt=%p phys=0x%08lX",
+                     i, g_tx_bounce_pool.buffers[i], g_tx_bounce_pool.phys_addrs[i]);
         }
     }
 
@@ -324,28 +345,32 @@ int dma_init_bounce_pools(void) {
     {
         int i;
         for (i = 0; i < DMA_RX_POOL_SIZE; i++) {
-        void *raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
-        if (!raw_buffer) {
-            LOG_ERROR("DMA: Failed to allocate RX bounce buffer %d", i);
-            return -1;
-        }
-        
-        uintptr_t aligned_addr = ((uintptr_t)raw_buffer + DMA_POOL_ALIGNMENT - 1) & 
-                                ~(DMA_POOL_ALIGNMENT - 1);
-        g_rx_bounce_pool.buffers[i] = (void*)aligned_addr;
-        g_rx_bounce_pool.phys_addrs[i] = far_ptr_to_phys((void far*)aligned_addr);
-        g_rx_bounce_pool.in_use[i] = false;
-        
-        /* Verify buffer is DMA-safe */
-        dma_check_result_t check;
-        if (!dma_check_buffer_safety(g_rx_bounce_pool.buffers[i], 
-                                   DMA_BOUNCE_BUFFER_SIZE, &check)) {
-            LOG_ERROR("DMA: RX bounce buffer %d failed safety check", i);
-            return -1;
-        }
-        
-        LOG_DEBUG("DMA: RX bounce buffer %d: virt=%p phys=0x%08lX",
-                 i, g_rx_bounce_pool.buffers[i], g_rx_bounce_pool.phys_addrs[i]);
+            /* C89: All declarations at start of block */
+            void *raw_buffer;
+            uintptr_t aligned_addr;
+            dma_check_result_t check;
+
+            raw_buffer = malloc(DMA_BOUNCE_BUFFER_SIZE + DMA_POOL_ALIGNMENT);
+            if (!raw_buffer) {
+                LOG_ERROR("DMA: Failed to allocate RX bounce buffer %d", i);
+                return -1;
+            }
+
+            aligned_addr = ((uintptr_t)raw_buffer + DMA_POOL_ALIGNMENT - 1) &
+                                    ~((uintptr_t)DMA_POOL_ALIGNMENT - 1);
+            g_rx_bounce_pool.buffers[i] = (void*)aligned_addr;
+            g_rx_bounce_pool.phys_addrs[i] = far_ptr_to_phys((void far*)aligned_addr);
+            g_rx_bounce_pool.in_use[i] = false;
+
+            /* Verify buffer is DMA-safe */
+            if (!dma_check_buffer_safety(g_rx_bounce_pool.buffers[i],
+                                       DMA_BOUNCE_BUFFER_SIZE, &check)) {
+                LOG_ERROR("DMA: RX bounce buffer %d failed safety check", i);
+                return -1;
+            }
+
+            LOG_DEBUG("DMA: RX bounce buffer %d: virt=%p phys=0x%08lX",
+                     i, g_rx_bounce_pool.buffers[i], g_rx_bounce_pool.phys_addrs[i]);
         }
     }
 
@@ -358,10 +383,12 @@ int dma_init_bounce_pools(void) {
  * @brief Get TX bounce buffer from pool
  */
 void* dma_get_tx_bounce_buffer(size_t size) {
+    DECLARE_CRITICAL_FLAGS;
+
     if (!g_bounce_pools_initialized || size > DMA_BOUNCE_BUFFER_SIZE) {
         return NULL;
     }
-    
+
     ENTER_CRITICAL();
 
     {
@@ -391,10 +418,12 @@ void* dma_get_tx_bounce_buffer(size_t size) {
  * @brief Release TX bounce buffer back to pool
  */
 void dma_release_tx_bounce_buffer(void *buffer) {
+    DECLARE_CRITICAL_FLAGS;
+
     if (!buffer || !g_bounce_pools_initialized) {
         return;
     }
-    
+
     ENTER_CRITICAL();
 
     {
@@ -422,10 +451,12 @@ void dma_release_tx_bounce_buffer(void *buffer) {
  * @brief Get RX bounce buffer from pool
  */
 void* dma_get_rx_bounce_buffer(size_t size) {
+    DECLARE_CRITICAL_FLAGS;
+
     if (!g_bounce_pools_initialized || size > DMA_BOUNCE_BUFFER_SIZE) {
         return NULL;
     }
-    
+
     ENTER_CRITICAL();
 
     {
@@ -455,10 +486,12 @@ void* dma_get_rx_bounce_buffer(size_t size) {
  * @brief Release RX bounce buffer back to pool
  */
 void dma_release_rx_bounce_buffer(void *buffer) {
+    DECLARE_CRITICAL_FLAGS;
+
     if (!buffer || !g_bounce_pools_initialized) {
         return;
     }
-    
+
     ENTER_CRITICAL();
 
     {
@@ -487,28 +520,32 @@ void dma_release_rx_bounce_buffer(void *buffer) {
  * GPT-5 Enhancement: Prefer splitting over bouncing when possible
  */
 dma_sg_descriptor_t* dma_create_sg_descriptor(void *buffer, size_t len, uint16_t max_segments) {
+    /* C89: All declarations at start of function */
+    dma_sg_descriptor_t *desc;
+    void *bounce;
+
     if (!buffer || len == 0 || max_segments == 0) {
         return NULL;
     }
-    
-    dma_sg_descriptor_t *desc = malloc(sizeof(dma_sg_descriptor_t));
+
+    desc = malloc(sizeof(dma_sg_descriptor_t));
     if (!desc) {
         return NULL;
     }
-    
+
     memset(desc, 0, sizeof(dma_sg_descriptor_t));
     desc->original_buffer = buffer;
     desc->total_length = len;
-    
+
     /* Try to split at 64KB boundaries first */
     if (dma_split_at_64k_boundary(buffer, len, desc)) {
         LOG_DEBUG("DMA: Created S/G descriptor with %d segments", desc->segment_count);
         g_boundary_stats.splits_performed++;
         return desc;
     }
-    
+
     /* If splitting failed, use single bounce buffer */
-    void *bounce = dma_get_tx_bounce_buffer(len);
+    bounce = dma_get_tx_bounce_buffer(len);
     if (bounce) {
         desc->segments[0].phys_addr = far_ptr_to_phys((void far*)bounce);
         desc->segments[0].length = (uint16_t)len;
@@ -516,14 +553,14 @@ dma_sg_descriptor_t* dma_create_sg_descriptor(void *buffer, size_t len, uint16_t
         desc->segments[0].bounce_ptr = bounce;
         desc->segment_count = 1;
         desc->uses_bounce = true;
-        
+
         /* Copy data to bounce buffer */
         memcpy(bounce, buffer, len);
-        
+
         LOG_DEBUG("DMA: Created S/G descriptor with single bounce buffer");
         return desc;
     }
-    
+
     /* Failed to create safe descriptor */
     free(desc);
     return NULL;
@@ -533,35 +570,46 @@ dma_sg_descriptor_t* dma_create_sg_descriptor(void *buffer, size_t len, uint16_t
  * @brief Split buffer at 64KB boundaries
  * GPT-5 Enhancement: Avoid copies when scatter-gather supported
  */
-bool dma_split_at_64k_boundary(void *buffer, size_t len, dma_sg_descriptor_t *desc) {
-    uint32_t current_phys = far_ptr_to_phys((void far*)buffer);
-    uint8_t *current_ptr = (uint8_t*)buffer;
-    size_t remaining = len;
-    int segment = 0;
-    
+int dma_split_at_64k_boundary(void *buffer, size_t len, dma_sg_descriptor_t *desc) {
+    /* C89: All declarations at start of function */
+    uint32_t current_phys;
+    uint8_t *current_ptr;
+    size_t remaining;
+    int segment;
+
+    current_phys = far_ptr_to_phys((void far*)buffer);
+    current_ptr = (uint8_t*)buffer;
+    remaining = len;
+    segment = 0;
+
     while (remaining > 0 && segment < 8) {
+        /* C89: Declarations at start of block */
+        uint32_t boundary_offset;
+        size_t segment_size;
+        dma_check_result_t check;
+        void *bounce;
+
         /* Calculate how much we can take before next 64KB boundary */
-        uint32_t boundary_offset = current_phys & 0xFFFFUL;
-        size_t segment_size = 0x10000UL - boundary_offset;
-        
+        boundary_offset = current_phys & 0xFFFFUL;
+        segment_size = 0x10000UL - boundary_offset;
+
         if (segment_size > remaining) {
             segment_size = remaining;
         }
-        
+
         /* Verify this segment is DMA-safe */
-        dma_check_result_t check;
         if (!dma_check_buffer_safety(current_ptr, segment_size, &check)) {
             /* This segment needs bounce buffer */
-            void *bounce = dma_get_tx_bounce_buffer(segment_size);
+            bounce = dma_get_tx_bounce_buffer(segment_size);
             if (!bounce) {
                 return false;  /* No bounce buffer available */
             }
-            
+
             desc->segments[segment].phys_addr = far_ptr_to_phys((void far*)bounce);
             desc->segments[segment].is_bounce = true;
             desc->segments[segment].bounce_ptr = bounce;
             desc->uses_bounce = true;
-            
+
             /* Copy data to bounce buffer */
             memcpy(bounce, current_ptr, segment_size);
         } else {
@@ -570,15 +618,15 @@ bool dma_split_at_64k_boundary(void *buffer, size_t len, dma_sg_descriptor_t *de
             desc->segments[segment].is_bounce = false;
             desc->segments[segment].bounce_ptr = NULL;
         }
-        
+
         desc->segments[segment].length = (uint16_t)segment_size;
-        
+
         current_ptr += segment_size;
         current_phys += segment_size;
         remaining -= segment_size;
         segment++;
     }
-    
+
     desc->segment_count = segment;
     return (remaining == 0);  /* Success if we consumed all data */
 }
@@ -608,6 +656,8 @@ void dma_free_sg_descriptor(dma_sg_descriptor_t *desc) {
  * @brief Get current boundary checking statistics
  */
 void dma_get_boundary_stats(dma_boundary_stats_t *stats) {
+    DECLARE_CRITICAL_FLAGS;
+
     if (stats) {
         ENTER_CRITICAL();
         *stats = g_boundary_stats;
@@ -685,33 +735,38 @@ static bool g_memory_manager_detected = false;
  * @brief Detect if running in V86 mode with paging
  * GPT-5 Critical: V86 mode breaks simple linear->physical translation
  */
-bool detect_v86_paging_mode(void) {
-    static bool detection_done = false;
-    
+int detect_v86_paging_mode(void) {
+    /* C89: All declarations at start of function */
+    static int detection_done = 0;
+    union REGS regs;
+    struct SREGS sregs;
+
     if (detection_done) {
         return g_v86_mode_detected;
     }
-    
+
     /* Check for DPMI services first */
-    union REGS regs;
     regs.w.ax = 0x1687;  /* DPMI installation check */
     int86(0x2F, &regs, &regs);
-    
+
     if (regs.w.ax == 0) {
         g_dpmi_available = true;
         g_v86_mode_detected = true;  /* DPMI implies V86 mode */
         LOG_INFO("DMA: DPMI services detected - V86 mode likely");
     }
-    
-    /* Check for EMM386 */
-    regs.w.ax = 0x3567;  /* Get EMM386 interrupt vector */
-    int86(0x21, &regs, &regs);
-    if (regs.w.bx != 0 || regs.w.es != 0) {
+
+    /* Check for EMM386 - use int86x to get ES segment register */
+    regs.h.ah = 0x35;    /* DOS get interrupt vector */
+    regs.h.al = 0x67;    /* EMM interrupt */
+    segread(&sregs);
+    int86x(0x21, &regs, &regs, &sregs);
+    /* If ES:BX is non-zero, EMM386 is present */
+    if (regs.w.bx != 0 || sregs.es != 0) {
         g_memory_manager_detected = true;
         g_v86_mode_detected = true;
         LOG_INFO("DMA: EMM386 detected - V86 mode active");
     }
-    
+
     /* Check for QEMM */
     regs.h.ah = 0x3F;    /* QEMM API check */
     regs.w.bx = 0x5145;  /* 'QE' signature */
@@ -722,15 +777,15 @@ bool detect_v86_paging_mode(void) {
         g_v86_mode_detected = true;
         LOG_INFO("DMA: QEMM detected - V86 mode active");
     }
-    
-    detection_done = true;
+
+    detection_done = 1;
     return g_v86_mode_detected;
 }
 
 /**
  * @brief Check if DPMI services are available
  */
-bool dpmi_services_available(void) {
+int dpmi_services_available(void) {
     detect_v86_paging_mode(); /* Ensure detection is done */
     return g_dpmi_available;
 }
@@ -740,6 +795,11 @@ bool dpmi_services_available(void) {
  * GPT-5 Critical: Proper physical translation in paged environments
  */
 uint32_t translate_linear_to_physical(uint32_t linear_addr) {
+    /* C89: All declarations at start of function */
+    union REGS regs;
+    struct SREGS sregs;
+    uint32_t phys_addr;
+
     if (!g_dpmi_available) {
         /* No DPMI - assume identity mapping for conventional memory only */
         if (linear_addr < DMA_CONVENTIONAL_LIMIT) {
@@ -749,21 +809,18 @@ uint32_t translate_linear_to_physical(uint32_t linear_addr) {
             return 0xFFFFFFFF; /* Invalid address */
         }
     }
-    
+
     /* Use DPMI function 0x0506 to get physical address mapping */
-    union REGS regs;
-    struct SREGS sregs;
-    
     regs.w.ax = 0x0506;  /* Get page attributes */
     regs.w.bx = (uint16_t)(linear_addr >> 16);  /* Linear address high */
     regs.w.cx = (uint16_t)(linear_addr & 0xFFFF); /* Linear address low */
     regs.w.dx = 1;       /* Number of pages */
-    
+
     int86x(0x31, &regs, &regs, &sregs);
-    
+
     if (regs.w.cflag == 0) {
         /* Success - physical address in BX:CX */
-        uint32_t phys_addr = ((uint32_t)regs.w.bx << 16) | regs.w.cx;
+        phys_addr = ((uint32_t)regs.w.bx << 16) | regs.w.cx;
         return phys_addr;
     } else {
         LOG_WARNING("DMA: DPMI translation failed for address 0x%08lX", linear_addr);
@@ -775,72 +832,80 @@ uint32_t translate_linear_to_physical(uint32_t linear_addr) {
  * @brief Verify that buffer is physically contiguous across its entire length
  * GPT-5 Critical: Must check EVERY page, not just endpoints
  */
-bool verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *result) {
+int verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *result) {
+    /* C89: All declarations at start of function */
+    uint32_t linear_start;
+    uint32_t linear_end;
+    uint32_t first_page;
+    uint32_t last_page;
+    uint16_t page_count;
+    uint32_t phys_addr;
+
     if (!buffer || len == 0 || !result) {
         return false;
     }
-    
-    uint32_t linear_start = (uint32_t)buffer;
-    uint32_t linear_end = linear_start + len - 1;
-    uint32_t first_page = linear_start & ~0xFFF;  /* 4KB page alignment */
-    uint32_t last_page = linear_end & ~0xFFF;
-    uint16_t page_count = (uint16_t)((last_page - first_page) / 4096) + 1;
-    
+
+    linear_start = (uint32_t)buffer;
+    linear_end = linear_start + len - 1;
+    first_page = linear_start & ~0xFFFUL;  /* 4KB page alignment */
+    last_page = linear_end & ~0xFFFUL;
+    page_count = (uint16_t)((last_page - first_page) / 4096) + 1;
+
     result->page_count = page_count;
     result->v86_mode_detected = g_v86_mode_detected;
     result->dpmi_available = g_dpmi_available;
-    
+
     /* If only one page, it's trivially contiguous */
     if (page_count == 1) {
-        uint32_t phys_addr = translate_linear_to_physical(linear_start);
-        if (phys_addr == 0xFFFFFFFF) {
+        phys_addr = translate_linear_to_physical(linear_start);
+        if (phys_addr == 0xFFFFFFFFUL) {
             result->translation_reliable = false;
             result->is_contiguous = false;
             return false;
         }
-        
-        result->first_page_phys = phys_addr & ~0xFFF;
+
+        result->first_page_phys = phys_addr & ~0xFFFUL;
         result->last_page_phys = result->first_page_phys;
         result->translation_reliable = true;
         result->is_contiguous = true;
         return true;
     }
-    
+
     /* Check each page for contiguity */
     {
         uint32_t prev_phys_page = 0;
-        bool first_iteration = true;
+        int first_iteration = 1;
         uint32_t page_linear;
 
         for (page_linear = first_page; page_linear <= last_page; page_linear += 4096) {
-            uint32_t phys_addr = translate_linear_to_physical(page_linear);
+            uint32_t phys_page;
 
-            if (phys_addr == 0xFFFFFFFF) {
+            phys_addr = translate_linear_to_physical(page_linear);
+
+            if (phys_addr == 0xFFFFFFFFUL) {
                 LOG_WARNING("DMA: Cannot translate page 0x%08lX to physical", page_linear);
                 result->translation_reliable = false;
                 result->is_contiguous = false;
                 return false;
             }
 
-            {
-                uint32_t phys_page = phys_addr & ~0xFFF;
+            phys_page = phys_addr & ~0xFFFUL;
 
-                if (first_iteration) {
-                    result->first_page_phys = phys_page;
-                    first_iteration = false;
-                } else {
-                    /* Check if this page is contiguous with previous */
-                    if (phys_page != (prev_phys_page + 4096)) {
-                        LOG_DEBUG("DMA: Physical discontinuity detected at linear 0x%08lX", page_linear);
-                        result->is_contiguous = false;
-                        result->translation_reliable = true;
-                        return false;
-                    }
+            if (first_iteration) {
+                result->first_page_phys = phys_page;
+                first_iteration = 0;
+            } else {
+                /* Check if this page is contiguous with previous */
+                if (phys_page != (prev_phys_page + 4096)) {
+                    LOG_DEBUG("DMA: Physical discontinuity detected at linear 0x%08lX", page_linear);
+                    result->is_contiguous = false;
+                    result->translation_reliable = true;
+                    return false;
                 }
-
-                result->last_page_phys = phys_page;
-                prev_phys_page = phys_page;
             }
+
+            result->last_page_phys = phys_page;
+            prev_phys_page = phys_page;
         }
     }
 
@@ -855,16 +920,20 @@ bool verify_physical_contiguity(void *buffer, size_t len, dma_check_result_t *re
  * @brief Lock pages in memory using DPMI services
  * GPT-5 Critical: Prevent page remapping during DMA
  */
-bool lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle) {
+int lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle) {
+    /* C89: All declarations at start of function */
+    uint32_t linear_addr;
+    union REGS regs;
+
     if (!buffer || len == 0 || !lock_handle) {
         return false;
     }
-    
+
     *lock_handle = 0;
-    
+
     if (!g_dpmi_available) {
         /* No DPMI - assume conventional memory is always locked */
-        uint32_t linear_addr = (uint32_t)buffer;
+        linear_addr = (uint32_t)buffer;
         if (linear_addr + len <= DMA_CONVENTIONAL_LIMIT) {
             LOG_DEBUG("DMA: Conventional memory - no locking needed");
             return true;
@@ -873,18 +942,16 @@ bool lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle) {
             return false;
         }
     }
-    
+
     /* Use DPMI function 0x0600 to lock linear memory */
-    union REGS regs;
-    
     regs.w.ax = 0x0600;  /* Lock linear region */
     regs.w.bx = (uint16_t)((uint32_t)buffer >> 16);    /* Linear address high */
     regs.w.cx = (uint16_t)((uint32_t)buffer & 0xFFFF); /* Linear address low */
-    regs.w.si = (uint16_t)(len >> 16);    /* Size high */
-    regs.w.di = (uint16_t)(len & 0xFFFF); /* Size low */
-    
+    regs.w.si = (uint16_t)((uint32_t)len >> 16);    /* Size high (cast to 32-bit first) */
+    regs.w.di = (uint16_t)((uint32_t)len & 0xFFFF); /* Size low */
+
     int86(0x31, &regs, &regs);
-    
+
     if (regs.w.cflag == 0) {
         /* Success - lock handle in BX:CX but we'll use a simplified approach */
         *lock_handle = 1; /* Non-zero indicates locked */
@@ -900,23 +967,24 @@ bool lock_pages_for_dma(void *buffer, size_t len, uint16_t *lock_handle) {
  * @brief Unlock pages previously locked for DMA
  */
 void unlock_pages_for_dma(uint16_t lock_handle) {
+    /* C89: All declarations at start of function */
+    union REGS regs;
+
     if (lock_handle == 0) {
         return; /* Not locked */
     }
-    
+
     if (!g_dpmi_available) {
         return; /* No locking was needed */
     }
-    
+
     /* Use DPMI function 0x0601 to unlock linear memory */
-    union REGS regs;
-    
     regs.w.ax = 0x0601;  /* Unlock linear region */
     /* In a full implementation, we'd need to track the specific region */
     /* For now, we'll just mark as unlocked */
-    
+
     int86(0x31, &regs, &regs);
-    
+
     LOG_DEBUG("DMA: Pages unlocked via DPMI");
 }
 
@@ -924,49 +992,53 @@ void unlock_pages_for_dma(uint16_t lock_handle) {
  * @brief Determine if buffer is safe for direct DMA without bounce
  * GPT-5 Critical: Conservative safety policy
  */
-bool is_safe_for_direct_dma(void *buffer, size_t len) {
+int is_safe_for_direct_dma(void *buffer, size_t len) {
+    /* C89: All declarations at start of function */
+    uint32_t linear_addr;
+    dma_check_result_t check_result;
+    uint32_t start_phys;
+
     if (!buffer || len == 0) {
         return false;
     }
-    
-    uint32_t linear_addr = (uint32_t)buffer;
-    
+
+    linear_addr = (uint32_t)buffer;
+
     /* Conservative policy: Only allow direct DMA from conventional memory
      * unless we can guarantee physical contiguity and page locking */
-    
+
     /* Check 1: Conventional memory is always safe (identity mapped, locked) */
     if (linear_addr + len <= DMA_CONVENTIONAL_LIMIT) {
         LOG_DEBUG("DMA: Buffer in conventional memory - safe for direct DMA");
         return true;
     }
-    
+
     /* Check 2: If not in conventional memory, need V86/DPMI support */
     if (!detect_v86_paging_mode() || !dpmi_services_available()) {
         LOG_WARNING("DMA: Buffer outside conventional memory without DPMI - unsafe");
         return false;
     }
-    
+
     /* Check 3: Verify physical contiguity */
-    dma_check_result_t check_result;
     if (!verify_physical_contiguity(buffer, len, &check_result)) {
         LOG_DEBUG("DMA: Buffer not physically contiguous - bounce required");
         return false;
     }
-    
+
     /* Check 4: Must be within ISA DMA limits */
     if (check_result.first_page_phys >= DMA_16MB_LIMIT ||
         check_result.last_page_phys >= DMA_16MB_LIMIT) {
         LOG_DEBUG("DMA: Buffer exceeds 16MB ISA limit - bounce required");
         return false;
     }
-    
+
     /* Check 5: Must not cross 64KB boundaries for ISA DMA */
-    uint32_t start_phys = translate_linear_to_physical(linear_addr);
-    if (start_phys != 0xFFFFFFFF && dma_crosses_64k_fast(start_phys, len)) {
+    start_phys = translate_linear_to_physical(linear_addr);
+    if (start_phys != 0xFFFFFFFFUL && dma_crosses_64k_fast(start_phys, len)) {
         LOG_DEBUG("DMA: Buffer crosses 64KB boundary - bounce required");
         return false;
     }
-    
+
     LOG_DEBUG("DMA: Buffer verified safe for direct DMA");
     return true;
 }

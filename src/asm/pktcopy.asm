@@ -4,18 +4,19 @@
 ; Exposes a simple C ABI function that copies bytes using the optimized
 ; ASM routine packet_copy_fast. Intended for ISR paths where minimizing
 ; prolog/epilog and keeping DF/segment control matters.
+;
+; Converted to NASM syntax - 2026-01-23
 
-.MODEL SMALL
-.386
+bits 16
+cpu 386
 
-EXTERN packet_copy_fast:PROC
+extern packet_copy_fast
 
-_TEXT SEGMENT
-        ASSUME  CS:_TEXT
+segment _TEXT class=CODE
 
 ; void asm_packet_copy_fast(void* dest, const void* src, uint16_t len);
-PUBLIC asm_packet_copy_fast
-asm_packet_copy_fast PROC
+global asm_packet_copy_fast
+asm_packet_copy_fast:
         push    bp
         mov     bp, sp
         push    ds
@@ -46,9 +47,3 @@ asm_packet_copy_fast PROC
         pop     ds
         pop     bp
         ret
-asm_packet_copy_fast ENDP
-
-_TEXT ENDS
-
-END
-

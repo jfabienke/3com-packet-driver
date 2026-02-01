@@ -5,12 +5,14 @@
 ; Provides clean interfaces for hardware detection, IRQ management, and PnP operations
 ;
 ; This file is part of the 3Com Packet Driver project.
+;
+; Converted from MASM/WASM to NASM syntax: 2026-01-25 10:57:26
 
-ifndef ASM_INTERFACES_INC
-ASM_INTERFACES_INC equ 1
+%ifndef ASM_INTERFACES_INC
+%define ASM_INTERFACES_INC 1
 
-; Include defensive programming patterns
-include "tsr_defensive_wasm.inc"
+; Include defensive programming patterns (NASM version with WAIT_FOR_CONDITION macro)
+%include "tsr_defensive.inc"
 
 ;=============================================================================
 ; HARDWARE ERROR CODES (matching C layer)
@@ -104,67 +106,70 @@ PNP_CSN_START             equ 1       ; Starting card select number
 ;=============================================================================
 
 ; 3C509B window selection macro
-; Parameters: io_base (register), window (immediate)
+; Parameters: %1 = io_base (register), %2 = window (immediate)
 ; Modifies: AX, DX (if io_base is not DX)
-macro SELECT_3C509B_WINDOW io_base, window
-    mov dx, io_base
+%macro SELECT_3C509B_WINDOW 2
+    mov dx, %1
     add dx, 0Eh                     ; Command register offset
-    mov ax, (1 << 11) | window      ; Select window command
+    mov ax, (1 << 11) | %2          ; Select window command
     out dx, ax
     ; Small delay for window switch
     mov ax, 3
 %%delay_loop:
     dec ax
     jnz %%delay_loop
-endm
+%endmacro
 
 ; 3C515-TX window selection macro
-; Parameters: io_base (register), window (immediate)
+; Parameters: %1 = io_base (register), %2 = window (immediate)
 ; Modifies: AX, DX (if io_base is not DX)
-macro SELECT_3C515_WINDOW io_base, window
-    mov dx, io_base
+%macro SELECT_3C515_WINDOW 2
+    mov dx, %1
     add dx, 0Eh                     ; Command register offset
-    mov ax, (1 << 11) | window      ; Select window command
+    mov ax, (1 << 11) | %2          ; Select window command
     out dx, ax
     ; Small delay for window switch
     mov ax, 3
 %%delay_loop:
     dec ax
     jnz %%delay_loop
-endm
+%endmacro
 
 ; Generic window selection macro
-; Parameters: io_base (register), window (immediate), hw_type (register)
-; Modifies: AX, DX
-macro SELECT_WINDOW io_base, window, hw_type
-    cmp hw_type, HW_TYPE_3C509B
+; Parameters: %1 = io_base (register), %2 = window (immediate), %3 = hw_type (register or immediate)
+; Modifies: AX, DX, BL (preserved)
+%macro SELECT_WINDOW 3
+    push bx
+    mov bl, %3                      ; Load hw_type into register (works for both register and immediate)
+    cmp bl, HW_TYPE_3C509B
     je %%select_3c509b
-    cmp hw_type, HW_TYPE_3C515TX
+    cmp bl, HW_TYPE_3C515TX
     je %%select_3c515tx
     jmp %%done                      ; Unknown type, skip
 
 %%select_3c509b:
-    SELECT_3C509B_WINDOW io_base, window
+    SELECT_3C509B_WINDOW %1, %2
     jmp %%done
 
 %%select_3c515tx:
-    SELECT_3C515_WINDOW io_base, window
+    SELECT_3C515_WINDOW %1, %2
 
 %%done:
-endm
+    pop bx
+%endmacro
 
 ;=============================================================================
 ; HARDWARE ACCESS PATTERN MACROS
 ;=============================================================================
 
 ; Safe I/O byte read with timeout
-; Parameters: port (register), timeout_count (immediate), result_reg (register)
+; Parameters: %1 = port (register), %2 = timeout_count (immediate), %3 = result_reg (register)
 ; Sets CY on timeout, clears CY on success
 ; Result in result_reg if successful
-macro SAFE_IO_READ_BYTE port, timeout_count, result_reg
+%macro SAFE_IO_READ_BYTE 3
     push cx
-    mov cx, timeout_count
-    mov dx, port
+    mov cx, %2
+    mov dx, %1
 
 %%read_loop:
     in al, dx
@@ -172,65 +177,65 @@ macro SAFE_IO_READ_BYTE port, timeout_count, result_reg
     jz %%read_success              ; Zero is usually invalid
     dec cx
     jnz %%read_loop
-    
+
     ; Timeout occurred
     stc
     jmp %%read_done
 
 %%read_success:
-    mov result_reg, al
+    mov %3, al
     clc
 
 %%read_done:
     pop cx
-endm
+%endmacro
 
 ; Safe I/O word read with timeout
-; Parameters: port (register), timeout_count (immediate), result_reg (register)
+; Parameters: %1 = port (register), %2 = timeout_count (immediate), %3 = result_reg (register)
 ; Sets CY on timeout, clears CY on success
-macro SAFE_IO_READ_WORD port, timeout_count, result_reg
+%macro SAFE_IO_READ_WORD 3
     push cx
-    mov cx, timeout_count
-    mov dx, port
+    mov cx, %2
+    mov dx, %1
 
 %%read_loop:
     in ax, dx
     dec cx
     jnz %%read_success             ; Assume word reads are reliable
-    
+
     ; Timeout (shouldn't happen for word reads, but defensive)
     stc
     jmp %%read_done
 
 %%read_success:
-    mov result_reg, ax
+    mov %3, ax
     clc
 
 %%read_done:
     pop cx
-endm
+%endmacro
 
 ; Safe I/O byte write with verification
-; Parameters: port (register), value (register), timeout_count (immediate)
+; Parameters: %1 = port (register), %2 = value (register), %3 = timeout_count (immediate)
 ; Sets CY on verification failure, clears CY on success
-macro SAFE_IO_WRITE_BYTE port, value, timeout_count
+%macro SAFE_IO_WRITE_BYTE 3
     push ax
     push cx
     push dx
-    
-    mov dx, port
-    mov al, value
+
+    mov dx, %1
+    mov al, %2
     out dx, al
-    
+
     ; Verify write if possible (some registers are write-only)
-    mov cx, timeout_count
+    mov cx, %3
 %%verify_loop:
     in al, dx
-    cmp al, value
+    cmp al, %2
     je %%write_success
     dec cx
     jnz %%verify_loop
-    
+
     ; Verification failed or timeout
     stc
     jmp %%write_done
@@ -242,38 +247,38 @@ macro SAFE_IO_WRITE_BYTE port, value, timeout_count
     pop dx
     pop cx
     pop ax
-endm
+%endmacro
 
 ; Hardware reset with timeout
-; Parameters: io_base (register), hw_type (register), timeout_ms (immediate)
+; Parameters: %1 = io_base (register), %2 = hw_type (register), %3 = timeout_ms (immediate)
 ; Sets CY on timeout, clears CY on success
-macro HARDWARE_RESET io_base, hw_type, timeout_ms
+%macro HARDWARE_RESET 3
     push ax
     push cx
     push dx
-    
+
     ; Select window 0 for reset command
-    SELECT_WINDOW io_base, 0, hw_type
-    
+    SELECT_WINDOW %1, 0, %2
+
     ; Issue total reset command
-    mov dx, io_base
+    mov dx, %1
     add dx, 0Eh                     ; Command register
     mov ax, 0                       ; Total reset command
     out dx, ax
-    
+
     ; Wait for reset completion
-    mov cx, timeout_ms
+    mov cx, %3
 %%reset_wait:
     call delay_1ms                  ; 1ms delay
-    
+
     ; Check if reset completed (read status register)
     in ax, dx
     test ax, 1000h                  ; Command in progress bit
     jz %%reset_complete
-    
+
     dec cx
     jnz %%reset_wait
-    
+
     ; Reset timeout
     stc
     jmp %%reset_done
@@ -285,50 +290,50 @@ macro HARDWARE_RESET io_base, hw_type, timeout_ms
     pop dx
     pop cx
     pop ax
-endm
+%endmacro
 
 ;=============================================================================
 ; DEFENSIVE PROGRAMMING PATTERNS
 ;=============================================================================
 
 ; Validate hardware instance index
-; Parameters: instance_idx (register), max_instances (immediate)
+; Parameters: %1 = instance_idx (register), %2 = max_instances (immediate)
 ; Sets CY if invalid, clears CY if valid
 ; Preserves all registers except flags
-macro VALIDATE_HW_INSTANCE instance_idx, max_instances
-    cmp instance_idx, max_instances
+%macro VALIDATE_HW_INSTANCE 2
+    cmp %1, %2
     jae %%invalid_instance
     clc                             ; Valid instance
     jmp %%instance_done
 %%invalid_instance:
     stc                             ; Invalid instance
 %%instance_done:
-endm
+%endmacro
 
 ; Validate I/O address range
-; Parameters: io_addr (register), min_addr (immediate), max_addr (immediate)
+; Parameters: %1 = io_addr (register), %2 = min_addr (immediate), %3 = max_addr (immediate)
 ; Sets CY if invalid, clears CY if valid
-macro VALIDATE_IO_ADDRESS io_addr, min_addr, max_addr
-    cmp io_addr, min_addr
+%macro VALIDATE_IO_ADDRESS 3
+    cmp %1, %2
     jb %%invalid_addr
-    cmp io_addr, max_addr
+    cmp %1, %3
     ja %%invalid_addr
     clc                             ; Valid address
     jmp %%addr_done
 %%invalid_addr:
     stc                             ; Invalid address
 %%addr_done:
-endm
+%endmacro
 
 ; Validate IRQ number
-; Parameters: irq_num (register)
+; Parameters: %1 = irq_num (register)
 ; Sets CY if invalid, clears CY if valid
-macro VALIDATE_IRQ irq_num
-    cmp irq_num, IRQ_AUTO_ASSIGN
+%macro VALIDATE_IRQ 1
+    cmp %1, IRQ_AUTO_ASSIGN
     je %%valid_irq                  ; Auto-assign is valid
-    cmp irq_num, IRQ_MIN
+    cmp %1, IRQ_MIN
     jb %%invalid_irq
-    cmp irq_num, IRQ_MAX
+    cmp %1, IRQ_MAX
     ja %%invalid_irq
 %%valid_irq:
     clc                             ; Valid IRQ
@@ -336,31 +341,31 @@ macro VALIDATE_IRQ irq_num
 %%invalid_irq:
     stc                             ; Invalid IRQ
 %%irq_done:
-endm
+%endmacro
 
 ; Hardware operation with retry
-; Parameters: operation_proc (label), max_retries (immediate), delay_ms (immediate)
+; Parameters: %1 = operation_proc (label), %2 = max_retries (immediate), %3 = delay_ms (immediate)
 ; Sets CY if all retries failed, clears CY on success
-macro RETRY_HARDWARE_OPERATION operation_proc, max_retries, delay_ms
+%macro RETRY_HARDWARE_OPERATION 3
     push cx
-    mov cx, max_retries
+    mov cx, %2
 
 %%retry_loop:
-    call operation_proc
+    call %1
     jnc %%operation_success
-    
+
     ; Operation failed, wait and retry
     push cx
-    mov cx, delay_ms
+    mov cx, %3
 %%delay_loop:
     call delay_1ms
     dec cx
     jnz %%delay_loop
     pop cx
-    
+
     dec cx
     jnz %%retry_loop
-    
+
     ; All retries failed
     stc
     jmp %%retry_done
@@ -370,7 +375,7 @@ macro RETRY_HARDWARE_OPERATION operation_proc, max_retries, delay_ms
 
 %%retry_done:
     pop cx
-endm
+%endmacro
 
 ;=============================================================================
 ; DATA STRUCTURE DEFINITIONS
@@ -378,139 +383,148 @@ endm
 
 ; Hardware instance descriptor
 struc HW_INSTANCE
-    .type               db ?        ; Hardware type (HW_TYPE_*)
-    .state              db ?        ; Current state (HW_STATE_*)
-    .io_base            dw ?        ; I/O base address
-    .io_range           dw ?        ; I/O address range size
-    .irq                db ?        ; IRQ number
-    .mac_address        db 6 dup(?) ; MAC address
-    .pnp_csn            db ?        ; PnP card select number
-    .error_count        dw ?        ; Error counter
-    .last_error         db ?        ; Last error code
-    .flags              db ?        ; Status flags
-    .reserved           db 6 dup(?) ; Reserved for future use
+    .type:              resb 1      ; Hardware type (HW_TYPE_*)
+    .state:             resb 1      ; Current state (HW_STATE_*)
+    .io_base:           resw 1      ; I/O base address
+    .io_range:          resw 1      ; I/O address range size
+    .irq:               resb 1      ; IRQ number
+    .mac_address:       resb 6      ; MAC address
+    .pnp_csn:           resb 1      ; PnP card select number
+    .error_count:       resw 1      ; Error counter
+    .last_error:        resb 1      ; Last error code
+    .flags:             resb 1      ; Status flags
+    .reserved:          resb 6      ; Reserved for future use
 endstruc
 
 ; PnP device information structure
 struc PNP_DEVICE_INFO
-    .vendor_id          dw ?        ; Vendor ID
-    .device_id          dw ?        ; Device ID
-    .serial_id          dd ?        ; Serial number
-    .logical_device     db ?        ; Logical device number
-    .csn                db ?        ; Card select number
-    .io_base            dw ?        ; Assigned I/O base
-    .irq                db ?        ; Assigned IRQ
-    .state              db ?        ; Device state
-    .reserved           db 4 dup(?) ; Reserved
+    .vendor_id:         resw 1      ; Vendor ID
+    .device_id:         resw 1      ; Device ID
+    .serial_id:         resd 1      ; Serial number
+    .logical_device:    resb 1      ; Logical device number
+    .csn:               resb 1      ; Card select number
+    .io_base:           resw 1      ; Assigned I/O base
+    .irq:               resb 1      ; Assigned IRQ
+    .state:             resb 1      ; Device state
+    .reserved:          resb 4      ; Reserved
 endstruc
 
 ; IRQ handler context structure
 struc IRQ_CONTEXT
-    .handler_offset     dw ?        ; Handler offset
-    .handler_segment    dw ?        ; Handler segment
-    .device_index       db ?        ; Associated device index
-    .irq_number         db ?        ; IRQ number
-    .call_count         dd ?        ; Number of calls
-    .error_count        dw ?        ; Error count
-    .flags              db ?        ; Handler flags
-    .reserved           db ?        ; Reserved
+    .handler_offset:    resw 1      ; Handler offset
+    .handler_segment:   resw 1      ; Handler segment
+    .device_index:      resb 1      ; Associated device index
+    .irq_number:        resb 1      ; IRQ number
+    .call_count:        resd 1      ; Number of calls
+    .error_count:       resw 1      ; Error count
+    .flags:             resb 1      ; Handler flags
+    .reserved:          resb 1      ; Reserved
 endstruc
 
 ;=============================================================================
 ; FUNCTION INTERFACE DECLARATIONS
+; Note: Skip extern declarations when included from implementation modules
 ;=============================================================================
 
+%ifndef HARDWARE_MODULE_DEFINING
 ; Core hardware management functions
-EXTERN hardware_init_system:PROC           ; Initialize hardware subsystem
-EXTERN hardware_shutdown_system:PROC       ; Shutdown hardware subsystem
-EXTERN hardware_detect_all_devices:PROC    ; Detect all supported devices
-EXTERN hardware_reset_all_devices:PROC     ; Reset all devices
+extern hardware_init_system            ; Initialize hardware subsystem
+extern hardware_shutdown_system        ; Shutdown hardware subsystem
+extern hardware_detect_all_devices     ; Detect all supported devices
+extern hardware_reset_all_devices      ; Reset all devices
 
 ; 3C509B-specific functions
-EXTERN detect_3c509b_device:PROC           ; Detect 3C509B device
-EXTERN configure_3c509b_device:PROC        ; Configure 3C509B device
-EXTERN activate_3c509b_device:PROC         ; Activate 3C509B device
-EXTERN reset_3c509b_device:PROC            ; Reset 3C509B device
-EXTERN read_3c509b_eeprom:PROC             ; Read 3C509B EEPROM
-EXTERN setup_3c509b_irq:PROC               ; Setup 3C509B IRQ handler
+extern detect_3c509b_device            ; Detect 3C509B device
+extern configure_3c509b_device         ; Configure 3C509B device
+extern activate_3c509b_device          ; Activate 3C509B device
+extern reset_3c509b_device             ; Reset 3C509B device
+extern read_3c509b_eeprom              ; Read 3C509B EEPROM
+extern setup_3c509b_irq                ; Setup 3C509B IRQ handler
 
-; 3C515-TX-specific functions  
-EXTERN detect_3c515_device:PROC            ; Detect 3C515-TX device
-EXTERN configure_3c515_device:PROC         ; Configure 3C515-TX device
-EXTERN activate_3c515_device:PROC          ; Activate 3C515-TX device
-EXTERN reset_3c515_device:PROC             ; Reset 3C515-TX device
-EXTERN read_3c515_eeprom:PROC              ; Read 3C515-TX EEPROM
-EXTERN setup_3c515_irq:PROC                ; Setup 3C515-TX IRQ handler
-EXTERN configure_3c515_dma:PROC            ; Configure 3C515-TX DMA
+; 3C515-TX-specific functions
+extern detect_3c515_device             ; Detect 3C515-TX device
+extern configure_3c515_device          ; Configure 3C515-TX device
+extern activate_3c515_device           ; Activate 3C515-TX device
+extern reset_3c515_device              ; Reset 3C515-TX device
+extern read_3c515_eeprom               ; Read 3C515-TX EEPROM
+extern setup_3c515_irq                 ; Setup 3C515-TX IRQ handler
+extern configure_3c515_dma             ; Configure 3C515-TX DMA
+%endif ; HARDWARE_MODULE_DEFINING
 
+%ifndef PNP_MODULE_DEFINING
 ; PnP management functions
-EXTERN pnp_init_system:PROC                ; Initialize PnP system
-EXTERN pnp_shutdown_system:PROC            ; Shutdown PnP system
-EXTERN pnp_detect_devices:PROC             ; Detect PnP devices
-EXTERN pnp_configure_device:PROC           ; Configure PnP device
-EXTERN pnp_activate_device:PROC            ; Activate PnP device
-EXTERN pnp_generate_lfsr_sequence:PROC     ; Generate LFSR sequence
+extern pnp_init_system                 ; Initialize PnP system
+extern pnp_shutdown_system             ; Shutdown PnP system
+extern pnp_detect_devices              ; Detect PnP devices
+extern pnp_configure_device            ; Configure PnP device
+extern pnp_activate_device             ; Activate PnP device
+extern pnp_generate_lfsr_sequence      ; Generate LFSR sequence
+%endif ; PNP_MODULE_DEFINING
 
+%ifndef IRQ_MODULE_DEFINING
 ; IRQ management functions
-EXTERN irq_install_handler:PROC            ; Install IRQ handler
-EXTERN irq_remove_handler:PROC             ; Remove IRQ handler
-EXTERN irq_chain_handler:PROC              ; Chain to previous handler
-EXTERN irq_dispatch:PROC                   ; Dispatch IRQ to devices
-EXTERN irq_enable_line:PROC                ; Enable IRQ line
-EXTERN irq_disable_line:PROC               ; Disable IRQ line
+extern irq_install_handler             ; Install IRQ handler
+extern irq_remove_handler              ; Remove IRQ handler
+extern irq_chain_handler               ; Chain to previous handler
+extern irq_dispatch                    ; Dispatch IRQ to devices
+extern irq_enable_line                 ; Enable IRQ line
+extern irq_disable_line                ; Disable IRQ line
+%endif ; IRQ_MODULE_DEFINING
 
-; Utility functions
-EXTERN delay_1ms:PROC                      ; 1 millisecond delay
-EXTERN delay_10ms:PROC                     ; 10 millisecond delay
-EXTERN validate_io_address:PROC            ; Validate I/O address
-EXTERN validate_irq_number:PROC            ; Validate IRQ number
-EXTERN get_system_timestamp:PROC           ; Get system timestamp
+; Utility functions (commonly needed)
+extern delay_1ms                       ; 1 millisecond delay
+extern delay_10ms                      ; 10 millisecond delay
+extern validate_io_address             ; Validate I/O address
+extern validate_irq_number             ; Validate IRQ number
+extern get_system_timestamp            ; Get system timestamp
 
 ;=============================================================================
 ; EXPORTED INTERFACE FUNCTIONS
 ;=============================================================================
 
 ; Main interface functions that other modules can call
-PUBLIC hardware_detect_and_configure       ; Detect and configure all hardware
-PUBLIC hardware_get_device_info            ; Get device information
-PUBLIC hardware_set_device_state           ; Set device state
-PUBLIC hardware_handle_interrupt           ; Handle hardware interrupt
-PUBLIC hardware_validate_configuration     ; Validate hardware configuration
+global hardware_detect_and_configure   ; Detect and configure all hardware
+global hardware_get_device_info        ; Get device information
+global hardware_set_device_state       ; Set device state
+global hardware_handle_interrupt       ; Handle hardware interrupt
+global hardware_validate_configuration ; Validate hardware configuration
 
 ; PnP interface functions
-PUBLIC pnp_enumerate_devices               ; Enumerate PnP devices
-PUBLIC pnp_get_device_resources            ; Get device resource requirements
-PUBLIC pnp_assign_resources                ; Assign resources to device
-PUBLIC pnp_get_lfsr_table                  ; Get LFSR lookup table
+global pnp_enumerate_devices           ; Enumerate PnP devices
+global pnp_get_device_resources        ; Get device resource requirements
+global pnp_assign_resources            ; Assign resources to device
+global pnp_get_lfsr_table              ; Get LFSR lookup table
 
 ; IRQ interface functions
-PUBLIC irq_setup_shared_handler            ; Setup shared IRQ handler
-PUBLIC irq_get_handler_info                ; Get IRQ handler information
-PUBLIC irq_update_statistics               ; Update IRQ statistics
+global irq_setup_shared_handler        ; Setup shared IRQ handler
+global irq_get_handler_info            ; Get IRQ handler information
+global irq_update_statistics           ; Update IRQ statistics
 
 ;=============================================================================
 ; GLOBAL DATA DECLARATIONS
 ;=============================================================================
 
+%ifndef HARDWARE_DATA_DEFINING
 ; Hardware instance table
-EXTERN hw_instance_table:HW_INSTANCE       ; Array of hardware instances
-EXTERN hw_instance_count:BYTE              ; Number of detected instances
+extern hw_instance_table               ; Array of hardware instances
+extern hw_instance_count               ; Number of detected instances
 
 ; PnP device table
-EXTERN pnp_device_table:PNP_DEVICE_INFO    ; Array of PnP devices
-EXTERN pnp_device_count:BYTE               ; Number of PnP devices
+extern pnp_device_table                ; Array of PnP devices
+extern pnp_device_count                ; Number of PnP devices
 
 ; IRQ handler table
-EXTERN irq_handler_table:IRQ_CONTEXT       ; Array of IRQ handlers
-EXTERN irq_handler_count:BYTE              ; Number of installed handlers
+extern irq_handler_table               ; Array of IRQ handlers
+extern irq_handler_count               ; Number of installed handlers
 
 ; LFSR lookup table (256 bytes for PnP isolation)
-EXTERN lfsr_lookup_table:BYTE              ; LFSR sequence lookup table
+extern lfsr_lookup_table               ; LFSR sequence lookup table
 
 ; System state variables
-EXTERN hardware_initialized:BYTE           ; Hardware subsystem initialized flag
-EXTERN pnp_available:BYTE                  ; PnP system available flag
-EXTERN last_error_code:BYTE               ; Last error code
-EXTERN debug_flags:BYTE                   ; Debug control flags
+extern hardware_initialized            ; Hardware subsystem initialized flag
+extern pnp_available                   ; PnP system available flag
+extern last_error_code                 ; Last error code
+extern debug_flags                     ; Debug control flags
+%endif ; HARDWARE_DATA_DEFINING
 
-endif ; ASM_INTERFACES_INC
+%endif ; ASM_INTERFACES_INC

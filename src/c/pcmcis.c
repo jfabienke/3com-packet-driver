@@ -4,7 +4,7 @@
  */
 
 #include <string.h>
-#include "../include/pcmcis.h"
+#include "pcmcis.h"
 
 /* CIS tuple types */
 #define CISTPL_NULL        0x00
@@ -20,26 +20,36 @@ int pcmcia_cis_parse_3com(const uint8_t *cis, uint16_t length,
                           uint16_t *io_base, uint8_t *irq)
 {
     uint16_t off = 0;
+    /* C89: All declarations must be at the start of the block */
+    uint16_t found_io = 0;
+    uint8_t found_irq = 0;
+
     if (!cis || length < 4) return -1;
-    /* Defaults */
-    uint16_t found_io = 0; uint8_t found_irq = 0;
     while (off + 2 <= length) {
-        uint8_t type = cis[off++];
+        /* C89: Declarations at start of block */
+        uint8_t type;
+        uint8_t len;
+        const uint8_t *data;
+
+        type = cis[off++];
         if (type == CISTPL_NULL) continue;
         if (type == CISTPL_END) break;
         if (off >= length) break;
-        uint8_t len = cis[off++];
+        len = cis[off++];
         if (off + len > length) break;
-        const uint8_t *data = &cis[off];
+        data = &cis[off];
         switch (type) {
             case CISTPL_CFTABLE:
                 /* Heuristic: look for simple I/O base (16-bit) followed by size and IRQ */
                 if (len >= 4) {
+                    /* C89: Declarations at start of block */
+                    uint16_t io;
+                    uint8_t q;
                     /* Not accurate without full decode; attempt to read little-endian IO base */
-                    uint16_t io = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+                    io = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
                     if (io >= 0x200 && io < 0x400) found_io = io;
                     /* IRQ hint often encoded as a mask or number; take a plausible byte */
-                    uint8_t q = data[len-1] & 0x0F;
+                    q = data[len-1] & 0x0F;
                     if (q >= 3 && q <= 15) found_irq = q;
                 }
                 break;

@@ -32,27 +32,31 @@ typedef struct packet {
 #define MAX_PACKET_SIZE     1514    /* Maximum Ethernet frame size */
 
 /* Wrapper functions using existing buffer management */
-static inline packet_t* packet_alloc(uint16_t size)
+static packet_t* packet_alloc(uint16_t size)
 {
+    /* C89: All declarations at start of function */
+    packet_buffer_t *buf;
+    packet_t *pkt;
+
     /* Ensure minimum packet size */
     if (size < MIN_PACKET_SIZE) {
         size = MIN_PACKET_SIZE;
     }
-    
+
     /* Use existing packet buffer allocation */
-    packet_buffer_t *buf = packet_buffer_allocate(size);
+    buf = packet_buffer_alloc(size);
     if (!buf) {
         return NULL;
     }
-    
+
     /* Cast to packet_t - structures are compatible */
-    packet_t *pkt = (packet_t *)buf;
+    pkt = (packet_t *)buf;
     pkt->nic_index = 0;  /* Default to first NIC */
-    
+
     return pkt;
 }
 
-static inline void packet_free(packet_t *pkt)
+static void packet_free(packet_t *pkt)
 {
     if (pkt) {
         /* Use existing packet buffer free */
@@ -61,12 +65,12 @@ static inline void packet_free(packet_t *pkt)
 }
 
 /* Queue management using existing functions */
-static inline int packet_enqueue(packet_queue_t *queue, packet_t *pkt)
+static int packet_enqueue(packet_queue_t *queue, packet_t *pkt)
 {
     return packet_queue_enqueue(queue, (packet_buffer_t *)pkt);
 }
 
-static inline packet_t* packet_dequeue(packet_queue_t *queue)
+static packet_t* packet_dequeue(packet_queue_t *queue)
 {
     return (packet_t *)packet_queue_dequeue(queue);
 }

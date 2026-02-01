@@ -26,45 +26,45 @@ extern "C" {
 
 /* Test categories */
 typedef enum {
-    TEST_CATEGORY_HARDWARE = 0,         /* Hardware validation tests */
-    TEST_CATEGORY_MEMORY,               /* Memory system tests */
-    TEST_CATEGORY_PACKET,               /* Packet operation tests */
-    TEST_CATEGORY_NETWORK,              /* Network protocol tests */
-    TEST_CATEGORY_STRESS,               /* Stress and load tests */
-    TEST_CATEGORY_BENCHMARK,            /* Performance benchmarks */
-    TEST_CATEGORY_MAX
+    TEST_CATEGORY_HARDWARE,             /* 0: Hardware validation tests */
+    TEST_CATEGORY_MEMORY,               /* 1: Memory system tests */
+    TEST_CATEGORY_PACKET,               /* 2: Packet operation tests */
+    TEST_CATEGORY_NETWORK,              /* 3: Network protocol tests */
+    TEST_CATEGORY_STRESS,               /* 4: Stress and load tests */
+    TEST_CATEGORY_BENCHMARK,            /* 5: Performance benchmarks */
+    TEST_CATEGORY_MAX                   /* 6: Category count */
 } test_category_t;
 
 /* Test results */
 typedef enum {
-    TEST_RESULT_PASS = 0,               /* Test passed */
-    TEST_RESULT_FAIL,                   /* Test failed */
-    TEST_RESULT_SKIP,                   /* Test skipped */
-    TEST_RESULT_ERROR,                  /* Test error/exception */
-    TEST_RESULT_MAX
+    TEST_RESULT_PASS,                   /* 0: Test passed */
+    TEST_RESULT_FAIL,                   /* 1: Test failed */
+    TEST_RESULT_SKIP,                   /* 2: Test skipped */
+    TEST_RESULT_ERROR,                  /* 3: Test error/exception */
+    TEST_RESULT_MAX                     /* 4: Result count */
 } test_result_t;
 
 /* Test framework status */
 typedef enum {
-    TEST_STATUS_INIT = 0,               /* Initializing */
-    TEST_STATUS_READY,                  /* Ready to run tests */
-    TEST_STATUS_RUNNING,                /* Tests in progress */
-    TEST_STATUS_HARDWARE,               /* Running hardware tests */
-    TEST_STATUS_MEMORY,                 /* Running memory tests */
-    TEST_STATUS_PACKET,                 /* Running packet tests */
-    TEST_STATUS_BENCHMARK,              /* Running benchmarks */
-    TEST_STATUS_COMPLETED,              /* All tests completed */
-    TEST_STATUS_FAILED,                 /* Tests failed */
-    TEST_STATUS_MAX
+    TEST_STATUS_INIT,                   /* 0: Initializing */
+    TEST_STATUS_READY,                  /* 1: Ready to run tests */
+    TEST_STATUS_RUNNING,                /* 2: Tests in progress */
+    TEST_STATUS_HARDWARE,               /* 3: Running hardware tests */
+    TEST_STATUS_MEMORY,                 /* 4: Running memory tests */
+    TEST_STATUS_PACKET,                 /* 5: Running packet tests */
+    TEST_STATUS_BENCHMARK,              /* 6: Running benchmarks */
+    TEST_STATUS_COMPLETED,              /* 7: All tests completed */
+    TEST_STATUS_FAILED,                 /* 8: Tests failed */
+    TEST_STATUS_MAX                     /* 9: Status count */
 } test_status_t;
 
 /* Benchmark categories */
 typedef enum {
-    BENCHMARK_THROUGHPUT = 0,           /* Throughput benchmarks */
-    BENCHMARK_LATENCY,                  /* Latency benchmarks */
-    BENCHMARK_MEMORY,                   /* Memory performance */
-    BENCHMARK_CPU,                      /* CPU utilization */
-    BENCHMARK_MAX
+    BENCHMARK_THROUGHPUT,               /* 0: Throughput benchmarks */
+    BENCHMARK_LATENCY,                  /* 1: Latency benchmarks */
+    BENCHMARK_MEMORY,                   /* 2: Memory performance */
+    BENCHMARK_CPU,                      /* 3: CPU utilization */
+    BENCHMARK_MAX                       /* 4: Category count */
 } benchmark_category_t;
 
 /* Test configuration */

@@ -58,6 +58,12 @@ CFLAGS_PRODUCTION = -zq -ms -s -os -zp1 -zdf -zu -I$(INCDIR) -d0 \
 AFLAGS_DEBUG   = -f obj -i$(INCDIR)/ -l $(BUILDDIR)/ -g
 AFLAGS_RELEASE = -f obj -i$(INCDIR)/ -l $(BUILDDIR)/
 
+# Default assembler flags (release by default)
+AFLAGS ?= $(AFLAGS_RELEASE)
+
+# Combined flags for build targets
+COMBINED_AFLAGS ?= $(AFLAGS_RELEASE)
+
 # --- Linker Flags ---
 # system dos:  Create a DOS .EXE file
 # option map:  Create a .MAP file (useful for debugging)

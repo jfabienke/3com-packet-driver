@@ -18,6 +18,8 @@ extern "C" {
 /* Includes */
 #include "common.h"
 
+#define CONFIG_MAGIC 0x3C05  /* Config structure validation magic */
+
 /* Forward declarations */
 typedef struct busmaster_test_results busmaster_test_results_t;
 typedef struct nic_context nic_context_t;
@@ -52,39 +54,44 @@ extern int global_force_pio_mode;
 #define CONFIG_ERR_INVALID_IO_RANGE -10
 #define CONFIG_ERR_INVALID_IRQ_RANGE -11
 
-/* Network speed enumeration */
+/* Network speed enumeration - prefixed to avoid conflict with 3c515.h macros */
 typedef enum {
-    SPEED_AUTO = 0,
-    SPEED_10 = 10,
-    SPEED_100 = 100
+    CFG_SPEED_AUTO,      /* 0: Auto-detect speed */
+    CFG_SPEED_10,        /* 1: 10 Mbps */
+    CFG_SPEED_100        /* 2: 100 Mbps */
 } network_speed_t;
+
+/* Actual speed values for runtime use */
+#define SPEED_VALUE_10   10
+#define SPEED_VALUE_100  100
 
 /* Busmaster mode enumeration */
 typedef enum {
-    BUSMASTER_OFF = 0,
-    BUSMASTER_ON = 1,
-    BUSMASTER_AUTO = 2
+    BUSMASTER_OFF,   /* 0: Bus mastering disabled */
+    BUSMASTER_ON,    /* 1: Bus mastering enabled */
+    BUSMASTER_AUTO   /* 2: Auto-detect bus mastering */
 } busmaster_mode_t;
 
 /* PCI support mode enumeration */
 typedef enum {
-    PCI_DISABLED = 0,    /* PCI support disabled */
-    PCI_ENABLED = 1,     /* PCI support enabled if available */
-    PCI_REQUIRED = 2     /* PCI support required (fail if not available) */
+    PCI_DISABLED,    /* 0: PCI support disabled */
+    PCI_ENABLED,     /* 1: PCI support enabled if available */
+    PCI_REQUIRED     /* 2: PCI support required (fail if not available) */
 } pci_mode_t;
 
-/* Route entry structure */
+/* IP Route entry structure (renamed to avoid conflict with routing.h) */
 typedef struct {
     uint32_t network;           /* Network address */
     uint32_t netmask;           /* Network mask */
     uint8_t nic_id;             /* NIC identifier (1 or 2) */
     bool active;                /* Route is active */
-} route_entry_t;
+} ip_route_entry_t;
 
-#define MAX_ROUTES 16
+#define MAX_ROUTES 8
 
 /* Enhanced configuration structure */
-typedef struct {
+typedef struct config {
+    uint16_t magic;             /* Config magic for validation */
     /* Original settings */
     int debug_level;            /* Debug verbosity (0-3) */
     int use_xms;                /* Use XMS memory if available */
@@ -119,9 +126,13 @@ typedef struct {
     busmaster_mode_t busmaster; /* Bus mastering mode */
     pci_mode_t pci;            /* PCI support mode */
     bool log_enabled;           /* Logging enabled */
-    route_entry_t routes[MAX_ROUTES]; /* Static routes */
+    ip_route_entry_t routes[MAX_ROUTES]; /* Static routes */
     uint8_t route_count;        /* Number of configured routes */
     
+    /* IRQ handling settings */
+    uint16_t poll_interval;    /* Polling interval in ms (0=auto) */
+    bool shared_irq;           /* Allow IRQ sharing */
+
     /* Enhanced settings */
     uint8_t mac_address[ETH_ALEN];          /* MAC address override */
     bool use_custom_mac;                    /* Use custom MAC address */
@@ -149,9 +160,9 @@ typedef struct {
     uint16_t watchdog_timeout;              /* Watchdog timeout (ms) */
     bool debug_enabled;                     /* Debug mode enabled */
     uint32_t debug_flags;                   /* Debug flags */
-    char debug_output[32];                  /* Debug output destination */
+    char debug_output[16];                  /* Debug output destination */
     bool verbose_mode;                      /* Verbose output */
-    char config_file[128];                  /* Configuration file path */
+    char config_file[64];                   /* Configuration file path (DOS 8.3 max ~80) */
     bool save_on_exit;                      /* Save config on exit */
     bool load_defaults;                     /* Load default values */
 } config_t;
@@ -174,7 +185,7 @@ typedef struct {
 #define CONFIG_DEFAULT_IO2_BASE         0x320   /* Second NIC I/O base */
 #define CONFIG_DEFAULT_IRQ1             5       /* First NIC IRQ */
 #define CONFIG_DEFAULT_IRQ2             10      /* Second NIC IRQ */
-#define CONFIG_DEFAULT_SPEED            SPEED_AUTO
+#define CONFIG_DEFAULT_SPEED            CFG_SPEED_AUTO
 #define CONFIG_DEFAULT_BUSMASTER        BUSMASTER_AUTO
 #define CONFIG_DEFAULT_LOG_ENABLED      true
 
@@ -192,7 +203,7 @@ bool config_is_valid_irq_number(uint8_t irq);
 bool config_check_io_conflict(uint16_t io1, uint16_t io2);
 bool config_check_irq_conflict(uint8_t irq1, uint8_t irq2);
 bool config_cpu_supports_busmaster(void);
-int config_parse_route_entry(const char* route_str, route_entry_t* route);
+int config_parse_route_entry(const char* route_str, ip_route_entry_t* route);
 int config_validate_cross_parameters(const config_t* config);
 
 /* Bus mastering auto-configuration functions */

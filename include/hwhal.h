@@ -105,140 +105,48 @@ typedef struct hal_multicast {
     uint8_t addresses[16][6];   /* Multicast addresses */
 } hal_multicast_t;
 
-/**
- * @brief Hardware Abstraction Layer vtable structure
- *
- * Contains all 12 required function pointers for hardware abstraction.
- * Each NIC type (3C509B, 3C515-TX) implements this interface.
- * All functions use standard DOS calling conventions (__cdecl).
+/* NOTE: hardware_hal_vtable_t was removed 2026-01-25.
+ * The C nic_ops_t vtable (get_3c509b_ops(), get_3c515_ops()) is the
+ * production path. The ASM HAL layer was unused dead code.
  */
-typedef struct hardware_hal_vtable {
-    /**
-     * @brief Detect and enumerate hardware
-     * @param context NIC context structure
-     * @return HAL_SUCCESS on detection, error code otherwise
-     */
-    int (__cdecl *detect_hardware)(struct nic_context *context);
-    
-    /**
-     * @brief Initialize hardware after detection
-     * @param context NIC context structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *init_hardware)(struct nic_context *context);
-    
-    /**
-     * @brief Reset hardware to known state
-     * @param context NIC context structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *reset_hardware)(struct nic_context *context);
-    
-    /**
-     * @brief Configure media type and speed
-     * @param context NIC context structure
-     * @param media_type Media type (HAL_MEDIA_*)
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *configure_media)(struct nic_context *context, int media_type);
-    
-    /**
-     * @brief Set station (MAC) address
-     * @param context NIC context structure
-     * @param mac_addr 6-byte MAC address
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *set_station_address)(struct nic_context *context, const uint8_t *mac_addr);
-    
-    /**
-     * @brief Enable hardware interrupts
-     * @param context NIC context structure
-     * @param interrupt_mask Interrupt mask (NIC-specific)
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *enable_interrupts)(struct nic_context *context, uint16_t interrupt_mask);
-    
-    /**
-     * @brief Start the transceiver
-     * @param context NIC context structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *start_transceiver)(struct nic_context *context);
-    
-    /**
-     * @brief Stop the transceiver
-     * @param context NIC context structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *stop_transceiver)(struct nic_context *context);
-    
-    /**
-     * @brief Get link status
-     * @param context NIC context structure
-     * @return HAL_LINK_UP/HAL_LINK_DOWN, or negative error code
-     */
-    int (__cdecl *get_link_status)(struct nic_context *context);
-    
-    /**
-     * @brief Get hardware statistics
-     * @param context NIC context structure
-     * @param stats Pointer to statistics structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *get_statistics)(struct nic_context *context, hal_statistics_t *stats);
-    
-    /**
-     * @brief Set multicast filter
-     * @param context NIC context structure
-     * @param mc_list Pointer to multicast structure
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *set_multicast)(struct nic_context *context, const hal_multicast_t *mc_list);
-    
-    /**
-     * @brief Set promiscuous mode
-     * @param context NIC context structure
-     * @param enable True to enable, false to disable
-     * @return HAL_SUCCESS on success, error code otherwise
-     */
-    int (__cdecl *set_promiscuous)(struct nic_context *context, bool enable);
-    
-} hardware_hal_vtable_t;
-
-/* HAL vtable instances - implemented in hardware.c */
-extern hardware_hal_vtable_t g_3c509b_hal_vtable;
-extern hardware_hal_vtable_t g_3c515_tx_hal_vtable;
-
-/* HAL initialization and management functions */
-int hal_init_vtables(void);
-hardware_hal_vtable_t* hal_get_vtable(nic_type_t nic_type);
 const char* hal_error_to_string(int error_code);
 const char* hal_media_type_to_string(int media_type);
 
 /* HAL utility functions for error handling */
-static inline bool hal_is_success(int result) {
+#ifndef HAL_IS_SUCCESS_DEFINED
+#define HAL_IS_SUCCESS_DEFINED
+static bool hal_is_success(int result) {
     return (result == HAL_SUCCESS);
 }
+#endif
 
-static inline bool hal_is_error(int result) {
+#ifndef HAL_IS_ERROR_DEFINED
+#define HAL_IS_ERROR_DEFINED
+static bool hal_is_error(int result) {
     return (result < 0);
 }
+#endif
 
-static inline bool hal_is_timeout_error(int result) {
+#ifndef HAL_IS_TIMEOUT_ERROR_DEFINED
+#define HAL_IS_TIMEOUT_ERROR_DEFINED
+static bool hal_is_timeout_error(int result) {
     return (result == HAL_ERROR_TIMEOUT);
 }
+#endif
 
-static inline bool hal_is_hardware_error(int result) {
-    return (result == HAL_ERROR_HARDWARE_FAILURE || 
+#ifndef HAL_IS_HARDWARE_ERROR_DEFINED
+#define HAL_IS_HARDWARE_ERROR_DEFINED
+static bool hal_is_hardware_error(int result) {
+    return (result == HAL_ERROR_HARDWARE_FAILURE ||
             result == HAL_ERROR_DMA ||
             result == HAL_ERROR_MEDIA_FAILURE);
 }
+#endif
 
 /* HAL validation macros */
 #define HAL_VALIDATE_CONTEXT(ctx) \
     do { \
         if (!ctx) return HAL_ERROR_INVALID_PARAM; \
-        if (!ctx->hal_vtable) return HAL_ERROR_INITIALIZATION; \
     } while(0)
 
 #define HAL_VALIDATE_FUNCTION(vtable, func) \

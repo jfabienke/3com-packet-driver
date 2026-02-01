@@ -10,8 +10,8 @@
 
 #include <dos.h>
 #include <string.h>
-#include "../include/logging.h"
-#include "../include/pcmss.h"
+#include "logging.h"
+#include "pcmss.h"
 
 /* Socket Services function codes */
 #define SS_GET_ADAPTER_COUNT    0x80

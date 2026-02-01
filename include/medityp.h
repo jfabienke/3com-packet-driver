@@ -198,7 +198,7 @@ media_type_t suggest_optimal_media(nic_type_t nic_type, uint16_t available_media
  * @param error_msg_size Size of error message buffer
  * @return 1 if valid, 0 if invalid
  */
-int validate_media_selection(nic_type_t nic_type, media_type_t requested_media, 
+int validate_media_selection_by_type(nic_type_t nic_type, media_type_t requested_media,
                            char* error_msg, size_t error_msg_size);
 
 /**

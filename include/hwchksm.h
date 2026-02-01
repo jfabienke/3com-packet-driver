@@ -42,31 +42,31 @@ struct packet_buffer;
  * @brief Checksum protocol types
  */
 typedef enum {
-    CHECKSUM_PROTO_NONE = 0,        /* No checksum required */
-    CHECKSUM_PROTO_IP = 1,          /* IPv4 header checksum */
-    CHECKSUM_PROTO_TCP = 2,         /* TCP checksum */
-    CHECKSUM_PROTO_UDP = 3,         /* UDP checksum */
-    CHECKSUM_PROTO_ICMP = 4         /* ICMP checksum */
+    CHECKSUM_PROTO_NONE,            /* 0: No checksum required */
+    CHECKSUM_PROTO_IP,              /* 1: IPv4 header checksum */
+    CHECKSUM_PROTO_TCP,             /* 2: TCP checksum */
+    CHECKSUM_PROTO_UDP,             /* 3: UDP checksum */
+    CHECKSUM_PROTO_ICMP             /* 4: ICMP checksum */
 } checksum_protocol_t;
 
 /**
  * @brief Checksum calculation modes
  */
 typedef enum {
-    CHECKSUM_MODE_NONE = 0,         /* No checksumming */
-    CHECKSUM_MODE_SOFTWARE = 1,     /* Software-only checksumming */
-    CHECKSUM_MODE_HARDWARE = 2,     /* Hardware-only checksumming */
-    CHECKSUM_MODE_AUTO = 3          /* Auto-detect based on NIC capabilities */
+    CHECKSUM_MODE_NONE,             /* 0: No checksumming */
+    CHECKSUM_MODE_SOFTWARE,         /* 1: Software-only checksumming */
+    CHECKSUM_MODE_HARDWARE,         /* 2: Hardware-only checksumming */
+    CHECKSUM_MODE_AUTO              /* 3: Auto-detect based on NIC capabilities */
 } checksum_mode_t;
 
 /**
  * @brief Checksum operation results
  */
 typedef enum {
-    CHECKSUM_RESULT_VALID = 0,      /* Checksum is valid */
-    CHECKSUM_RESULT_INVALID = 1,    /* Checksum is invalid */
-    CHECKSUM_RESULT_UNKNOWN = 2,    /* Cannot determine validity */
-    CHECKSUM_RESULT_NOT_CHECKED = 3 /* Checksum not verified */
+    CHECKSUM_RESULT_VALID,          /* 0: Checksum is valid */
+    CHECKSUM_RESULT_INVALID,        /* 1: Checksum is invalid */
+    CHECKSUM_RESULT_UNKNOWN,        /* 2: Cannot determine validity */
+    CHECKSUM_RESULT_NOT_CHECKED     /* 3: Checksum not verified */
 } checksum_result_t;
 
 /**

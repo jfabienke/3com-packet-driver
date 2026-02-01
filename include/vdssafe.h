@@ -23,18 +23,18 @@ extern "C" {
 
 /* Enhanced error codes for safety layer */
 typedef enum {
-    VDS_SAFE_OK = 0,
-    VDS_SAFE_NOT_PRESENT,
-    VDS_SAFE_IN_ISR,           /* CRITICAL: Called from ISR context */
-    VDS_SAFE_BOUNDARY_VIOLATION,
-    VDS_SAFE_ALIGNMENT_ERROR,
-    VDS_SAFE_SG_TOO_LONG,
-    VDS_SAFE_NO_MEMORY,
-    VDS_SAFE_BOUNCE_REQUIRED,
-    VDS_SAFE_INVALID_CONSTRAINTS,
-    VDS_SAFE_LOCK_FAILED,
-    VDS_SAFE_RECOVERY_FAILED,
-    VDS_SAFE_UNKNOWN_ERROR
+    VDS_SAFE_OK,                /* 0: Success */
+    VDS_SAFE_NOT_PRESENT,       /* 1: VDS not present */
+    VDS_SAFE_IN_ISR,            /* 2: CRITICAL: Called from ISR context */
+    VDS_SAFE_BOUNDARY_VIOLATION,/* 3: Boundary violation */
+    VDS_SAFE_ALIGNMENT_ERROR,   /* 4: Alignment error */
+    VDS_SAFE_SG_TOO_LONG,       /* 5: S/G list too long */
+    VDS_SAFE_NO_MEMORY,         /* 6: Out of memory */
+    VDS_SAFE_BOUNCE_REQUIRED,   /* 7: Bounce buffer required */
+    VDS_SAFE_INVALID_CONSTRAINTS,/* 8: Invalid constraints */
+    VDS_SAFE_LOCK_FAILED,       /* 9: Lock failed */
+    VDS_SAFE_RECOVERY_FAILED,   /* 10: Recovery failed */
+    VDS_SAFE_UNKNOWN_ERROR      /* 11: Unknown error */
 } vds_safe_error_t;
 
 /* DMA constraints structure (per GPT-5 recommendation) */

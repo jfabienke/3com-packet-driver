@@ -17,11 +17,19 @@ extern "C" {
 
 /* Includes */
 
-/* Log levels */
+/* Log levels - wrapped with guards to prevent duplicate definition errors */
+#ifndef LOG_LEVEL_DEBUG
 #define LOG_LEVEL_DEBUG     0
+#endif
+#ifndef LOG_LEVEL_INFO
 #define LOG_LEVEL_INFO      1
+#endif
+#ifndef LOG_LEVEL_WARNING
 #define LOG_LEVEL_WARNING   2
+#endif
+#ifndef LOG_LEVEL_ERROR
 #define LOG_LEVEL_ERROR     3
+#endif
 
 /* Error codes */
 #define LOG_SUCCESS             0
@@ -85,6 +93,28 @@ int logging_set_ring_buffer_size(int size);
 int logging_ring_buffer_enabled(void);
 void logging_get_stats(unsigned long *written, unsigned long *dropped, unsigned long *overruns);
 void log_to_network_target(const char *message);
+
+/* Generic LOG_* macros - map to log_* functions
+ * These provide a common interface used throughout the codebase.
+ * For category-specific logging, use LOG_HW_*, LOG_NET_*, etc. below. */
+#ifndef LOG_DEBUG
+#define LOG_DEBUG(fmt, ...)     log_debug(fmt, ##__VA_ARGS__)
+#endif
+#ifndef LOG_INFO
+#define LOG_INFO(fmt, ...)      log_info(fmt, ##__VA_ARGS__)
+#endif
+#ifndef LOG_WARNING
+#define LOG_WARNING(fmt, ...)   log_warning(fmt, ##__VA_ARGS__)
+#endif
+#ifndef LOG_ERROR
+#define LOG_ERROR(fmt, ...)     log_error(fmt, ##__VA_ARGS__)
+#endif
+#ifndef LOG_TRACE
+#define LOG_TRACE(fmt, ...)     log_debug(fmt, ##__VA_ARGS__)  /* Map TRACE to DEBUG */
+#endif
+#ifndef LOG_CRITICAL
+#define LOG_CRITICAL(fmt, ...)  log_error(fmt, ##__VA_ARGS__)  /* Map CRITICAL to ERROR */
+#endif
 
 /* Convenience macros for category-specific logging */
 #define LOG_HW_DEBUG(fmt, ...)    log_debug_category(LOG_CAT_HARDWARE, fmt, ##__VA_ARGS__)

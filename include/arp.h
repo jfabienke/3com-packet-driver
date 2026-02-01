@@ -72,12 +72,13 @@ typedef struct arp_cache_entry {
 #define ARP_STATE_PERMANENT         4       /* Permanent entry */
 
 /* ARP entry flags */
-#define ARP_FLAG_STATIC             BIT(0)  /* Static entry */
-#define ARP_FLAG_PUBLISHED          BIT(1)  /* Published (proxy ARP) */
-#define ARP_FLAG_COMPLETE           BIT(2)  /* Complete entry */
-#define ARP_FLAG_PERMANENT          BIT(3)  /* Permanent entry */
-#define ARP_FLAG_PROXY              BIT(4)  /* Proxy ARP entry */
-#define ARP_FLAG_LOCAL              BIT(5)  /* Local interface address */
+#define ARP_FLAG_VALID              BIT(0)  /* Entry is valid */
+#define ARP_FLAG_STATIC             BIT(1)  /* Static entry */
+#define ARP_FLAG_PUBLISHED          BIT(2)  /* Published (proxy ARP) */
+#define ARP_FLAG_COMPLETE           BIT(3)  /* Complete entry */
+#define ARP_FLAG_PERMANENT          BIT(4)  /* Permanent entry */
+#define ARP_FLAG_PROXY              BIT(5)  /* Proxy ARP entry */
+#define ARP_FLAG_LOCAL              BIT(6)  /* Local interface address */
 
 /* ARP cache management structure */
 typedef struct arp_cache {
@@ -101,8 +102,12 @@ typedef struct arp_stats {
     uint32_t requests_sent;                 /* ARP requests sent */
     uint32_t replies_received;              /* ARP replies received */
     uint32_t replies_sent;                  /* ARP replies sent */
+    uint32_t responses_sent;                /* ARP responses sent (alias) */
+    uint32_t responses_received;            /* ARP responses received (alias) */
     uint32_t cache_updates;                 /* Cache updates */
     uint32_t cache_timeouts;                /* Cache timeouts */
+    uint32_t cache_hits;                    /* Cache hits */
+    uint32_t cache_misses;                  /* Cache misses */
     uint32_t request_timeouts;              /* Request timeouts */
     uint32_t invalid_packets;               /* Invalid packets */
     uint32_t proxy_requests;                /* Proxy ARP requests */

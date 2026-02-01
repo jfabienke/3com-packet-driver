@@ -2,7 +2,7 @@
 ;; @file pci_io.asm
 ;; @brief 32-bit I/O helpers for PCI configuration access
 ;;
-;; Provides 32-bit I/O port access functions for PCI Mechanism #1 
+;; Provides 32-bit I/O port access functions for PCI Mechanism #1
 ;; configuration cycles. Uses 386+ instructions in 16-bit real mode.
 ;;
 ;; Calling convention: Watcom C 16-bit cdecl
@@ -14,40 +14,40 @@
 ;; 3Com Packet Driver - PCI I/O Assembly Module
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-.model small
-.386                        ; Enable 386 instructions
-.code
+bits 16
+cpu 386                         ; Enable 386 instructions
+
+segment _TEXT class=CODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; unsigned long cdecl inportd(unsigned short port);
-;; 
+;;
 ;; Read 32-bit value from I/O port
 ;;
 ;; @param port I/O port address (stack [bp+4])
 ;; @return 32-bit value in DX:AX (high:low)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _inportd
-_inportd proc near
+global _inportd
+_inportd:
     push    bp
     mov     bp, sp
-    
-    mov     dx, [bp+4]      ; Get port number
-    
+
+    mov     dx, [bp+4]          ; Get port number
+
     ; Perform 32-bit input
-    db      66h             ; Operand size prefix for 32-bit
-    in      ax, dx          ; IN EAX, DX (32-bit read)
-    
+    db      66h                 ; Operand size prefix for 32-bit
+    in      ax, dx              ; IN EAX, DX (32-bit read)
+
     ; Result is now in EAX
     ; Need to return in DX:AX format for Watcom C
-    push    ax              ; Save low word
-    db      66h             ; Operand size prefix
-    shr     ax, 16          ; Shift EAX right by 16
-    mov     dx, ax          ; DX = high word
-    pop     ax              ; AX = low word
-    
+    push    ax                  ; Save low word
+    db      66h                 ; Operand size prefix
+    shr     ax, 16              ; Shift EAX right by 16
+    mov     dx, ax              ; DX = high word
+    pop     ax                  ; AX = low word
+
     pop     bp
     ret
-_inportd endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl outportd(unsigned short port, unsigned long value);
@@ -57,30 +57,29 @@ _inportd endp
 ;; @param port I/O port address (stack [bp+4])
 ;; @param value 32-bit value to write (stack [bp+6] low, [bp+8] high)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _outportd
-_outportd proc near
+global _outportd
+_outportd:
     push    bp
     mov     bp, sp
-    push    cx              ; Save CX
-    
-    mov     dx, [bp+4]      ; Get port number
-    mov     ax, [bp+6]      ; Get value low word
-    mov     cx, [bp+8]      ; Get value high word
-    
+    push    cx                  ; Save CX
+
+    mov     dx, [bp+4]          ; Get port number
+    mov     ax, [bp+6]          ; Get value low word
+    mov     cx, [bp+8]          ; Get value high word
+
     ; Combine into EAX
-    db      66h             ; Operand size prefix
-    shl     cx, 16          ; Shift ECX left by 16
-    db      66h             ; Operand size prefix
-    or      ax, cx          ; OR EAX with ECX (EAX = complete value)
-    
+    db      66h                 ; Operand size prefix
+    shl     cx, 16              ; Shift ECX left by 16
+    db      66h                 ; Operand size prefix
+    or      ax, cx              ; OR EAX with ECX (EAX = complete value)
+
     ; Perform 32-bit output
-    db      66h             ; Operand size prefix
-    out     dx, ax          ; OUT DX, EAX (32-bit write)
-    
-    pop     cx              ; Restore CX
+    db      66h                 ; Operand size prefix
+    out     dx, ax              ; OUT DX, EAX (32-bit write)
+
+    pop     cx                  ; Restore CX
     pop     bp
     ret
-_outportd endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; unsigned short cdecl inportw(unsigned short port);
@@ -91,17 +90,16 @@ _outportd endp
 ;; @param port I/O port address (stack [bp+4])
 ;; @return 16-bit value in AX
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _inportw
-_inportw proc near
+global _inportw
+_inportw:
     push    bp
     mov     bp, sp
-    
-    mov     dx, [bp+4]      ; Get port number
-    in      ax, dx          ; 16-bit read
-    
+
+    mov     dx, [bp+4]          ; Get port number
+    in      ax, dx              ; 16-bit read
+
     pop     bp
     ret
-_inportw endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl outportw(unsigned short port, unsigned short value);
@@ -112,18 +110,17 @@ _inportw endp
 ;; @param port I/O port address (stack [bp+4])
 ;; @param value 16-bit value to write (stack [bp+6])
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _outportw
-_outportw proc near
+global _outportw
+_outportw:
     push    bp
     mov     bp, sp
-    
-    mov     dx, [bp+4]      ; Get port number
-    mov     ax, [bp+6]      ; Get value
-    out     dx, ax          ; 16-bit write
-    
+
+    mov     dx, [bp+4]          ; Get port number
+    mov     ax, [bp+6]          ; Get value
+    out     dx, ax              ; 16-bit write
+
     pop     bp
     ret
-_outportw endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; unsigned char cdecl inportb(unsigned short port);
@@ -134,18 +131,17 @@ _outportw endp
 ;; @param port I/O port address (stack [bp+4])
 ;; @return 8-bit value in AL
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _inportb
-_inportb proc near
+global _inportb
+_inportb:
     push    bp
     mov     bp, sp
-    
-    mov     dx, [bp+4]      ; Get port number
-    in      al, dx          ; 8-bit read
-    xor     ah, ah          ; Clear high byte
-    
+
+    mov     dx, [bp+4]          ; Get port number
+    in      al, dx              ; 8-bit read
+    xor     ah, ah              ; Clear high byte
+
     pop     bp
     ret
-_inportb endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl outportb(unsigned short port, unsigned char value);
@@ -156,18 +152,17 @@ _inportb endp
 ;; @param port I/O port address (stack [bp+4])
 ;; @param value 8-bit value to write (stack [bp+6])
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _outportb
-_outportb proc near
+global _outportb
+_outportb:
     push    bp
     mov     bp, sp
-    
-    mov     dx, [bp+4]      ; Get port number
-    mov     al, [bp+6]      ; Get value (low byte)
-    out     dx, al          ; 8-bit write
-    
+
+    mov     dx, [bp+4]          ; Get port number
+    mov     al, [bp+6]          ; Get value (low byte)
+    out     dx, al              ; 8-bit write
+
     pop     bp
     ret
-_outportb endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl cli_safe(void);
@@ -175,11 +170,10 @@ _outportb endp
 ;; Disable interrupts safely
 ;; Can be called from C
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _cli_safe
-_cli_safe proc near
+global _cli_safe
+_cli_safe:
     cli
     ret
-_cli_safe endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl sti_safe(void);
@@ -187,11 +181,10 @@ _cli_safe endp
 ;; Enable interrupts safely
 ;; Can be called from C
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _sti_safe
-_sti_safe proc near
+global _sti_safe
+_sti_safe:
     sti
     ret
-_sti_safe endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; unsigned short cdecl save_flags(void);
@@ -200,12 +193,11 @@ _sti_safe endp
 ;;
 ;; @return Flags register value in AX
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _save_flags
-_save_flags proc near
+global _save_flags
+_save_flags:
     pushf
     pop     ax
     ret
-_save_flags endp
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; void cdecl restore_flags(unsigned short flags);
@@ -214,17 +206,14 @@ _save_flags endp
 ;;
 ;; @param flags Flags value to restore (stack [bp+4])
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-public _restore_flags
-_restore_flags proc near
+global _restore_flags
+_restore_flags:
     push    bp
     mov     bp, sp
-    
-    mov     ax, [bp+4]      ; Get flags value
+
+    mov     ax, [bp+4]          ; Get flags value
     push    ax
-    popf                    ; Restore flags
-    
+    popf                        ; Restore flags
+
     pop     bp
     ret
-_restore_flags endp
-
-end

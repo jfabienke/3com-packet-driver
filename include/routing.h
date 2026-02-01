@@ -20,6 +20,10 @@ extern "C" {
 #include "hardware.h"
 #include "pktops.h"
 
+/* Forward declarations */
+struct config;
+typedef struct config config_t;
+
 /* Routing decision types */
 typedef enum {
     ROUTE_DECISION_DROP = 0,                /* Drop the packet */
@@ -106,7 +110,7 @@ extern routing_stats_t g_routing_stats;
 extern bool g_routing_enabled;
 
 /* Routing initialization and cleanup */
-int routing_init(void);
+int routing_init(const config_t *config);
 void routing_cleanup(void);
 int routing_enable(bool enable);
 bool routing_is_enabled(void);

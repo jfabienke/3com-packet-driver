@@ -12,34 +12,33 @@
 ;;   [Stack]
 ;;   [Cold Section - Init Code] <- Discarded after init
 ;;
-;; Last Updated: 2026-01-23 20:15:00 CET
-;; Converted from NASM to WASM/MASM syntax for unified toolchain
+;; Last Updated: 2026-01-23 20:30:00 CET
+;; Converted from WASM/MASM syntax to NASM syntax
 ;;-----------------------------------------------------------------------------
 
-.MODEL SMALL
-.286
+bits 16
+cpu 286
 
 ;;-----------------------------------------------------------------------------
 ;; External symbols
 ;;-----------------------------------------------------------------------------
-EXTRN main_init:PROC            ; Main initialization routine
-EXTRN _edata:WORD               ; End of data segment (Watcom symbol)
-EXTRN cpu_detect_init:PROC      ; CPU detection (cold)
-EXTRN patch_init_and_apply:PROC ; SMC patch application (cold)
-EXTRN nic_detect_init:PROC      ; NIC detection (cold)
+extern main_init                ; Main initialization routine
+extern _edata                   ; End of data segment (Watcom symbol)
+extern cpu_detect_init          ; CPU detection (cold)
+extern patch_init_and_apply     ; SMC patch application (cold)
+extern nic_detect_init          ; NIC detection (cold)
 
 ;;-----------------------------------------------------------------------------
 ;; Public symbols
 ;;-----------------------------------------------------------------------------
-PUBLIC tsr_loader_start
-PUBLIC tsr_loader_install
-PUBLIC _main                    ; Entry point for Watcom C
+global tsr_loader_start
+global tsr_loader_install
+global _main                    ; Entry point for Watcom C
 
 ;;-----------------------------------------------------------------------------
 ;; Code Segment
 ;;-----------------------------------------------------------------------------
-_TEXT SEGMENT WORD PUBLIC 'CODE'
-        ASSUME CS:_TEXT, DS:_DATA
+segment _TEXT class=CODE
 
 ;;-----------------------------------------------------------------------------
 ;; Entry Point (called by Watcom C runtime)
@@ -58,11 +57,11 @@ tsr_loader_start:
         ; Get our PSP segment
         mov     ah, 62h         ; Get PSP address
         int     21h
-        mov     psp_segment, bx
+        mov     [psp_segment], bx
         mov     bp, bx          ; Keep PSP in BP for calculations
 
         ; Display loading message
-        mov     dx, OFFSET msg_loading
+        mov     dx, msg_loading
         mov     ah, 09h
         int     21h
 
@@ -88,7 +87,7 @@ tsr_loader_start:
 
         ; Calculate resident size (excludes cold section)
         call    calculate_resident_size
-        mov     resident_paragraphs, dx
+        mov     [resident_paragraphs], dx
 
         ; Display size information
         call    display_memory_info
@@ -98,26 +97,26 @@ tsr_loader_start:
         jc      install_failed
 
         ; Display success message
-        mov     dx, OFFSET msg_success
+        mov     dx, msg_success
         mov     ah, 09h
         int     21h
 
         ; Set up resident stack (important: must be within kept memory)
         cli
-        mov     ax, SEG stack_top
+        mov     ax, seg stack_top
         mov     ss, ax
-        mov     sp, OFFSET stack_top
+        mov     sp, stack_top
         sti
 
         ; Terminate and stay resident
-        mov     dx, resident_paragraphs
+        mov     dx, [resident_paragraphs]
         mov     ax, 3100h       ; TSR with return code 0
         int     21h
 
 init_failed:
         ; Display init failure message
         push    ax
-        mov     dx, OFFSET msg_init_failed
+        mov     dx, msg_init_failed
         mov     ah, 09h
         int     21h
         pop     ax
@@ -128,7 +127,7 @@ init_failed:
 
 install_failed:
         ; Display install failure message
-        mov     dx, OFFSET msg_install_failed
+        mov     dx, msg_install_failed
         mov     ah, 09h
         int     21h
 
@@ -150,7 +149,7 @@ cleanup_exit:
 ;; Calculate Resident Size (EXE-aware)
 ;; Returns: DX = size in paragraphs (16-byte units) including PSP
 ;;-----------------------------------------------------------------------------
-calculate_resident_size PROC
+calculate_resident_size:
         push    ax
         push    bx
         push    cx
@@ -163,42 +162,41 @@ calculate_resident_size PROC
 
         ; Calculate paragraphs from PSP to last resident label
         ; DX = SEG(last_resident) - PSP
-        mov     dx, SEG last_resident
+        mov     dx, seg last_resident
         sub     dx, bp
 
         ; Add offset of last_resident with proper rounding
         ; AX = OFFSET(last_resident) + 15
-        mov     ax, OFFSET last_resident
+        mov     ax, last_resident
         add     ax, 0Fh
         adc     dx, 0           ; Carry from offset adds 1 paragraph
         shr     ax, 4           ; Convert offset to paragraphs
         add     dx, ax          ; DX = total paragraphs including PSP
 
         ; Store for display
-        mov     total_size, dx
+        mov     [total_size], dx
 
         ; Calculate hot section size for display (approximation)
-        mov     ax, SEG _DATA
-        sub     ax, SEG _TEXT
-        mov     hot_size, ax
+        mov     ax, _DATA
+        sub     ax, _TEXT
+        mov     [hot_size], ax
 
         ; Calculate cold section size for display (approximation)
-        mov     ax, SEG COLD_TEXT
-        sub     ax, SEG _DATA
-        mov     cold_size, ax
+        mov     ax, COLD_TEXT
+        sub     ax, _DATA
+        mov     [cold_size], ax
 
         pop     bp
         pop     cx
         pop     bx
         pop     ax
         ret
-calculate_resident_size ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Install TSR
 ;; Returns: CF=1 on error, CF=0 on success
 ;;-----------------------------------------------------------------------------
-install_tsr PROC
+install_tsr:
         push    ax
         push    bx
         push    dx
@@ -214,14 +212,14 @@ install_tsr PROC
         ; Hook INT 60h for packet driver API
         mov     ax, 3560h       ; Get interrupt vector
         int     21h
-        mov     old_int60_off, bx
-        mov     old_int60_seg, es
+        mov     [old_int60_off], bx
+        mov     [old_int60_seg], es
 
         ; Set new interrupt vector
         push    ds
         push    cs
         pop     ds
-        mov     dx, OFFSET packet_driver_handler
+        mov     dx, packet_driver_handler
         mov     ax, 2560h       ; Set interrupt vector
         int     21h
         pop     ds
@@ -238,12 +236,11 @@ install_done:
         pop     bx
         pop     ax
         ret
-install_tsr ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Packet Driver Handler Stub (in hot section)
 ;;-----------------------------------------------------------------------------
-packet_driver_handler PROC FAR
+packet_driver_handler:
         ; Save all registers
         push    ax
         push    bx
@@ -283,51 +280,49 @@ pdh_done:
         pop     bx
         add     sp, 2           ; Don't restore AX (return value)
         iret
-packet_driver_handler ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Display Memory Information
 ;;-----------------------------------------------------------------------------
-display_memory_info PROC
+display_memory_info:
         push    ax
         push    dx
 
         ; Display header
-        mov     dx, OFFSET msg_memory_info
+        mov     dx, msg_memory_info
         mov     ah, 09h
         int     21h
 
         ; Display hot section size
-        mov     dx, OFFSET msg_hot_size
+        mov     dx, msg_hot_size
         mov     ah, 09h
         int     21h
-        mov     ax, hot_size
+        mov     ax, [hot_size]
         call    display_size_kb
 
         ; Display cold section size (to be discarded)
-        mov     dx, OFFSET msg_cold_size
+        mov     dx, msg_cold_size
         mov     ah, 09h
         int     21h
-        mov     ax, cold_size
+        mov     ax, [cold_size]
         call    display_size_kb
 
         ; Display final resident size
-        mov     dx, OFFSET msg_resident_size
+        mov     dx, msg_resident_size
         mov     ah, 09h
         int     21h
-        mov     ax, total_size
+        mov     ax, [total_size]
         call    display_size_kb
 
         pop     dx
         pop     ax
         ret
-display_memory_info ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Display Size in KB
 ;; Input: AX = size in paragraphs
 ;;-----------------------------------------------------------------------------
-display_size_kb PROC
+display_size_kb:
         push    ax
         push    bx
         push    cx
@@ -343,7 +338,7 @@ display_size_kb PROC
         call    display_decimal
 
         ; Display "KB" suffix
-        mov     dx, OFFSET msg_kb_suffix
+        mov     dx, msg_kb_suffix
         mov     ah, 09h
         int     21h
 
@@ -352,13 +347,12 @@ display_size_kb PROC
         pop     bx
         pop     ax
         ret
-display_size_kb ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Display Decimal Number
 ;; Input: AX = number to display
 ;;-----------------------------------------------------------------------------
-display_decimal PROC
+display_decimal:
         push    ax
         push    bx
         push    cx
@@ -387,18 +381,17 @@ dd_display_loop:
         pop     bx
         pop     ax
         ret
-display_decimal ENDP
 
 ;;-----------------------------------------------------------------------------
 ;; Display Error Code
 ;; Input: AX = error code
 ;;-----------------------------------------------------------------------------
-display_error_code PROC
+display_error_code:
         push    ax
         push    dx
 
         ; Display "Error code: "
-        mov     dx, OFFSET msg_error_code
+        mov     dx, msg_error_code
         mov     ah, 09h
         int     21h
 
@@ -407,22 +400,18 @@ display_error_code PROC
         call    display_decimal
 
         ; Display newline
-        mov     dx, OFFSET msg_newline
+        mov     dx, msg_newline
         mov     ah, 09h
         int     21h
 
         pop     dx
         pop     ax
         ret
-display_error_code ENDP
-
-_TEXT ENDS
 
 ;;-----------------------------------------------------------------------------
 ;; Data Section
 ;;-----------------------------------------------------------------------------
-_DATA SEGMENT WORD PUBLIC 'DATA'
-        ASSUME DS:_DATA
+segment _DATA class=DATA
 
 ; TSR state variables
 psp_segment         dw  0
@@ -461,28 +450,22 @@ msg_error_code      db  'Error code: $'
 msg_newline         db  13, 10, '$'
 
 ; Resident stack (must be in kept memory)
-                    ALIGN 16
-stack_bottom        db  512 dup(0)
-stack_top           LABEL WORD
+                    align 16, db 0
+stack_bottom        times 512 db 0
+stack_top:
 
 ; Mark end of resident portion
-last_resident       LABEL BYTE
-                    ALIGN 16
-
-_DATA ENDS
+last_resident:
+                    align 16, db 0
 
 ;;-----------------------------------------------------------------------------
 ;; Cold Section (discarded after initialization)
 ;;-----------------------------------------------------------------------------
-COLD_TEXT SEGMENT WORD PUBLIC 'CODE'
-        ASSUME CS:COLD_TEXT
+segment COLD_TEXT class=CODE
 
 ; Cold section code will go here
 ; This includes all initialization-only functions
 
-COLD_TEXT ENDS
-
 ;;-----------------------------------------------------------------------------
 ;; End of file
 ;;-----------------------------------------------------------------------------
-END _main

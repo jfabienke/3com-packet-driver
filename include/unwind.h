@@ -19,22 +19,22 @@ extern "C" {
 
 /* Unwind phase definitions - must match initialization order */
 typedef enum {
-    UNWIND_PHASE_NONE = 0,
-    UNWIND_PHASE_LOGGING = 1,
-    UNWIND_PHASE_CPU_DETECT = 2,
-    UNWIND_PHASE_PLATFORM_PROBE = 3,
-    UNWIND_PHASE_CONFIG = 4,
-    UNWIND_PHASE_CHIPSET = 5,
-    UNWIND_PHASE_VDS = 6,
-    UNWIND_PHASE_MEMORY_CORE = 7,
-    UNWIND_PHASE_PACKET_OPS = 8,    /* Phase 5.5: packet operations init */
-    UNWIND_PHASE_HARDWARE = 9,
-    UNWIND_PHASE_MEMORY_DMA = 10,
-    UNWIND_PHASE_TSR = 11,
-    UNWIND_PHASE_API_HOOKS = 12,
-    UNWIND_PHASE_INTERRUPTS = 13,
-    UNWIND_PHASE_API_ACTIVE = 14,
-    UNWIND_PHASE_COMPLETE = 15
+    UNWIND_PHASE_NONE,            /* 0 */
+    UNWIND_PHASE_LOGGING,         /* 1 */
+    UNWIND_PHASE_CPU_DETECT,      /* 2 */
+    UNWIND_PHASE_PLATFORM_PROBE,  /* 3 */
+    UNWIND_PHASE_CONFIG,          /* 4 */
+    UNWIND_PHASE_CHIPSET,         /* 5 */
+    UNWIND_PHASE_VDS,             /* 6 */
+    UNWIND_PHASE_MEMORY_CORE,     /* 7 */
+    UNWIND_PHASE_PACKET_OPS,      /* 8: packet operations init */
+    UNWIND_PHASE_HARDWARE,        /* 9 */
+    UNWIND_PHASE_MEMORY_DMA,      /* 10 */
+    UNWIND_PHASE_TSR,             /* 11 */
+    UNWIND_PHASE_API_HOOKS,       /* 12 */
+    UNWIND_PHASE_INTERRUPTS,      /* 13 */
+    UNWIND_PHASE_API_ACTIVE,      /* 14 */
+    UNWIND_PHASE_COMPLETE         /* 15 */
 } unwind_phase_t;
 
 /* Function prototypes */

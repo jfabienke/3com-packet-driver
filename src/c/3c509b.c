@@ -18,25 +18,32 @@
 #include "medictl.h"
 #include "nic_defs.h"
 #include "irqmit.h"
-#include "hwchksm.h"  // Phase 2.1: Hardware checksumming
-#include "dirpioe.h"  // Phase 1: CPU-optimized I/O operations
+#include "hwchksm.h"  /* Phase 2.1: Hardware checksumming */
+#include "dirpioe.h"  /* Phase 1: CPU-optimized I/O operations */
+#include "cachecoh.h" /* Cache coherency types */
+#include "cachemgt.h" /* Cache management functions (Sprint 4B) */
+#include "chipdet.h"  /* Chipset detection types */
 #include <string.h>
 
-/* Forward declarations for operations */
+/* Forward declarations for operations
+ * NOTE: Phase 5 cleanup - removed 'static' from functions that are called
+ * externally via vtable or need to be linked from other modules.
+ */
 int _3c509b_init(nic_info_t *nic);
 int _3c509b_cleanup(nic_info_t *nic);
 int _3c509b_reset(nic_info_t *nic);
-static int _3c509b_configure(nic_info_t *nic, const void *config);
+int _3c509b_configure(nic_info_t *nic, const void *config);
 int _3c509b_send_packet(nic_info_t *nic, const uint8_t *packet, size_t length);
 int _3c509b_receive_packet(nic_info_t *nic, uint8_t *buffer, size_t *length);
-bool _3c509b_check_interrupt(nic_info_t *nic);
+int _3c509b_send_packet_direct_pio(nic_info_t *nic, const uint8_t *packet, size_t length);
+int _3c509b_check_interrupt(nic_info_t *nic);
 void _3c509b_handle_interrupt(nic_info_t *nic);
-static int _3c509b_enable_interrupts(nic_info_t *nic);
-static int _3c509b_disable_interrupts(nic_info_t *nic);
-static bool _3c509b_get_link_status(nic_info_t *nic);
-static int _3c509b_get_link_speed(nic_info_t *nic);
-static int _3c509b_set_promiscuous(nic_info_t *nic, bool enable);
-static int _3c509b_set_multicast(nic_info_t *nic, const uint8_t *mc_list, int count);
+int _3c509b_enable_interrupts(nic_info_t *nic);
+int _3c509b_disable_interrupts(nic_info_t *nic);
+int _3c509b_get_link_status(nic_info_t *nic);
+int _3c509b_get_link_speed(nic_info_t *nic);
+int _3c509b_set_promiscuous(nic_info_t *nic, bool enable);
+int _3c509b_set_multicast(nic_info_t *nic, const uint8_t *mc_list, int count);
 int _3c509b_self_test(nic_info_t *nic);
 
 /* Internal helper functions for 3C509B hardware compliance */
@@ -47,6 +54,12 @@ static void _3c509b_write_eeprom(nic_info_t *nic, uint8_t address, uint16_t data
 static int _3c509b_read_mac_from_eeprom(nic_info_t *nic, uint8_t *mac);
 static int _3c509b_setup_media(nic_info_t *nic);
 static int _3c509b_setup_rx_filter(nic_info_t *nic);
+
+/* PIO Cache coherency functions (Sprint 4B) */
+static int _3c509b_initialize_cache_coherency(nic_info_t *nic);
+static void _3c509b_pio_prepare_rx_buffer(nic_info_t *nic, void *buffer, size_t length);
+static void _3c509b_pio_complete_rx_buffer(nic_info_t *nic, void *buffer, size_t length);
+static void _3c509b_pio_prepare_tx_buffer(nic_info_t *nic, const void *buffer, size_t length);
 
 /* 3C509B operations vtable */
 static nic_ops_t _3c509b_ops = {
@@ -78,8 +91,8 @@ nic_ops_t* get_3c509b_ops(void) {
     return &_3c509b_ops;
 }
 
-/* NIC operation implementations */
-static int _3c509b_init(nic_info_t *nic) {
+/* NIC operation implementations - Phase 5: removed static for external linkage */
+int _3c509b_init(nic_info_t *nic) {
     int result;
 
     if (!nic) {
@@ -153,25 +166,34 @@ static int _3c509b_init(nic_info_t *nic) {
               direct_pio_get_cpu_support_info() ? "Yes" : "No");
     
     /* Initialize hardware checksumming with CPU-aware optimization */
-    result = hw_checksum_init();
+    result = hw_checksum_init(CHECKSUM_MODE_AUTO);
     if (result != SUCCESS) {
         LOG_WARNING("Hardware checksum initialization failed: %d, continuing without optimization", result);
         /* Continue - checksum is optional feature */
     } else {
         LOG_DEBUG("Hardware checksum module initialized with CPU optimization");
     }
-    
-    LOG_INFO("3C509B initialized successfully, link %s, speed %d Mbps", 
+
+    /* Initialize PIO cache coherency for speculative read protection (Sprint 4B) */
+    result = _3c509b_initialize_cache_coherency(nic);
+    if (result != SUCCESS) {
+        LOG_WARNING("Cache coherency init failed: %d, continuing without speculative protection", result);
+        /* Non-fatal - continue without speculative protection */
+        nic->pio_cache_initialized = 1;
+        nic->pio_speculative_protection = 0;
+    }
+
+    LOG_INFO("3C509B initialized successfully, link %s, speed %d Mbps",
              nic->link_up ? "UP" : "DOWN", nic->speed);
     
     return SUCCESS;
 }
 
-static int _3c509b_cleanup(nic_info_t *nic) {
+int _3c509b_cleanup(nic_info_t *nic) {
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Cleaning up 3C509B at I/O 0x%X", nic->io_base);
     
     /* Disable interrupts */
@@ -190,11 +212,11 @@ static int _3c509b_cleanup(nic_info_t *nic) {
     return SUCCESS;
 }
 
-static int _3c509b_reset(nic_info_t *nic) {
+int _3c509b_reset(nic_info_t *nic) {
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     LOG_DEBUG("Resetting 3C509B at I/O 0x%X", nic->io_base);
     
     /* Issue global reset command */
@@ -207,11 +229,11 @@ static int _3c509b_reset(nic_info_t *nic) {
     return _3c509b_wait_for_cmd_busy(nic, 5000); /* 5 second timeout */
 }
 
-static int _3c509b_configure(nic_info_t *nic, const void *config) {
+int _3c509b_configure(nic_info_t *nic, const void *config) {
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Basic configuration - media setup and RX filter already done in init */
     LOG_DEBUG("Configuring 3C509B");
     
@@ -464,21 +486,21 @@ static int _3c509b_receive_packet_buffered(nic_info_t *nic) {
     return result;
 }
 
-static bool _3c509b_check_interrupt(nic_info_t *nic) {
+int _3c509b_check_interrupt(nic_info_t *nic) {
     uint16_t status;
 
     if (!nic) {
-        return false;
+        return 0;
     }
 
     /* Read interrupt status */
     status = _3c509b_read_reg(nic, _3C509B_STATUS_REG);
 
-    /* Check if any interrupt bits are set */
-    return (status & _3C509B_STATUS_INT_LATCH) != 0;
+    /* Check if any interrupt bits are set - return 1 if set, 0 if not */
+    return (status & _3C509B_STATUS_INT_LATCH) ? 1 : 0;
 }
 
-static void _3c509b_handle_interrupt(nic_info_t *nic) {
+void _3c509b_handle_interrupt(nic_info_t *nic) {
     uint16_t status;
     uint16_t tx_status;
     int rx_result;
@@ -661,11 +683,11 @@ int _3c509b_handle_interrupt_batched(nic_info_t *nic) {
     return process_batched_interrupts_3c509b(im_ctx);
 }
 
-static int _3c509b_enable_interrupts(nic_info_t *nic) {
+int _3c509b_enable_interrupts(nic_info_t *nic) {
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Select Window 1 and enable interrupt mask */
     _3c509b_select_window(nic, _3C509B_WINDOW_1);
     _3c509b_write_command(nic, _3C509B_CMD_SET_INTR_ENABLE | 
@@ -674,11 +696,11 @@ static int _3c509b_enable_interrupts(nic_info_t *nic) {
     return SUCCESS;
 }
 
-static int _3c509b_disable_interrupts(nic_info_t *nic) {
+int _3c509b_disable_interrupts(nic_info_t *nic) {
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
+
     /* Select Window 1 and disable all interrupts */
     _3c509b_select_window(nic, _3C509B_WINDOW_1);
     _3c509b_write_command(nic, _3C509B_CMD_SET_INTR_ENABLE | 0);
@@ -686,12 +708,12 @@ static int _3c509b_disable_interrupts(nic_info_t *nic) {
     return SUCCESS;
 }
 
-static bool _3c509b_get_link_status(nic_info_t *nic) {
+int _3c509b_get_link_status(nic_info_t *nic) {
     int link_status;
     uint16_t media_status;
 
     if (!nic) {
-        return false;
+        return 0;
     }
 
     /* Use enhanced media control link detection */
@@ -703,23 +725,23 @@ static bool _3c509b_get_link_status(nic_info_t *nic) {
         _3c509b_select_window(nic, _3C509B_WINDOW_4);
         media_status = _3c509b_read_reg(nic, _3C509B_W4_NETDIAG);
 
-        /* Check link beat for 10Base-T */
-        return (media_status & 0x0800) != 0;
+        /* Check link beat for 10Base-T - return 1 if up, 0 if down */
+        return (media_status & 0x0800) ? 1 : 0;
     }
 
-    return link_status ? true : false;
+    return link_status ? 1 : 0;
 }
 
-static int _3c509b_get_link_speed(nic_info_t *nic) {
+int _3c509b_get_link_speed(nic_info_t *nic) {
     if (!nic) {
         return 0;
     }
-    
+
     /* 3C509B is always 10 Mbps */
     return 10;
 }
 
-static int _3c509b_set_promiscuous(nic_info_t *nic, bool enable) {
+int _3c509b_set_promiscuous(nic_info_t *nic, bool enable) {
     uint16_t filter;
 
     if (!nic) {
@@ -741,7 +763,7 @@ static int _3c509b_set_promiscuous(nic_info_t *nic, bool enable) {
     return SUCCESS;
 }
 
-static int _3c509b_set_multicast(nic_info_t *nic, const uint8_t *mc_list, int count) {
+int _3c509b_set_multicast(nic_info_t *nic, const uint8_t *mc_list, int count) {
     uint16_t filter;
 
     if (!nic) {
@@ -763,7 +785,7 @@ static int _3c509b_set_multicast(nic_info_t *nic, const uint8_t *mc_list, int co
     return SUCCESS;
 }
 
-static int _3c509b_self_test(nic_info_t *nic) {
+int _3c509b_self_test(nic_info_t *nic) {
     uint16_t original_value;
     uint16_t test_value;
 
@@ -951,7 +973,13 @@ static int _3c509b_setup_media(nic_info_t *nic) {
     if (nic->media_capabilities & MEDIA_CAP_AUTO_SELECT) {
         LOG_INFO("Attempting auto-detection for combo card");
 
-        detect_config = MEDIA_DETECT_CONFIG_DEFAULT;
+        /* Initialize detection config manually (C89 compatible) */
+        detect_config.flags = 0;
+        detect_config.timeout_ms = MEDIA_DETECT_TIMEOUT_MS;
+        detect_config.retry_count = AUTO_DETECT_RETRY_COUNT;
+        detect_config.test_duration_ms = MEDIA_TEST_DURATION_10BASET_MS;
+        detect_config.preferred_media = MEDIA_TYPE_UNKNOWN;
+        detect_config.media_priority_mask = 0xFFFF;
         detected = auto_detect_media(nic, &detect_config);
         
         if (detected != MEDIA_TYPE_UNKNOWN) {
@@ -1201,7 +1229,7 @@ int send_packet_direct_pio_with_header(nic_info_t *nic, const uint8_t *dest_mac,
  * @param length Packet length
  * @return 0 on success, negative on error
  */
-static int _3c509b_send_packet_direct_pio(nic_info_t *nic, const uint8_t *packet, size_t length) {
+int _3c509b_send_packet_direct_pio(nic_info_t *nic, const uint8_t *packet, size_t length) {
     uint16_t status;
     uint16_t tx_free;
     uint8_t *tx_packet;
@@ -1242,7 +1270,11 @@ static int _3c509b_send_packet_direct_pio(nic_info_t *nic, const uint8_t *packet
             LOG_DEBUG("Checksum calculation completed for outbound packet");
         }
     }
-    
+
+    /* CACHE COHERENCY: Flush write-back cache before PIO to ensure
+     * the NIC reads current data, not stale cached values (Sprint 4B) */
+    _3c509b_pio_prepare_tx_buffer(nic, packet, length);
+
     /* Note: 3C509B is PIO-only - scatter-gather DMA not supported (Phase 2.2)
      * Fragmented packets are automatically consolidated by upper layers
      * For multi-fragment packets, use CPU-optimized memcpy for consolidation */
@@ -1269,107 +1301,142 @@ static int _3c509b_send_packet_direct_pio(nic_info_t *nic, const uint8_t *packet
  * ============================================================================ */
 
 /**
- * @brief Initialize cache coherency management for 3C509B
+ * @brief Initialize cache coherency management for 3C509B PIO operations
  * @param nic NIC information structure
  * @return SUCCESS on success, error code on failure
+ * @note Even PIO-only cards need protection against speculative read pollution
+ *       on modern CPUs (Pentium 4+) where the prefetcher can load stale data
+ *       into cache before PIO transfers complete.
  */
 static int _3c509b_initialize_cache_coherency(nic_info_t *nic) {
+    const cpu_info_t *cpu;
     coherency_analysis_t analysis;
-    chipset_detection_result_t chipset_result;
-    bool cache_init_result;
-    bool record_result;
 
     if (!nic) {
-        LOG_ERROR("Invalid NIC pointer for cache coherency initialization");
         return ERROR_INVALID_PARAM;
     }
 
-    LOG_INFO("Initializing cache coherency management for 3C509B...");
-
-    /* Perform comprehensive coherency analysis */
-    analysis = perform_complete_coherency_analysis();
-
-    if (analysis.selected_tier == TIER_DISABLE_BUS_MASTER) {
-        LOG_WARNING("Cache coherency analysis recommends disabling bus mastering");
-        LOG_WARNING("3C509B uses PIO-only operation - this is optimal for this system");
-        nic->status |= NIC_STATUS_CACHE_COHERENCY_OK;
+    /* Get CPU information for cache capability detection */
+    cpu = cpu_get_info();
+    if (!cpu) {
+        LOG_WARNING("CPU detection failed, disabling speculative protection");
+        nic->pio_cache_tier = CACHE_TIER_4_FALLBACK;
+        nic->pio_cache_confidence = 50;
+        nic->pio_cache_initialized = 1;
+        nic->pio_speculative_protection = 0;
         return SUCCESS;
     }
 
-    /* Detect chipset for diagnostic purposes */
-    chipset_result = detect_system_chipset();
+    /* Check if CPU has internal cache (486+) */
+    if (!(cpu->features & CPU_FEATURE_CACHE)) {
+        /* 286/386: No internal cache, no protection needed */
+        LOG_INFO("3C509B PIO: No internal cache (CPU family < 4), no speculative protection needed");
+        nic->pio_cache_tier = CACHE_TIER_4_FALLBACK;
+        nic->pio_cache_confidence = 100;
+        nic->pio_cache_initialized = 1;
+        nic->pio_speculative_protection = 0;
+        return SUCCESS;
+    }
 
-    /* Initialize cache management system with selected tier */
-    cache_init_result = initialize_cache_management(analysis.selected_tier);
-    if (!cache_init_result) {
-        LOG_ERROR("Failed to initialize cache management system");
-        return ERROR_HARDWARE;
+    /* 486+ CPU with cache: Run coherency analysis for tier selection */
+    analysis = perform_complete_coherency_analysis();
+
+    nic->pio_cache_tier = (uint8_t)analysis.selected_tier;
+    nic->pio_cache_confidence = analysis.confidence;
+    nic->pio_cache_initialized = 1;
+
+    /* Enable speculative protection for CPUs with cache */
+    nic->pio_speculative_protection = 1;
+
+    LOG_INFO("3C509B PIO cache coherency initialized: tier %d, confidence %d%%",
+             nic->pio_cache_tier, nic->pio_cache_confidence);
+    LOG_INFO("  Speculative read protection: %s",
+             nic->pio_speculative_protection ? "ENABLED" : "DISABLED");
+
+    /* Log tier-specific information */
+    if (cpu->has_clflush) {
+        LOG_DEBUG("  CLFLUSH available: surgical cache line invalidation");
+    } else if (cpu->has_wbinvd && cpu->can_wbinvd) {
+        LOG_DEBUG("  WBINVD available: full cache flush/invalidate");
+    } else {
+        LOG_DEBUG("  Using software cache barriers");
     }
-    
-    /* Record test results in community database */
-    record_result = record_chipset_test_result(&analysis, &chipset_result);
-    if (!record_result) {
-        LOG_WARNING("Failed to record test results in chipset database");
-    }
-    
-    /* Store analysis results in NIC structure for runtime use */
-    nic->cache_coherency_tier = analysis.selected_tier;
-    nic->cache_management_available = true;
-    nic->status |= NIC_STATUS_CACHE_COHERENCY_OK;
-    
-    LOG_INFO("Cache coherency initialized: tier %d, confidence %d%%", 
-             analysis.selected_tier, analysis.confidence);
-    
-    /* Display performance opportunity information if relevant */
-    if (should_offer_performance_guidance(&analysis)) {
-        display_performance_opportunity_analysis();
-    }
-    
+
     return SUCCESS;
 }
 
 /**
- * @brief Prepare buffers for DMA operation (3C509B PIO)
+ * @brief Prepare RX buffer before PIO read operation
+ * @param nic NIC information structure
  * @param buffer Buffer pointer
  * @param length Buffer length
+ * @note Invalidates cache lines to prevent speculative read pollution.
+ *       On CPUs with aggressive prefetchers (P4+), the prefetcher may
+ *       load buffer data into cache before PIO populates it.
  */
-static void _3c509b_dma_prepare_buffers(void *buffer, size_t length) {
-    dma_operation_t operation;
-    
-    if (!buffer || length == 0) {
+static void _3c509b_pio_prepare_rx_buffer(nic_info_t *nic, void *buffer, size_t length) {
+    if (!nic || !buffer || length == 0) {
         return;
     }
-    
-    /* Configure DMA operation for PIO read */
-    operation.buffer = buffer;
-    operation.length = length;
-    operation.direction = DMA_DIRECTION_FROM_DEVICE;
-    operation.device_type = DMA_DEVICE_NETWORK;
-    
-    /* Apply cache management before PIO operation */
-    cache_management_dma_prepare(&operation);
+
+    /* Only apply protection if enabled for this NIC */
+    if (!nic->pio_speculative_protection) {
+        return;
+    }
+
+    /* Invalidate cache lines covering the buffer before PIO read */
+    cache_management_invalidate_buffer(buffer, length);
+
+    /* Memory fence to ensure invalidation completes before PIO */
+    memory_fence();
 }
 
 /**
- * @brief Complete DMA operation and ensure cache coherency (3C509B PIO)
+ * @brief Complete RX buffer after PIO read operation
+ * @param nic NIC information structure
  * @param buffer Buffer pointer
- * @param length Buffer length  
+ * @param length Buffer length
+ * @note Ensures cache sees the new PIO data, not stale prefetched data.
  */
-static void _3c509b_dma_complete_buffers(void *buffer, size_t length) {
-    dma_operation_t operation;
-    
-    if (!buffer || length == 0) {
+static void _3c509b_pio_complete_rx_buffer(nic_info_t *nic, void *buffer, size_t length) {
+    if (!nic || !buffer || length == 0) {
         return;
     }
-    
-    /* Configure DMA operation for PIO completion */
-    operation.buffer = buffer;
-    operation.length = length;
-    operation.direction = DMA_DIRECTION_FROM_DEVICE;
-    operation.device_type = DMA_DEVICE_NETWORK;
-    
-    /* Apply cache management after PIO operation */
-    cache_management_dma_complete(&operation);
+
+    /* Only apply protection if enabled for this NIC */
+    if (!nic->pio_speculative_protection) {
+        return;
+    }
+
+    /* Ensure cache coherency after PIO completes */
+    cache_management_dma_complete(buffer, length);
+
+    /* Memory fence to ensure subsequent reads see PIO data */
+    memory_fence();
+}
+
+/**
+ * @brief Prepare TX buffer before PIO write operation
+ * @param nic NIC information structure
+ * @param buffer Buffer pointer (const, but cast for cache ops)
+ * @param length Buffer length
+ * @note Flushes write-back cache to ensure PIO reads current data.
+ */
+static void _3c509b_pio_prepare_tx_buffer(nic_info_t *nic, const void *buffer, size_t length) {
+    if (!nic || !buffer || length == 0) {
+        return;
+    }
+
+    /* Only apply protection if enabled for this NIC */
+    if (!nic->pio_speculative_protection) {
+        return;
+    }
+
+    /* Flush cache lines to ensure PIO sees current data */
+    cache_management_flush_buffer((void *)buffer, length);
+
+    /* Memory fence to ensure flush completes before PIO */
+    memory_fence();
 }
 
 /* ============================================================================
@@ -1377,40 +1444,41 @@ static void _3c509b_dma_complete_buffers(void *buffer, size_t length) {
  * ============================================================================ */
 
 /**
- * @brief Enhanced receive with full cache coherency management
+ * @brief Enhanced receive with full PIO cache coherency management
  * @param nic NIC information structure
  * @return SUCCESS on success, error code on failure
+ * @note Protects against speculative read pollution on modern CPUs
  */
 int _3c509b_receive_packet_cache_safe(nic_info_t *nic) {
-    buffer_desc_t *rx_buffer = NULL;
-    uint16_t status, rx_status, packet_length;
+    buffer_desc_t *rx_buffer;
+    uint16_t status;
+    uint16_t rx_status;
+    uint16_t packet_length;
     uint16_t rx_fifo;
     size_t words;
-    int result = SUCCESS;
-    
+    int result;
+    int checksum_result;
+
+    rx_buffer = NULL;
+    result = SUCCESS;
+
     if (!nic) {
         return ERROR_INVALID_PARAM;
     }
-    
-    /* Check if cache management is available */
-    if (!nic->cache_management_available) {
-        LOG_DEBUG("Cache management not available, using legacy receive");
-        return _3c509b_receive_packet_buffered(nic);
-    }
-    
+
     /* Ensure we're in Window 1 for RX operations */
     _3c509b_select_window(nic, _3C509B_WINDOW_1);
-    
+
     /* Check if RX packet is available */
     status = _3c509b_read_reg(nic, _3C509B_STATUS_REG);
     if (!(status & _3C509B_STATUS_RX_COMPLETE)) {
         return ERROR_NO_DATA;
     }
-    
+
     /* Read RX status and length */
     rx_status = _3c509b_read_reg(nic, _3C509B_RX_STATUS);
     packet_length = rx_status & _3C509B_RXSTAT_LEN_MASK;
-    
+
     /* Check for errors */
     if (rx_status & (_3C509B_RXSTAT_ERROR | _3C509B_RXSTAT_INCOMPLETE)) {
         LOG_DEBUG("RX error: status=0x%X", rx_status);
@@ -1418,52 +1486,57 @@ int _3c509b_receive_packet_cache_safe(nic_info_t *nic) {
         nic->rx_errors++;
         return ERROR_IO;
     }
-    
-    /* Allocate buffer with cache-aligned allocation */
+
+    /* Allocate buffer for received packet */
     rx_buffer = rx_copybreak_alloc(packet_length);
     if (!rx_buffer) {
-        LOG_ERROR("Failed to allocate cache-safe RX buffer for %d byte packet", packet_length);
+        LOG_ERROR("Failed to allocate RX buffer for %d byte packet", packet_length);
         _3c509b_write_command(nic, _3C509B_CMD_RX_DISCARD);
         nic->rx_dropped++;
         return ERROR_NO_MEMORY;
     }
-    
-    /* Comprehensive cache management for packet reception */
-    _3c509b_dma_prepare_buffers(rx_buffer->data, packet_length);
-    
-    /* Read packet data with cache-safe PIO operations */
+
+    /* CACHE COHERENCY: Invalidate cache before PIO read to prevent
+     * speculative prefetcher from loading stale data */
+    _3c509b_pio_prepare_rx_buffer(nic, rx_buffer->data, packet_length);
+
+    /* Read packet data from RX FIFO via PIO */
     rx_fifo = nic->io_base + _3C509B_RX_FIFO;
     words = packet_length / 2;
     {
-        uint16_t *buffer_words = (uint16_t*)rx_buffer->data;
+        uint16_t *buffer_words = (uint16_t *)rx_buffer->data;
         size_t i;
 
         for (i = 0; i < words; i++) {
             buffer_words[i] = inw(rx_fifo);
         }
     }
-    
+
+    /* Read remaining byte if length is odd */
     if (packet_length & 1) {
-        ((uint8_t*)rx_buffer->data)[packet_length - 1] = inb(rx_fifo);
+        ((uint8_t *)rx_buffer->data)[packet_length - 1] = inb(rx_fifo);
     }
-    
-    /* Complete cache management */
-    _3c509b_dma_complete_buffers(rx_buffer->data, packet_length);
-    
+
+    /* CACHE COHERENCY: Ensure cache sees new PIO data, not stale prefetched data */
+    _3c509b_pio_complete_rx_buffer(nic, rx_buffer->data, packet_length);
+
     /* Update buffer descriptor */
     rx_buffer->used = packet_length;
     buffer_set_state(rx_buffer, BUFFER_STATE_IN_USE);
-    
-    /* Verify checksums with CPU optimization */
+
+    /* Verify checksums with CPU optimization (Phase 2.1) */
     if (packet_length >= 34) {
-        int checksum_result = hw_checksum_verify_inbound_packet((uint8_t*)rx_buffer->data, packet_length);
+        checksum_result = hw_checksum_verify_inbound_packet(
+            (uint8_t *)rx_buffer->data, packet_length);
         if (checksum_result < 0) {
             LOG_DEBUG("Checksum verification failed for inbound packet");
+        } else if (checksum_result > 0) {
+            LOG_DEBUG("Checksum verification passed");
         }
     }
-    
-    /* Process received packet */
-    result = packet_process_received((uint8_t*)rx_buffer->data, packet_length, nic->index);
+
+    /* Process received packet through API */
+    result = packet_process_received((uint8_t *)rx_buffer->data, packet_length, nic->index);
     if (result != SUCCESS) {
         LOG_WARNING("Packet processing failed: %d", result);
         nic->rx_dropped++;
@@ -1472,9 +1545,9 @@ int _3c509b_receive_packet_cache_safe(nic_info_t *nic) {
         nic->rx_bytes += packet_length;
         LOG_TRACE("Processed cache-safe received packet of %d bytes", packet_length);
     }
-    
+
     /* Free the buffer */
     rx_copybreak_free(rx_buffer);
-    
+
     return result;
 }

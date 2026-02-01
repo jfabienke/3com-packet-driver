@@ -9,6 +9,9 @@
 #ifndef _EXTENSION_API_H_
 #define _EXTENSION_API_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

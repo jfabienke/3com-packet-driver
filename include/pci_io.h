@@ -105,12 +105,14 @@ extern uint16_t cdecl save_flags(void);
 
 /**
  * @brief Restore flags register
- * 
+ *
  * Restores previously saved flags including interrupt flag.
- * 
+ *
  * @param flags Flags value to restore
  */
+#ifndef __WATCOMC__
 extern void cdecl restore_flags(uint16_t flags);
+#endif
 
 /* PCI BIOS shim ISR functions */
 

@@ -54,10 +54,10 @@ extern "C" {
 #define PACKET_PRIORITY_HIGH        2
 #define PACKET_PRIORITY_URGENT      3
 
-/* Loopback testing types and structures */
+/* Loopback testing types and structures - C89 compatible */
 typedef enum {
-    LOOPBACK_INTERNAL = 0,                  /* Internal/software loopback */
-    LOOPBACK_EXTERNAL = 1                   /* External/hardware loopback */
+    LOOPBACK_INTERNAL,                      /* 0: Internal/software loopback */
+    LOOPBACK_EXTERNAL                       /* 1: External/hardware loopback */
 } loopback_type_t;
 
 /* Loopback test pattern structure */
