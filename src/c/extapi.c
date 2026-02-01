@@ -6,14 +6,14 @@
  * introspection via INT 60h AH=80h-9Fh without impacting ISR performance.
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
-#include "../include/extapi.h"
-#include "../include/common.h"
-#include "../include/logging.h"
-#include "../include/cpudet.h"
-#include "../include/config.h"
+#include "extapi.h"
+#include "common.h"
+#include "logging.h"
+#include "cpudet.h"
+#include "config.h"
 
 /* External reference to ASM snapshot table (defined in packet_api_smc.asm) */
 extern extension_snapshots_t extension_snapshots;
@@ -24,8 +24,8 @@ extern uint16_t g_max_cli_ticks;
 extern uint16_t g_resident_size;
 extern uint16_t g_stack_free;
 extern uint16_t g_nic_type;
-extern bool g_dma_validated;
-extern bool g_pio_forced;
+extern int g_dma_validated;
+extern int g_pio_forced;
 
 /* Build configuration flags */
 #ifdef PRODUCTION
@@ -72,26 +72,27 @@ void init_extension_snapshots(void) {
 
 /**
  * @brief Update safety state snapshot
- * 
+ *
  * Called when safety-related state changes (patches applied, DMA validated, etc.)
  */
 void update_safety_snapshot(void) {
     uint16_t flags = 0;
-    
+    cpu_info_t* cpu;
+
     /* Build safety flags */
     if (g_pio_forced) {
         flags |= SAFETY_PIO_FORCED;
     }
-    
+
     if (g_patches_applied > 0) {
         flags |= SAFETY_PATCHES_OK;
     }
-    
+
     /* Check if DMA boundary checking is enabled */
     flags |= SAFETY_BOUNDARY_CHECK;  /* Always enabled in this driver */
-    
+
     /* Check if cache operations are active (based on CPU) */
-    cpu_info_t* cpu = cpu_get_info();
+    cpu = cpu_get_info();
     if (cpu && cpu->cpu_family >= 4) {  /* 486+ has cache */
         flags |= SAFETY_CACHE_OPS;
     }
@@ -135,40 +136,30 @@ void update_patch_snapshot(void) {
 
 /**
  * @brief Update memory map snapshot
- * 
+ *
  * Called after TSR installation to report actual resident sizes.
+ * Note: Linker-provided sizes are not available in Watcom, so we use
+ * runtime values or calculated estimates.
  */
 void update_memory_snapshot(void) {
-    /* Get actual sizes from linked segments and runtime calculations */
-    extern uint16_t __HOT_CODE_SIZE;    /* Size of hot code section */
-    extern uint16_t __HOT_DATA_SIZE;    /* Size of hot data section */
-    extern uint16_t __STACK_SIZE;       /* ISR stack size */
-    extern uint16_t __RESIDENT_PARAS;   /* Total resident paragraphs */
-    
-    /* Use actual sizes if available from linker, otherwise use calculated estimates */
-    extension_snapshots.memory.hot_code_size = 
-        (&__HOT_CODE_SIZE != 0) ? __HOT_CODE_SIZE : 3584;   /* ~3.5KB hot code */
-    
-    extension_snapshots.memory.hot_data_size = 
-        (&__HOT_DATA_SIZE != 0) ? __HOT_DATA_SIZE : 1536;   /* ~1.5KB hot data */
-    
-    extension_snapshots.memory.stack_size = 
-        (&__STACK_SIZE != 0) ? __STACK_SIZE : 768;          /* 768B ISR stack */
-    
-    /* Calculate total resident from paragraphs or use reported size */
-    if (&__RESIDENT_PARAS != 0) {
-        extension_snapshots.memory.total_resident = __RESIDENT_PARAS * 16;
-    } else if (g_resident_size > 0) {
+    /* Use runtime values or calculated estimates */
+    /* Watcom doesn't support weak symbols, so we use defaults */
+    extension_snapshots.memory.hot_code_size = 3584;   /* ~3.5KB hot code */
+    extension_snapshots.memory.hot_data_size = 1536;   /* ~1.5KB hot data */
+    extension_snapshots.memory.stack_size = 768;       /* 768B ISR stack */
+
+    /* Calculate total resident from reported size or components */
+    if (g_resident_size > 0) {
         extension_snapshots.memory.total_resident = g_resident_size;
     } else {
         /* Calculate from components + PSP overhead */
-        extension_snapshots.memory.total_resident = 
+        extension_snapshots.memory.total_resident =
             extension_snapshots.memory.hot_code_size +
             extension_snapshots.memory.hot_data_size +
             extension_snapshots.memory.stack_size +
             256;  /* PSP size */
     }
-    
+
     LOG_DEBUG("Memory snapshot: hot_code=%u hot_data=%u stack=%u total=%u",
               extension_snapshots.memory.hot_code_size,
               extension_snapshots.memory.hot_data_size,
@@ -312,15 +303,5 @@ uint16_t g_max_cli_ticks = 0;
 uint16_t g_resident_size = 0;
 uint16_t g_stack_free = 512;
 uint16_t g_nic_type = 1;  /* 3C509B by default */
-bool g_dma_validated = false;
-bool g_pio_forced = true;  /* Default to PIO until validated */
-
-/* Weak symbols for linker-provided sizes (may not exist) */
-#pragma weak __HOT_CODE_SIZE
-#pragma weak __HOT_DATA_SIZE
-#pragma weak __STACK_SIZE
-#pragma weak __RESIDENT_PARAS
-uint16_t __HOT_CODE_SIZE;
-uint16_t __HOT_DATA_SIZE;
-uint16_t __STACK_SIZE;
-uint16_t __RESIDENT_PARAS;
+int g_dma_validated = 0;   /* false */
+int g_pio_forced = 1;      /* true - Default to PIO until validated */

@@ -7,11 +7,11 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <stdlib.h>
 #include <string.h>
-#include "../include/entval.h"
-#include "../include/logging.h"
+#include "entval.h"
+#include "logging.h"
 
 /* Packet driver signature for installation check */
 #define PKT_SIGNATURE       "PKT DRVR"
@@ -44,7 +44,7 @@ int entry_validate(int argc, char *argv[], entry_validation_t *result) {
     LOG_INFO("=== Phase 0: Entry Validation ===");
     
     /* Step 1: Parse command line */
-    ret = parse_command_line(argc, argv, &args);
+    ret = parse_command_line(argc, argv, (cmdline_args_t __far *)&args);
     if (ret != ENTRY_SUCCESS) {
         LOG_ERROR("Command line parsing failed: %s", entry_error_string(ret));
         return ret;
@@ -146,7 +146,7 @@ int entry_validate(int argc, char *argv[], entry_validation_t *result) {
 /**
  * @brief Parse command line arguments
  */
-int parse_command_line(int argc, char *argv[], cmdline_args_t *args) {
+int parse_command_line(int argc, char *argv[], cmdline_args_t __far *args) {
     int i;
     
     if (!args) {
@@ -169,14 +169,18 @@ int parse_command_line(int argc, char *argv[], cmdline_args_t *args) {
                 case 'I':
                     /* Interrupt vector */
                     if (i + 1 < argc) {
-                        int vec;
-                        if (sscanf(argv[++i], "%x", &vec) == 1) {
-                            if (vec >= 0 && vec <= 0xFF) {
-                                args->vector = (uint8_t)vec;
-                            } else {
-                                LOG_ERROR("Invalid vector: 0x%X", vec);
-                                return ENTRY_ERR_INVALID_VECTOR;
-                            }
+                        unsigned long vec;
+                        const char *vec_str = argv[++i];
+                        vec = dos_hextoul(vec_str);
+                        if (vec == 0 && vec_str[0] != '0') {
+                            /* dos_hextoul returned 0 but input wasn't "0" - parse error */
+                            break;
+                        }
+                        if (vec <= 0xFF) {
+                            args->vector = (uint8_t)vec;
+                        } else {
+                            LOG_ERROR("Invalid vector: 0x%lX", vec);
+                            return ENTRY_ERR_INVALID_VECTOR;
                         }
                     }
                     break;

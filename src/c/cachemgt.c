@@ -13,14 +13,39 @@
  *
  */
 
-#include "cachemgt.h"
-#include "cachecoh.h"
-#include "cpudet.h"
-#include "hardware.h"
-#include "logging.h"
-#include "memory.h"
+/* Standard C includes */
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>  /* For bool, true, false */
+#include "dos_io.h"
+
+/* Project includes */
+#include "../../include/portabl.h"  /* For COMPILER_* detection */
+#include "../../include/cachemgt.h"
+#include "../../include/cachecoh.h"
+#include "../../include/cpudet.h"
+#include "../../include/hardware.h"
+#include "../../include/logging.h"
+#include "../../include/memory.h"
+#include "../../include/common.h"   /* For get_system_timestamp_ms() */
+
+/* Helper function: Map get_current_timestamp() to system timestamp function */
+static inline uint32_t get_current_timestamp(void) {
+    return get_system_timestamp_ms();
+}
+
+/* Helper function: Get CPU info as a value (wraps cpu_get_info pointer return) */
+static inline cpu_info_t detect_cpu_info(void) {
+    const cpu_info_t* info;
+    cpu_info_t default_info = {0};
+
+    info = cpu_get_info();
+    if (info) {
+        return *info;
+    }
+    /* Return default zeroed structure if cpu_get_info() returns NULL */
+    return default_info;
+}
 
 /* Global cache management configuration */
 static cache_management_config_t cache_config = {0};
@@ -238,81 +263,118 @@ static void cache_tier1_clflush_management(void *buffer, size_t length, cache_op
  * @return true if WBINVD was executed successfully, false otherwise
  */
 static bool perform_complete_wbinvd_sequence(const char* context) {
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC) || (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
     const cpu_info_t* cpu_info = cpu_get_info();
     uint32_t start_time, end_time;
-    
+    uint16_t flags = 0;
+    uint32_t duration;
+
     /* Step 1: Final privilege verification */
     if (!cpu_info->can_wbinvd) {
         log_error("WBINVD: %s - Cannot execute WBINVD (privilege/capability check failed)", context);
         return false;
     }
-    
+
     /* Step 2: Disable interrupts for atomic operation */
-    uint16_t flags = 0;
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC)
+    CRITICAL_SECTION_ENTER(flags);
+#elif defined(__GNUC__) && defined(__i386__)
     __asm__ volatile (
-        "pushf\n\t"
-        "pop %0\n\t"
+        "pushfl\n\t"
+        "popl %0\n\t"
         "cli"
         : "=r" (flags)
         :
         : "memory"
     );
-    
+#elif defined(__GNUC__) && defined(__x86_64__)
+    __asm__ volatile (
+        "pushfq\n\t"
+        "popq %0\n\t"
+        "cli"
+        : "=r" (flags)
+        :
+        : "memory"
+    );
+#endif
+
     /* Step 3: Memory barrier to ensure all pending writes complete */
-    __asm__ volatile ("" ::: "memory");
-    
+    /* Compiler barrier - handled by WBINVD below */
+
     /* Step 4: Execute WBINVD with timing measurement */
     start_time = get_current_timestamp();
-    
+
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC)
+    /* Call external assembly function for WBINVD */
+    cache_wbinvd();
+#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
     __asm__ volatile (
         "wbinvd"
         :
         :
         : "memory"
     );
-    
+#endif
+
     end_time = get_current_timestamp();
-    
+
     /* Step 5: CPU serialization after WBINVD */
+    /* For DOS compilers, WBINVD is serializing; additional serialization handled in ASM */
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
     if (cpu_info->has_cpuid) {
         /* Use CPUID for serialization on CPUID-capable processors */
-        uint32_t eax, ebx, ecx, edx;
+        uint32_t eax_out, ebx_out, ecx_out, edx_out;
+#if defined(__i386__)
         __asm__ volatile (
-            "cpuid"
-            : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
+            "pushl %%ebx\n\t"
+            "cpuid\n\t"
+            "movl %%ebx, %1\n\t"
+            "popl %%ebx"
+            : "=a" (eax_out), "=r" (ebx_out), "=c" (ecx_out), "=d" (edx_out)
             : "a" (0)
             : "memory"
         );
-    } else {
-        /* Use far JMP for serialization on pre-CPUID processors */
+#else /* x86_64 */
         __asm__ volatile (
-            "ljmp $0x08, $1f\n"
-            "1:"
-            :
-            :
+            "cpuid"
+            : "=a" (eax_out), "=b" (ebx_out), "=c" (ecx_out), "=d" (edx_out)
+            : "a" (0)
             : "memory"
         );
+#endif
+        (void)eax_out; (void)ebx_out; (void)ecx_out; (void)edx_out;
     }
-    
-    /* Step 6: Final memory barrier */
-    __asm__ volatile ("" ::: "memory");
-    
+#endif
+    /* Note: far JMP serialization removed - only works in 16-bit real mode */
+
+    /* Step 6: Final memory barrier - handled by restore_flags below */
+
     /* Step 7: Restore interrupt state */
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC)
+    CRITICAL_SECTION_EXIT(flags);
+#elif defined(__GNUC__)
     if (flags & 0x0200) { /* IF flag was set */
         __asm__ volatile ("sti" ::: "memory");
     }
-    
+#endif
+
     /* Step 8: Update metrics and logging */
-    uint32_t duration = end_time - start_time;
+    duration = end_time - start_time;
     metrics.total_overhead_microseconds += duration;
-    
+
     if (duration > 500) { /* More than 500 microseconds */
         log_warning("WBINVD: %s - Slow execution (%u us) - possible system load", context, duration);
     } else {
         log_debug("WBINVD: %s - Complete cache flush (%u us)", context, duration);
     }
-    
+
     return true;
+#else
+    /* Non-x86 platform stub - WBINVD not applicable */
+    (void)context;
+    log_debug("WBINVD: Stub implementation (non-x86 platform)");
+    return true;
+#endif
 }
 
 /**
@@ -326,11 +388,11 @@ static void cache_tier2_wbinvd_management(void *buffer, size_t length, cache_ope
     
     /* GPT-5 Critical: Use centralized can_wbinvd detection from CPU stage */
     if (!cpu_info.can_wbinvd) {
-        if (cpu_info.family == 4 && cpu_info.in_v86_mode) {
+        if (cpu_info.cpu_family == 4 && cpu_info.in_v86_mode) {
             /* 486 in V86 mode - cannot use WBINVD */
             log_error("WBINVD: 486 in V86 mode - DMA disabled, using PIO");
             cache_config.dma_disabled_reason = DMA_DISABLED_V86_MODE;
-        } else if (cpu_info.family == 4 && !cpu_info.in_ring0) {
+        } else if (cpu_info.cpu_family == 4 && !cpu_info.in_ring0) {
             /* 486 not in ring 0 - cannot use WBINVD */
             log_error("WBINVD: 486 not in ring 0 (CPL=%d) - DMA disabled", cpu_info.current_cpl);
             cache_config.dma_disabled_reason = DMA_DISABLED_V86_MODE; // Same practical effect
@@ -397,6 +459,10 @@ static void cache_tier3_software_management(void *buffer, size_t length, cache_o
  * Tier 4: Conservative fallback (286+)
  */
 static void cache_tier4_fallback_management(void *buffer, size_t length, cache_operation_t operation) {
+    /* Suppress unused parameter warnings - buffer/length not used in fallback tier */
+    (void)buffer;
+    (void)length;
+
     /* Conservative approach with safety delays */
     memory_barrier_inline();
     
@@ -432,29 +498,58 @@ static void force_cache_line_touch(void *buffer, size_t length) {
  * Helper function: Memory barrier
  */
 static void memory_barrier_inline(void) {
-    /* Compiler barrier */
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC)
+    /* For DOS compilers, use the external assembly function */
+    memory_fence();
+#elif defined(__GNUC__)
+    /* Compiler barrier - works on all GCC targets */
     __asm__ volatile ("" ::: "memory");
-    
-    /* CPU serializing instruction if available */
+
+#if defined(__i386__) || defined(__x86_64__)
+    /* CPU serializing instruction if available (x86 only) */
     if (cache_config.has_wbinvd) {
+#if defined(__i386__)
         __asm__ volatile (
-            "push %%eax\n\t"
-            "mov %%cr0, %%eax\n\t"
-            "mov %%eax, %%cr0\n\t"
-            "pop %%eax"
+            "pushl %%eax\n\t"
+            "movl %%cr0, %%eax\n\t"
+            "movl %%eax, %%cr0\n\t"
+            "popl %%eax"
             ::: "eax", "memory"
         );
+#elif defined(__x86_64__)
+        __asm__ volatile (
+            "pushq %%rax\n\t"
+            "movq %%cr0, %%rax\n\t"
+            "movq %%rax, %%cr0\n\t"
+            "popq %%rax"
+            ::: "rax", "memory"
+        );
+#endif
     }
+#endif /* x86 */
+#else
+    /* Unknown compiler: stub implementation */
+    (void)cache_config;
+#endif
 }
 
 /**
  * Helper function: Microsecond delay
  */
 static void io_delay_microseconds(uint32_t microseconds) {
+    volatile uint32_t i;
     /* Simple delay loop - would be replaced with precise timing in real implementation */
-    for (volatile uint32_t i = 0; i < microseconds * 100; i++) {
-        /* IO port read for delay */
+    for (i = 0; i < microseconds * 100; i++) {
+#if defined(COMPILER_BORLAND) || defined(COMPILER_WATCOM) || defined(COMPILER_MSC)
+        /* IO port read for delay - use portability layer */
+        (void)IO_IN8(0x80);
+#elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+        /* IO port read for delay (x86 only) */
         __asm__ volatile ("inb $0x80, %%al" ::: "al");
+#else
+        /* Unknown compiler: simple busy-wait with no-op */
+        ;
+#endif
     }
 }
 
@@ -470,11 +565,11 @@ static size_t detect_cache_line_size(void) {
     }
     
     /* CPU generation-based defaults */
-    if (cpu_info.family >= 6) {      /* Pentium Pro+ */
+    if (cpu_info.cpu_family >= 6) {      /* Pentium Pro+ */
         return 64;
-    } else if (cpu_info.family == 5) { /* Pentium */
+    } else if (cpu_info.cpu_family == 5) { /* Pentium */
         return 32;
-    } else if (cpu_info.family == 4) { /* 486 */
+    } else if (cpu_info.cpu_family == 4) { /* 486 */
         return 16;
     } else {
         return 32; /* Conservative default */
@@ -571,12 +666,15 @@ void print_cache_management_status(void) {
  * providing consistent policy decisions across all modules based on
  * CPU capabilities, platform detection, and runtime testing.
  * 
- * @return dma_policy_t Complete DMA policy decision with reasoning
+ * @return dma_policy_extended_t Complete DMA policy decision with reasoning
  */
-dma_policy_t resolve_dma_policy(void) {
-    dma_policy_t policy = {0};
+dma_policy_extended_t resolve_dma_policy(void) {
+    dma_policy_extended_t policy = {0};
     const cpu_info_t* cpu_info = cpu_get_info();
-    
+    /* Forward declarations for functions used later in this function */
+    extern bool vds_available(void);
+    extern bool is_isa_bus(void);
+
     /* Default to enabled with no special handling */
     policy.dma_enabled = true;
     policy.cache_tier = CACHE_TIER_4_FALLBACK;
@@ -642,7 +740,6 @@ dma_policy_t resolve_dma_policy(void) {
     /* V86 Mode Handling for non-486 */
     if (cpu_info->in_v86_mode) {
         /* VDS available? */
-        extern bool vds_available(void);
         if (vds_available()) {
             policy.requires_vds = true;
             policy.cache_tier = CACHE_TIER_4_FALLBACK;
@@ -658,7 +755,6 @@ dma_policy_t resolve_dma_policy(void) {
     }
     
     /* ISA Bus Analysis - Check for 486/ISA overhead situation */
-    extern bool is_isa_bus(void);
     if (is_isa_bus() && cpu_info->cpu_family == 4 && cache_config.write_back_cache) {
         /* GPT-5 identified: DMA may use MORE CPU than PIO on 486/ISA */
         policy.dma_enabled = false;
@@ -687,11 +783,18 @@ dma_policy_t resolve_dma_policy(void) {
  * @param in_v86_mode true if running in V86 mode
  * @param has_hardware_snooping true if chipset provides cache snooping
  * @param is_isa_bus true if using ISA bus (affects 486 policy)
- * @return dma_policy_t Complete policy for the given configuration
+ * @return dma_policy_extended_t Complete policy for the given configuration
  */
-dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode, 
-                                         bool has_hardware_snooping, bool is_isa_bus) {
-    dma_policy_t policy = {0};
+dma_policy_extended_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
+                                         bool has_hardware_snooping, bool is_isa_bus_param) {
+    dma_policy_extended_t policy = {0};
+    const cpu_info_t* cpu_info_ptr;
+    /* Forward declaration for VDS availability check */
+    extern bool vds_available(void);
+
+    /* Avoid unused parameter warning while still using passed value */
+    (void)is_isa_bus_param;
+
     policy.dma_enabled = true;
     policy.disable_reason = DMA_ENABLED;
     policy.requires_vds = false;
@@ -702,7 +805,6 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
         case 2: /* 80286 */
             policy.cache_tier = CACHE_TIER_4_FALLBACK;
             if (in_v86_mode) {
-                extern bool vds_available(void);
                 if (vds_available()) {
                     policy.requires_vds = true;
                     policy.confidence_level = 95;
@@ -724,7 +826,6 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                 policy.confidence_level = 100;
                 policy.explanation = "386 with hardware snooping - no cache management needed.";
             } else if (in_v86_mode) {
-                extern bool vds_available(void);
                 if (vds_available()) {
                     policy.requires_vds = true;
                     policy.cache_tier = CACHE_TIER_3_SOFTWARE;
@@ -752,7 +853,7 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                 policy.confidence_level = 100;
                 policy.explanation = "486 in V86 mode - WBINVD privilege restrictions make DMA unsafe. "
                                    "Software barriers insufficient for cache coherency.";
-            } else if (is_isa_bus) {
+            } else if (is_isa_bus_param) {
                 /* GPT-5 insight: DMA uses MORE CPU than PIO on 486/ISA */
                 policy.dma_enabled = false;
                 policy.disable_reason = DMA_DISABLED_ISA_486;
@@ -778,7 +879,6 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                 policy.explanation = "Pentium with hardware snooping - coherent DMA automatically.";
             } else if (in_v86_mode) {
                 /* Pentium cache snooping makes V86 DMA safe */
-                extern bool vds_available(void);
                 if (vds_available()) {
                     policy.requires_vds = true;
                     policy.cache_tier = CACHE_TIER_2_WBINVD;
@@ -795,7 +895,7 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                 policy.explanation = "Pentium real mode - efficient WBINVD cache management.";
             }
             break;
-            
+
         case 6: /* Pentium Pro/Pentium II */
             if (has_hardware_snooping) {
                 policy.cache_tier = CACHE_TIER_4_FALLBACK;
@@ -814,8 +914,8 @@ dma_policy_t get_cpu_family_policy_matrix(uint8_t cpu_family, bool in_v86_mode,
                 policy.confidence_level = 100;
                 policy.explanation = "Modern CPU with hardware snooping - no cache management needed.";
             } else {
-                const cpu_info_t* cpu_info = cpu_get_info();
-                if (cpu_info->has_clflush) {
+                cpu_info_ptr = cpu_get_info();
+                if (cpu_info_ptr->has_clflush) {
                     policy.cache_tier = CACHE_TIER_1_CLFLUSH;
                     policy.confidence_level = 100;
                     policy.explanation = "Modern CPU with CLFLUSH - surgical cache line management.";
@@ -858,18 +958,21 @@ void print_complete_policy_matrix(void) {
     
     {
         uint8_t family;
+        int config;
+        const char* cpu_name;
+        dma_policy_extended_t policy;
+
         for (family = 2; family <= 15; family++) {
-            const char* cpu_name = (family < 8) ? cpu_names[family] : cpu_names[7];
-            int config;
+            cpu_name = (family < 8) ? cpu_names[family] : cpu_names[7];
 
             for (config = 0; config < 6; config++) {
-            dma_policy_t policy = get_cpu_family_policy_matrix(
-                family, 
-                test_configs[config][0], /* in_v86_mode */
-                test_configs[config][1], /* has_hardware_snooping */
-                test_configs[config][2]  /* is_isa_bus */
-            );
-            
+                policy = get_cpu_family_policy_matrix(
+                    family,
+                    test_configs[config][0], /* in_v86_mode */
+                    test_configs[config][1], /* has_hardware_snooping */
+                    test_configs[config][2]  /* is_isa_bus */
+                );
+
                 printf("%-10s | %-14s | %-3s | %-4d | %s\n",
                     cpu_name,
                     config_names[config],
@@ -885,4 +988,89 @@ void print_complete_policy_matrix(void) {
 
     printf("=====================================\n");
     printf("Tier Legend: 1=CLFLUSH, 2=WBINVD, 3=Software, 4=None, 0=Disabled\n");
+}
+
+/**
+ * @brief Flush cache for a memory range
+ *
+ * Ensures cache contents are written back to memory for DMA operations.
+ *
+ * @param buffer Pointer to start of buffer
+ * @param len Length of buffer in bytes
+ */
+void cache_flush_range(void *buffer, size_t len) {
+    if (!buffer || len == 0) {
+        return;
+    }
+
+    /* Use appropriate tier-based cache flush via the management functions */
+    switch (active_tier) {
+        case CACHE_TIER_1_CLFLUSH:
+            cache_tier1_clflush_management(buffer, len, CACHE_OPERATION_FLUSH);
+            break;
+        case CACHE_TIER_2_WBINVD:
+            cache_tier2_wbinvd_management(buffer, len, CACHE_OPERATION_FLUSH);
+            break;
+        case CACHE_TIER_3_SOFTWARE:
+            cache_tier3_software_management(buffer, len, CACHE_OPERATION_FLUSH);
+            break;
+        case CACHE_TIER_4_FALLBACK:
+        default:
+            /* No cache management needed/possible */
+            break;
+    }
+}
+
+/**
+ * @brief Invalidate cache for a memory range
+ *
+ * Ensures CPU will read from memory instead of stale cache for RX DMA.
+ *
+ * @param buffer Pointer to start of buffer
+ * @param len Length of buffer in bytes
+ */
+void cache_invalidate_range(void *buffer, size_t len) {
+    /* For most x86 CPUs, invalidation and flush are the same operation */
+    cache_flush_range(buffer, len);
+}
+
+/**
+ * @brief Safe aligned cache flush for DMA operations
+ *
+ * GPT-5 Enhancement: Ensures cache operations are aligned to cache line
+ * boundaries to prevent partial line corruption issues.
+ *
+ * @param buffer Pointer to buffer (may be unaligned)
+ * @param len Length of buffer in bytes
+ */
+void cache_flush_aligned_safe(void *buffer, size_t len) {
+    uint32_t start_addr;
+    uint32_t end_addr;
+    uint32_t aligned_start;
+    uint32_t aligned_end;
+    size_t aligned_len;
+    uint16_t line_size;
+
+    if (!buffer || len == 0) {
+        return;
+    }
+
+    /* Get current cache line size */
+    line_size = (uint16_t)cache_config.cache_line_size;
+    if (line_size == 0) {
+        line_size = DEFAULT_CACHE_LINE_SIZE;
+    }
+
+    /* Calculate aligned boundaries */
+    start_addr = (uint32_t)(unsigned long)buffer;
+    end_addr = start_addr + len;
+
+    /* Align start down to cache line boundary */
+    aligned_start = start_addr & ~(uint32_t)(line_size - 1);
+    /* Align end up to cache line boundary */
+    aligned_end = (end_addr + line_size - 1) & ~(uint32_t)(line_size - 1);
+    aligned_len = aligned_end - aligned_start;
+
+    /* Flush the aligned region */
+    cache_flush_range((void*)(unsigned long)aligned_start, aligned_len);
 }

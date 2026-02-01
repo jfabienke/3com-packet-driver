@@ -16,6 +16,11 @@
 #include "logging.h"
 #include <stdint.h>
 #include <string.h>
+#include "dos_io.h"
+
+#ifdef __WATCOMC__
+#include <i86.h>  /* For _disable() and _enable() */
+#endif
 
 /* Patch site tracking */
 static smc_patch_site_t patch_sites[MAX_PATCH_SITES];
@@ -40,13 +45,14 @@ static bool verify_patch_applied(smc_patch_site_t *site);
  * Initialize SMC serialization system
  */
 bool smc_serialization_init(void) {
-    cpu_info_t cpu_info;
-    
+    const cpu_info_t *cpu_info;
+
     log_info("Initializing SMC serialization system...");
-    
+
     /* Detect CPU capabilities */
-    cpu_info = detect_cpu_info();
-    cpu_family = cpu_info.family;
+    cpu_detect_init();
+    cpu_info = cpu_get_info();
+    cpu_family = cpu_info->cpu_family;
     
     detect_serialization_capabilities();
     
@@ -127,22 +133,34 @@ bool smc_apply_patch(uint8_t site_index, const uint8_t *patch_bytes) {
     log_debug("Applying patch to site %d: %s", site_index, site->description);
     
     /* Disable interrupts during patching */
+#ifdef __GNUC__
     __asm__ volatile ("cli" ::: "memory");
-    
+#elif defined(__WATCOMC__)
+    _disable();
+#endif
+
     /* Apply patch bytes */
     memcpy(site->address, patch_bytes, site->size);
-    
+
     /* Ensure patch reaches memory */
+#ifdef __GNUC__
     __asm__ volatile ("" ::: "memory"); /* Compiler barrier */
-    
+#elif defined(__WATCOMC__)
+    /* Watcom: no direct compiler barrier, but _disable/_enable provide ordering */
+#endif
+
     /* CPU-specific serialization */
     serialize_after_smc();
-    
+
     /* Flush instruction cache if needed */
     flush_instruction_cache_cpu_specific();
-    
+
     /* Re-enable interrupts */
+#ifdef __GNUC__
     __asm__ volatile ("sti" ::: "memory");
+#elif defined(__WATCOMC__)
+    _enable();
+#endif
     
     /* Verify patch was applied correctly */
     if (!verify_patch_applied(site)) {
@@ -178,22 +196,34 @@ bool smc_rollback_patch(uint8_t site_index) {
     log_debug("Rolling back patch from site %d: %s", site_index, site->description);
     
     /* Disable interrupts during rollback */
+#ifdef __GNUC__
     __asm__ volatile ("cli" ::: "memory");
-    
+#elif defined(__WATCOMC__)
+    _disable();
+#endif
+
     /* Restore original bytes */
     memcpy(site->address, site->original_bytes, site->size);
-    
+
     /* Ensure rollback reaches memory */
+#ifdef __GNUC__
     __asm__ volatile ("" ::: "memory"); /* Compiler barrier */
-    
+#elif defined(__WATCOMC__)
+    /* Watcom: no direct compiler barrier, but _disable/_enable provide ordering */
+#endif
+
     /* CPU-specific serialization */
     serialize_after_smc();
-    
+
     /* Flush instruction cache if needed */
     flush_instruction_cache_cpu_specific();
-    
+
     /* Re-enable interrupts */
+#ifdef __GNUC__
     __asm__ volatile ("sti" ::: "memory");
+#elif defined(__WATCOMC__)
+    _enable();
+#endif
     
     site->patched = false;
     
@@ -208,34 +238,40 @@ bool smc_rollback_patch(uint8_t site_index) {
  */
 bool smc_apply_patch_set(const smc_patch_set_t *patch_set) {
     uint8_t i;
+    uint8_t j;
     bool success = true;
-    
+    const smc_patch_t *patch;
+    smc_patch_site_t *site;
+
     if (!smc_initialized || !patch_set) {
         log_error("Invalid patch set or SMC not initialized");
         return false;
     }
-    
+
     if (patch_set->num_patches == 0 || patch_set->num_patches > MAX_PATCH_SITES) {
         log_error("Invalid number of patches: %d", patch_set->num_patches);
         return false;
     }
-    
+
     log_info("Applying patch set with %d patches", patch_set->num_patches);
-    
+
     /* Disable interrupts for entire operation */
+#ifdef __GNUC__
     __asm__ volatile ("cli" ::: "memory");
-    
+#elif defined(__WATCOMC__)
+    _disable();
+#endif
+
     /* Apply all patches */
     for (i = 0; i < patch_set->num_patches; i++) {
-        const smc_patch_t *patch = &patch_set->patches[i];
-        smc_patch_site_t *site;
+        patch = &patch_set->patches[i];
         
         if (patch->site_index >= num_patch_sites) {
             log_error("Invalid site index in patch %d: %d", i, patch->site_index);
             success = false;
             break;
         }
-        
+
         site = &patch_sites[patch->site_index];
         
         /* Apply patch */
@@ -245,18 +281,21 @@ bool smc_apply_patch_set(const smc_patch_set_t *patch_set) {
     
     if (success) {
         /* Global serialization after all patches */
+#ifdef __GNUC__
         __asm__ volatile ("" ::: "memory"); /* Compiler barrier */
+#elif defined(__WATCOMC__)
+        /* Watcom: no direct compiler barrier, but serialize_after_smc provides ordering */
+#endif
         serialize_after_smc();
         flush_instruction_cache_cpu_specific();
         
         log_info("All patches in set applied successfully");
     } else {
         /* Rollback on failure */
-        uint8_t j;
         log_error("Patch set application failed - rolling back");
         for (j = 0; j < i; j++) {
-            const smc_patch_t *patch = &patch_set->patches[j];
-            smc_patch_site_t *site = &patch_sites[patch->site_index];
+            patch = &patch_set->patches[j];
+            site = &patch_sites[patch->site_index];
             memcpy(site->address, site->original_bytes, site->size);
             site->patched = false;
         }
@@ -265,8 +304,12 @@ bool smc_apply_patch_set(const smc_patch_set_t *patch_set) {
     }
     
     /* Re-enable interrupts */
+#ifdef __GNUC__
     __asm__ volatile ("sti" ::: "memory");
-    
+#elif defined(__WATCOMC__)
+    _enable();
+#endif
+
     return success;
 }
 
@@ -330,6 +373,7 @@ static void flush_instruction_cache_cpu_specific(void) {
     }
     
     /* For 286/386 or systems without WBINVD, use far jump */
+#ifdef __GNUC__
     __asm__ volatile (
         "pushf\n\t"
         "push %%cs\n\t"
@@ -338,6 +382,13 @@ static void flush_instruction_cache_cpu_specific(void) {
         "1:\n\t"
         ::: "memory"
     );
+#elif defined(__WATCOMC__)
+    /* Watcom: call external assembly routine for icache flush.
+     * The serialize_after_smc() already handles this for 486+.
+     * For 286/386, a JMP FAR is the standard approach - handled
+     * via the assembly stubs or this simple serialization call. */
+    serialize_after_smc();
+#endif
 }
 
 /**
@@ -369,7 +420,8 @@ void smc_print_status(void) {
     printf("Registered Patch Sites: %d/%d\n", num_patch_sites, MAX_PATCH_SITES);
     
     for (i = 0; i < num_patch_sites; i++) {
-        smc_patch_site_t *site = &patch_sites[i];
+        smc_patch_site_t *site;
+        site = &patch_sites[i];
         printf("  Site %d: %p (%u bytes) %s - %s\n",
                i, site->address, site->size,
                site->patched ? "[PATCHED]" : "[ORIGINAL]",

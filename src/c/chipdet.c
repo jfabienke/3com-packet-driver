@@ -17,11 +17,19 @@
 #include "logging.h"
 #include "hardware.h"
 #include "common.h"
+#include "ovl_data.h"
 #include <string.h>
 #include <stdint.h>
+#include "dos_io.h"
+
+/*
+ * Init-only chipset database - placed in INIT_DETECT overlay segment.
+ * With OVL_DETECT_CONST, this data is loaded/unloaded with the overlay,
+ * NOT kept in resident DGROUP. String literals go to code segment via -zc.
+ */
 
 /* Known chipset database for identification */
-static const chipset_info_t known_chipsets[] = {
+static OVL_DETECT_CONST chipset_info_t known_chipsets[] = {
     /* Intel Chipsets */
     {0x8086, 0x122D, "Intel 82437FX (Triton)", CHIPSET_ERA_PCI, true, false},
     {0x8086, 0x7030, "Intel 82437VX (Triton II)", CHIPSET_ERA_PCI, true, false},
@@ -81,14 +89,22 @@ extern int nic_detect_eisa_3c597(void);
 extern int nic_detect_vlb(void);
 extern int get_ps2_model(void);
 
+/* Forward declarations for functions defined later in this file */
+const char* get_ps2_model_name(int model);
+const char* get_bus_type_name(bus_type_t bus_type);
+
 /**
  * Detect system chipset safely using only PCI methods
  */
 chipset_detection_result_t detect_system_chipset(void) {
     chipset_detection_result_t result = {0};
-    
+    /* C89: All declarations must be at the start of the block */
+    uint16_t vendor_id;
+    uint16_t device_id;
+    const chipset_info_t* known_info;
+
     log_info("Performing safe chipset detection...");
-    
+
     /* First check if PCI BIOS is available */
     if (!detect_pci_bios()) {
         log_info("PCI BIOS not detected - pre-PCI system");
@@ -98,12 +114,12 @@ chipset_detection_result_t detect_system_chipset(void) {
         strcpy(result.diagnostic_info, "Pre-1993 ISA-only system - no safe detection method available");
         return result;
     }
-    
+
     log_info("PCI BIOS detected - attempting host bridge identification");
-    
+
     /* Try to identify host bridge (Bus 0, Device 0, Function 0) */
-    uint16_t vendor_id = pci_read_config_word(0, 0, 0, 0x00);
-    uint16_t device_id = pci_read_config_word(0, 0, 0, 0x02);
+    vendor_id = pci_read_config_word(0, 0, 0, 0x00);
+    device_id = pci_read_config_word(0, 0, 0, 0x02);
     
     if (vendor_id == 0xFFFF || vendor_id == 0x0000) {
         log_warning("No valid PCI host bridge found");
@@ -122,7 +138,7 @@ chipset_detection_result_t detect_system_chipset(void) {
     result.chipset.found = true;
     
     /* Look up chipset information */
-    const chipset_info_t* known_info = lookup_chipset_info(vendor_id, device_id);
+    known_info = lookup_chipset_info(vendor_id, device_id);
     if (known_info && known_info->name) {
         strcpy(result.chipset.name, known_info->name);
         result.chipset.supports_bus_master = known_info->supports_bus_master;
@@ -159,58 +175,48 @@ chipset_detection_result_t detect_system_chipset(void) {
  * Used to verify actual ISA slots vs LPC-only systems
  */
 static bool has_pnp_isa_bios(void) {
-    uint16_t status;
-    uint16_t segment, offset;
-    uint8_t version_major, version_minor;
-    uint8_t carry_flag;
-    
+    union REGS regs;
+    struct SREGS sregs;
+    uint8_t FAR *signature;
+    uint8_t length;
+    uint8_t checksum;
+    uint8_t i;
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+    memset(&sregs, 0, sizeof(sregs));
+
     /* PnP ISA BIOS Installation Check - INT 1Ah, AX=5F00h */
-    __asm__ __volatile__ (
-        "movw $0x5F00, %%ax\n\t"
-        "int $0x1A\n\t"
-        "pushf\n\t"
-        "pop %%cx\n\t"
-        "movw %%ax, %0\n\t"
-        "movw %%es, %1\n\t"
-        "movw %%di, %2\n\t"
-        "movb %%bh, %3\n\t"
-        "movb %%bl, %4\n\t"
-        "movb %%cl, %5"
-        : "=m" (status), "=m" (segment), "=m" (offset),
-          "=m" (version_major), "=m" (version_minor), "=m" (carry_flag)
-        :
-        : "ax", "bx", "cx", "dx", "es", "di"
-    );
-    
+    regs.x.ax = 0x5F00;
+
+    int86x(0x1A, &regs, &regs, &sregs);
+
     /* Check carry flag for success */
-    if (carry_flag & 0x01) {
+    if (regs.x.cflag) {
         return false;  /* PnP BIOS not present */
     }
-    
+
     /* ES:DI points to PnP Installation Check Structure */
-    uint8_t __far* signature = MK_FP(segment, offset);
-    
+    signature = (uint8_t FAR *)MK_FP(sregs.es, regs.x.di);
+
     /* Verify $PnP signature */
-    if (signature[0] == '$' && signature[1] == 'P' && 
+    if (signature[0] == '$' && signature[1] == 'P' &&
         signature[2] == 'n' && signature[3] == 'P') {
-        
+
         /* Verify structure checksum */
-        uint8_t length = signature[5];  /* Structure length at offset 5 */
-        uint8_t checksum = 0;
-        
-        {
-            uint8_t i;
-            for (i = 0; i < length; i++) {
-                checksum += signature[i];
-            }
+        length = signature[5];  /* Structure length at offset 5 */
+        checksum = 0;
+
+        for (i = 0; i < length; i++) {
+            checksum += signature[i];
         }
-        
+
         if (checksum == 0) {  /* Valid checksum sums to 0 */
-            log_debug("PnP ISA BIOS v%d.%d detected", version_major, version_minor);
+            log_debug("PnP ISA BIOS v%d.%d detected", regs.h.bh, regs.h.bl);
             return true;
         }
     }
-    
+
     return false;
 }
 
@@ -218,33 +224,27 @@ static bool has_pnp_isa_bios(void) {
  * Count PnP ISA nodes to estimate ISA slot availability
  */
 static int count_pnp_isa_nodes(void) {
-    uint16_t status;
-    uint16_t node_count = 0;
-    uint8_t carry_flag;
-    
+    union REGS regs;
+    struct SREGS sregs;
+
     if (!has_pnp_isa_bios()) {
         return 0;
     }
-    
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+    memset(&sregs, 0, sizeof(sregs));
+
     /* Get Number of System Device Nodes - INT 1Ah, AX=5F00h */
-    __asm__ __volatile__ (
-        "movw $0x5F00, %%ax\n\t"
-        "int $0x1A\n\t"
-        "pushf\n\t"
-        "pop %%dx\n\t"
-        "movw %%ax, %0\n\t"
-        "movw %%cx, %1\n\t"
-        "movb %%dl, %2"
-        : "=m" (status), "=m" (node_count), "=m" (carry_flag)
-        :
-        : "ax", "bx", "cx", "dx"
-    );
-    
-    if (!(carry_flag & 0x01)) {  /* Success if carry clear */
-        log_debug("PnP ISA: %u device nodes found", node_count);
-        return node_count;
+    regs.x.ax = 0x5F00;
+
+    int86x(0x1A, &regs, &regs, &sregs);
+
+    if (!regs.x.cflag) {  /* Success if carry clear */
+        log_debug("PnP ISA: %u device nodes found", regs.x.cx);
+        return regs.x.cx;
     }
-    
+
     return 0;
 }
 
@@ -252,28 +252,23 @@ static int count_pnp_isa_nodes(void) {
  * Detect PCI BIOS presence
  */
 static bool detect_pci_bios(void) {
-    uint16_t status;
-    uint8_t major_version, minor_version;
-    
+    union REGS regs;
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+
     /* PCI BIOS Installation Check - INT 1Ah, AX=B101h */
-    __asm__ __volatile__ (
-        "movw $0xB101, %%ax\n\t"
-        "int $0x1A\n\t"
-        "movw %%ax, %0\n\t"
-        "movb %%bh, %1\n\t"
-        "movb %%bl, %2"
-        : "=m" (status), "=m" (major_version), "=m" (minor_version)
-        :
-        : "ax", "bx", "cx", "dx"
-    );
-    
-    /* Check if PCI BIOS is present */
-    if (status != 0x0001) {
-        log_debug("PCI BIOS installation check failed: AX=%04X", status);
+    regs.x.ax = 0xB101;
+
+    int86(0x1A, &regs, &regs);
+
+    /* Check if PCI BIOS is present - AH should be 0 on success */
+    if (regs.h.ah != 0x00) {
+        log_debug("PCI BIOS installation check failed: AX=%04X", regs.x.ax);
         return false;
     }
-    
-    log_debug("PCI BIOS v%d.%d detected", major_version, minor_version);
+
+    log_debug("PCI BIOS v%d.%d detected", regs.h.bh, regs.h.bl);
     return true;
 }
 
@@ -281,86 +276,84 @@ static bool detect_pci_bios(void) {
  * Read PCI configuration byte
  */
 static uint8_t pci_read_config_byte(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    uint8_t result = 0xFF;
-    uint16_t status;
-    uint8_t dev_func = (device << 3) | function;
-    
+    union REGS regs;
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+
     /* PCI BIOS Read Configuration Byte - INT 1Ah, AX=B108h */
-    __asm__ __volatile__ (
-        "movw $0xB108, %%ax\n\t"
-        "movb %2, %%bh\n\t"          /* Bus number */
-        "movb %3, %%bl\n\t"          /* Device/Function */
-        "movw %4, %%di\n\t"          /* Register offset */
-        "int $0x1A\n\t"
-        "movw %%ax, %0\n\t"          /* Status */
-        "movb %%cl, %1"              /* Data */
-        : "=m" (status), "=m" (result)
-        : "m" (bus), "m" (dev_func), "m" (offset)
-        : "ax", "bx", "cx", "dx", "di"
-    );
-    
-    if ((status & 0xFF00) != 0x0000) {
+    regs.x.ax = 0xB108;
+    regs.h.bh = bus;                           /* Bus number */
+    regs.h.bl = (device << 3) | function;      /* Device/Function */
+    regs.x.di = offset;                        /* Register offset */
+
+    int86(0x1A, &regs, &regs);
+
+    /* Check for error - AH should be 0 on success */
+    if (regs.h.ah != 0x00) {
         return 0xFF;
     }
-    
-    return result;
+
+    return regs.h.cl;  /* Data in CL */
 }
 
 /**
  * Read PCI configuration word
  */
 static uint16_t pci_read_config_word(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    uint16_t result = 0xFFFF;
-    uint16_t status;
-    uint8_t dev_func = (device << 3) | function;
-    
+    union REGS regs;
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+
     /* PCI BIOS Read Configuration Word - INT 1Ah, AX=B109h */
-    __asm__ __volatile__ (
-        "movw $0xB109, %%ax\n\t"
-        "movb %2, %%bh\n\t"          /* Bus number */
-        "movb %3, %%bl\n\t"          /* Device/Function */
-        "movw %4, %%di\n\t"          /* Register offset */
-        "int $0x1A\n\t"
-        "movw %%ax, %0\n\t"          /* Status */
-        "movw %%cx, %1"              /* Data */
-        : "=m" (status), "=m" (result)
-        : "m" (bus), "m" (dev_func), "m" (offset)
-        : "ax", "bx", "cx", "dx", "di"
-    );
-    
-    if ((status & 0xFF00) != 0x0000) {
+    regs.x.ax = 0xB109;
+    regs.h.bh = bus;                           /* Bus number */
+    regs.h.bl = (device << 3) | function;      /* Device/Function */
+    regs.x.di = offset;                        /* Register offset */
+
+    int86(0x1A, &regs, &regs);
+
+    /* Check for error - AH should be 0 on success */
+    if (regs.h.ah != 0x00) {
         return 0xFFFF;
     }
-    
-    return result;
+
+    return regs.x.cx;  /* Data in CX */
 }
 
 /**
  * Read PCI configuration dword
+ * Note: For 32-bit return value in 16-bit mode, the BIOS returns
+ * the value in ECX. We use the high and low 16-bit words.
  */
 static uint32_t pci_read_config_dword(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset) {
-    uint32_t result = 0xFFFFFFFF;
-    uint16_t status;
-    uint8_t dev_func = (device << 3) | function;
-    
+    union REGS regs;
+    uint32_t result;
+
+    /* Clear registers */
+    memset(&regs, 0, sizeof(regs));
+
     /* PCI BIOS Read Configuration Dword - INT 1Ah, AX=B10Ah */
-    __asm__ __volatile__ (
-        "movw $0xB10A, %%ax\n\t"
-        "movb %2, %%bh\n\t"          /* Bus number */
-        "movb %3, %%bl\n\t"          /* Device/Function */
-        "movw %4, %%di\n\t"          /* Register offset */
-        "int $0x1A\n\t"
-        "movw %%ax, %0\n\t"          /* Status */
-        "movl %%ecx, %1"             /* Data */
-        : "=m" (status), "=m" (result)
-        : "m" (bus), "m" (dev_func), "m" (offset)
-        : "ax", "bx", "ecx", "dx", "di"
-    );
-    
-    if ((status & 0xFF00) != 0x0000) {
+    regs.x.ax = 0xB10A;
+    regs.h.bh = bus;                           /* Bus number */
+    regs.h.bl = (device << 3) | function;      /* Device/Function */
+    regs.x.di = offset;                        /* Register offset */
+
+    int86(0x1A, &regs, &regs);
+
+    /* Check for error - AH should be 0 on success */
+    if (regs.h.ah != 0x00) {
         return 0xFFFFFFFF;
     }
-    
+
+    /* In 16-bit mode, ECX is returned as CX (low word).
+     * For the high word, we need special handling.
+     * The standard DOS int86() only gives us 16-bit registers,
+     * so we only get the low 16 bits here. For full 32-bit
+     * support, use the pci_bios.c module instead. */
+    result = regs.x.cx;  /* Low 16 bits only in standard int86 */
+
     return result;
 }
 
@@ -423,9 +416,12 @@ bool verify_isa_slots_present(const chipset_additional_info_t* info) {
     
     /* 3. PnP ISA BIOS as corroborating signal only */
     /* Note: PnP BIOS can exist on LPC-only systems, so it's not definitive */
-    bool has_pnp = has_pnp_isa_bios();
-    if (has_pnp) {
-        log_debug("PnP ISA BIOS detected (corroborating signal)");
+    {
+        bool has_pnp;
+        has_pnp = has_pnp_isa_bios();
+        if (has_pnp) {
+            log_debug("PnP ISA BIOS detected (corroborating signal)");
+        }
     }
     
     /* 4. Conservative approach: assume ISA slots present unless proven otherwise */
@@ -563,28 +559,36 @@ chipset_additional_info_t scan_additional_pci_devices(void) {
  */
 bus_type_t detect_system_bus(void) {
     bus_type_t primary_bus = BUS_TYPE_ISA;  /* Default to ISA */
-    bool has_mca = false;
-    bool has_eisa = false;
-    bool has_pci = false;
-    bool has_vlb = false;
-    
+    bool has_mca;
+    bool has_eisa;
+    bool has_pci;
+    bool has_vlb;
+    int ps2_model;
+    int has_mca_nics;
+
+    /* Initialize */
+    has_mca = false;
+    has_eisa = false;
+    has_pci = false;
+    has_vlb = false;
+
     log_info("Detecting system bus architecture...");
-    
+
     /* Check for MCA (MicroChannel) first - it's exclusive */
     has_mca = is_mca_system();
     if (has_mca) {
         primary_bus = BUS_TYPE_MCA;
-        int ps2_model = get_ps2_model();
-        
+        ps2_model = get_ps2_model();
+
         if (ps2_model) {
-            log_info("IBM PS/2 Model %s detected (MicroChannel Architecture)", 
+            log_info("IBM PS/2 Model %s detected (MicroChannel Architecture)",
                      get_ps2_model_name(ps2_model));
         } else {
             log_info("IBM MicroChannel Architecture detected (unknown model)");
         }
-        
+
         /* Check for MCA NICs and warn if found */
-        int has_mca_nics = 0;
+        has_mca_nics = 0;
         if (nic_detect_mca_3c523()) {
             log_warning("MCA: 3C523 EtherLink/MC detected but not supported");
             has_mca_nics = 1;
@@ -593,7 +597,7 @@ bus_type_t detect_system_bus(void) {
             log_warning("MCA: 3C529 EtherLink III/MC detected but not supported");
             has_mca_nics = 1;
         }
-        
+
         /* MCA systems don't have ISA slots - skip ISA scanning entirely */
         if (has_mca_nics) {
             log_warning("MicroChannel NICs detected but not supported");
@@ -604,7 +608,7 @@ bus_type_t detect_system_bus(void) {
         /* Note: The driver should exit after this, handled by caller */
         return primary_bus;
     }
-    
+
     /* Check for other bus types - these can coexist with ISA */
     has_eisa = is_eisa_system();
     has_pci = detect_pci_bios();

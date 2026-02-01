@@ -13,7 +13,7 @@
  * Split from logging.c: 2026-01-28 (ROOT/OVERLAY segmentation)
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -41,7 +41,7 @@ static int watcom_snprintf_init(char *buf, size_t size, const char *fmt, ...) {
  */
 extern int logging_enabled;
 extern int log_level;
-extern FILE *log_file;
+extern dos_file_t log_file;
 extern char log_buffer[];
 extern int log_to_console;
 extern int log_to_file;
@@ -146,10 +146,10 @@ int logging_set_console(int enable) {
  */
 int logging_set_file(const char *filename) {
     /* Close existing file if open */
-    if (log_file) {
+    if (log_file >= 0) {
         log_info("Closing previous log file: %s", log_filename);
-        fclose(log_file);
-        log_file = NULL;
+        dos_fclose(log_file);
+        log_file = -1;
         log_to_file = 0;
     }
 
@@ -160,13 +160,13 @@ int logging_set_file(const char *filename) {
     }
 
     /* Attempt to open file for append */
-    log_file = fopen(log_filename, "a");
-    if (log_file) {
+    log_file = dos_fopen(log_filename, "a");
+    if (log_file >= 0) {
         log_to_file = 1;
 
         /* Write header to log file */
-        fprintf(log_file, "\n=== 3Com Packet Driver Log Started ===\n");
-        fflush(log_file);
+        dos_fwrite("\n=== 3Com Packet Driver Log Started ===\n", 1, 40, log_file);
+        dos_fflush(log_file);
 
         log_info("File logging enabled: %s", log_filename);
         return 0;
@@ -185,12 +185,12 @@ int logging_rotate_file(void) {
     long current_pos;
     char backup_name[132];
 
-    if (!log_file || !log_to_file) {
+    if (log_file < 0 || !log_to_file) {
         return 0; /* No file logging active */
     }
 
-    /* Get current file size */
-    current_pos = ftell(log_file);
+    /* Get current file size - ftell not available with dos_io, skip rotation check */
+    current_pos = 0; /* TODO: implement dos_ftell */
     if (current_pos < 0) {
         return -1; /* Error getting file position */
     }
@@ -200,7 +200,7 @@ int logging_rotate_file(void) {
         log_info("Rotating log file (size: %ld bytes)", current_pos);
 
         /* Close current file */
-        fclose(log_file);
+        dos_fclose(log_file);
 
         /* Create backup filename */
         snprintf(backup_name, sizeof(backup_name), "%s.old", log_filename);
@@ -209,10 +209,10 @@ int logging_rotate_file(void) {
         rename(log_filename, backup_name);
 
         /* Open new file */
-        log_file = fopen(log_filename, "w");
-        if (log_file) {
-            fprintf(log_file, "=== 3Com Packet Driver Log (Rotated) ===\n");
-            fflush(log_file);
+        log_file = dos_fopen(log_filename, "w");
+        if (log_file >= 0) {
+            dos_fwrite("=== 3Com Packet Driver Log (Rotated) ===\n", 1, 42, log_file);
+            dos_fflush(log_file);
             log_info("Log file rotated successfully");
             return 0;
         } else {
@@ -319,10 +319,10 @@ int logging_enable(int enable) {
  * @return 0 on success
  */
 int logging_cleanup(void) {
-    if (log_file) {
+    if (log_file >= 0) {
         log_info("Closing log file");
-        fclose(log_file);
-        log_file = NULL;
+        dos_fclose(log_file);
+        log_file = -1;
     }
 
     /* Cleanup ring buffer */

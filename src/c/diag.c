@@ -20,8 +20,9 @@
 #include "3c509b.h"   /* NIC-specific register definitions */
 #include "errhndl.h"
 #include "logging.h"
+#include "ovl_data.h"
 #include <stdarg.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -44,7 +45,7 @@ static const uint32_t MAX_LOG_ENTRIES = 1000;
 static bool g_log_to_console = true;
 static bool g_log_to_file = false;
 static bool g_log_to_network = false;
-static char g_log_file_path[128] = "PACKET.LOG";
+static char g_log_file_path[128];  /* Initialized at runtime to reduce _DATA segment */
 static bool g_log_enabled_by_config = false;
 
 /* Structure for error tracking (forward declaration for diagnostics_cleanup) */
@@ -94,6 +95,9 @@ int diagnostics_init(void) {
     if (g_diagnostics_initialized) {
         return SUCCESS;
     }
+
+    /* Initialize default paths (moved from static init to reduce _DATA segment) */
+    strcpy(g_log_file_path, "PACKET.LOG");
 
     /* Initialize performance counters */
     perf_counters_init(&g_perf_counters);
@@ -3422,8 +3426,8 @@ typedef struct error_pattern_def {
     const char *description;
 } error_pattern_def_t;
 
-/* Predefined error patterns to detect */
-static const error_pattern_def_t g_error_pattern_defs[] = {
+/* Predefined error patterns to detect - overlay-local (INIT_FINAL) */
+static OVL_FINAL_CONST error_pattern_def_t g_error_pattern_defs[] = {
     {1, {1, 1, 1}, 3, 5000, 3, "Repeated transmission errors"},
     {2, {2, 3, 2}, 3, 10000, 2, "CRC error followed by timeout"},
     {3, {4, 4, 4, 4}, 4, 2000, 4, "Rapid buffer overruns"},
@@ -4205,7 +4209,7 @@ static void enhanced_log_output(const log_entry_t *entry) {
     uint32_t timestamp;
     uint32_t seconds;
     uint32_t milliseconds;
-    FILE *log_file;
+    dos_file_t log_file;
 
     if (!entry || !g_log_enabled_by_config) {
         return;
@@ -4231,10 +4235,10 @@ static void enhanced_log_output(const log_entry_t *entry) {
     
     /* File output */
     if (g_log_to_file && g_log_file_path[0]) {
-        log_file = fopen(g_log_file_path, "a");
+        log_file = dos_fopen(g_log_file_path, "a");
         if (log_file) {
-            fprintf(log_file, "%s\n", formatted_msg);
-            fclose(log_file);
+            dos_fprintf(log_file, "%s\n", formatted_msg);
+            dos_fclose(log_file);
         }
     }
     

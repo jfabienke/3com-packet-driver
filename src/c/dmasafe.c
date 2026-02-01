@@ -17,22 +17,50 @@
  * Supports all 3Com cards: 3C509B, 3C589, 3C905B/C, 3C515-TX
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+
+/* DOS-specific includes - only for DOS compilers */
+#if defined(__TURBOC__) || defined(__WATCOMC__) || defined(_MSC_VER)
 #include <dos.h>
+#endif
 
 #include "../../include/memory.h"
 #include "../../include/logging.h"
 #include "../../include/common.h"
-#include "../../include/vds.h"  /* Includes vds_sg_entry_t and lock/unlock functions */
+#include "../../include/vds.h"  /* Includes VDS_SG_ENTRY and lock/unlock functions */
+#include "../../include/vds_core.h"  /* For vds_sg_entry_t, vds_is_v86_mode, vds_is_present */
+#include "../../include/dmasafe.h"  /* For validate_all_device_caps, DMA_ISA_LIMIT, dma_emergency_recovery */
 #include "../../include/cachemgt.h"
 #include "../../include/dmaself.h"
 #include "../../include/vds_mapping.h"
-#include "../../docs/agents/shared/error-codes.h"
+
+/* Extern assembly fallback */
+extern void cache_flush_486(void);
+#include "../../include/cpudet.h"   /* For asm_is_v86_mode */
+
+/* Error code aliases for compatibility */
+#ifndef ERROR_MEMORY_ALLOCATION_FAILED
+#define ERROR_MEMORY_ALLOCATION_FAILED ERROR_MEMORY_ALLOC
+#endif
+#ifndef ERROR_DMA_NOT_SUPPORTED
+#define ERROR_DMA_NOT_SUPPORTED ERROR_NOT_SUPPORTED
+#endif
+
+/* VDS flags if not defined elsewhere */
+#ifndef VDS_NO_CROSS_64K
+#define VDS_NO_CROSS_64K      0x0001  /* Do not cross 64KB boundaries */
+#endif
+#ifndef VDS_CONTIG_REQUIRED
+#define VDS_CONTIG_REQUIRED   0x0002  /* Require physically contiguous buffer */
+#endif
+
+/* VDS lock handle typedef for local use */
+typedef uint16_t vds_lock_handle_t;
 
 /* DMA constraint definitions */
 #define DMA_64KB_BOUNDARY       0x10000     /* 64KB boundary mask */
@@ -42,14 +70,7 @@
 #define MAX_BOUNCE_BUFFERS      32          /* Maximum bounce buffers */
 #define BOUNCE_BUFFER_SIZE      2048        /* Standard bounce buffer size */
 
-/* DMA buffer types */
-typedef enum {
-    DMA_BUFFER_TYPE_TX,                     /* Transmit buffer */
-    DMA_BUFFER_TYPE_RX,                     /* Receive buffer */
-    DMA_BUFFER_TYPE_DESCRIPTOR,             /* Descriptor ring */
-    DMA_BUFFER_TYPE_GENERAL,                /* General purpose */
-    DMA_BUFFER_TYPE_COUNT
-} dma_buffer_type_t;
+/* DMA buffer types - defined in dmasafe.h */
 
 /* DMA device constraints */
 typedef struct {
@@ -63,8 +84,10 @@ typedef struct {
     bool cache_coherent;                    /* Hardware maintains cache coherency */
 } dma_device_constraints_t;
 
-/* DMA buffer descriptor with TSR defensive patterns */
-typedef struct {
+/* DMA buffer descriptor with TSR defensive patterns
+ * Note: dma_buffer_descriptor_t typedef is declared in dmasafe.h as opaque type.
+ * This provides the actual struct definition. */
+struct dma_buffer_descriptor {
     uint32_t signature;                     /* Structure signature (SIGNATURE_MAGIC) */
     uint16_t checksum;                      /* Structure checksum for validation */
     void* virtual_address;                  /* Virtual address */
@@ -78,7 +101,7 @@ typedef struct {
     bool allocated_by_framework;            /* Allocated by this framework */
     uint32_t alignment;                     /* Actual alignment achieved */
     uint32_t canary_rear;                   /* Rear canary (CANARY_PATTERN_REAR) */
-} dma_buffer_descriptor_t;
+};
 
 /* Bounce buffer pool with defensive patterns */
 typedef struct {
@@ -140,7 +163,7 @@ static inline void decrement32_atomic(volatile uint32_t* p) {
 
 /* TSR Defensive Helper Functions */
 static uint16_t calculate_checksum(const void* data, size_t size);
-static bool validate_checksum(const void* structure);
+static bool validate_checksum(const void FAR *structure, uint16_t struct_type);
 static bool validate_buffer_integrity(const dma_buffer_descriptor_t* desc);
 static bool validate_bounce_buffer(const bounce_buffer_t* bounce);
 static void init_buffer_protection(dma_buffer_descriptor_t* desc);
@@ -157,6 +180,7 @@ static bool crosses_64kb_boundary(uint32_t physical_address, uint32_t size);
 static bounce_buffer_t* allocate_bounce_buffer(uint32_t size, dma_buffer_type_t type);
 static void free_bounce_buffer(bounce_buffer_t* bounce);
 static int sync_bounce_buffer(dma_buffer_descriptor_t* desc, bool to_device);
+static uint32_t count_used_bounce_buffers(void);
 
 /**
  * @brief Initialize DMA safety framework
@@ -170,12 +194,13 @@ int dma_safety_init(void) {
     int i;
     void* bounce_memory;
     uint32_t bounce_physical;
-    
+    coherency_analysis_t cache_analysis;  /* C89: declare at start of block */
+
     log_info("DMA Safety: Initializing DMA safety framework");
     
     /* GPT-5 Critical: Initialize VDS support first */
     if (!vds_init()) {
-        if (is_v86_mode()) {
+        if (vds_is_v86_mode()) {
             log_error("DMA Safety: V86 mode detected but VDS not available!");
             log_error("DMA Safety: Cannot safely perform DMA in V86 without VDS");
             /* Continue initialization but DMA will be restricted */
@@ -230,7 +255,7 @@ int dma_safety_init(void) {
     }
     
     /* GPT-5 Critical: Initialize cache management system */
-    coherency_analysis_t cache_analysis = perform_complete_coherency_analysis();
+    cache_analysis = perform_complete_coherency_analysis();
     if (!initialize_cache_management(&cache_analysis)) {
         log_warning("DMA Safety: Cache management initialization failed - using fallback");
     }
@@ -420,7 +445,7 @@ dma_buffer_descriptor_t* dma_allocate_buffer(uint32_t size, uint32_t alignment,
             
             /* Try emergency recovery between retries */
             if (retry_count == 2) {
-                emergency_recovery();
+                dma_emergency_recovery();
             }
         }
         
@@ -542,19 +567,30 @@ static uint32_t get_physical_address(const void* virtual_address) {
     uint32_t physical_addr = 0;
     
     /* GPT-5 Critical: Use proper VDS implementation */
-    if (!vds_get_safe_physical_address((void*)virtual_address, 1, &physical_addr)) {
-        /* In V86 without VDS, we cannot safely do DMA */
-        if (is_v86_mode()) {
-            log_error("DMA Safety: Cannot get physical address in V86 without VDS!");
-            return 0;  /* Invalid address - will force bounce buffer */
+    /* Check if we're in V86 mode first */
+    if (vds_is_v86_mode()) {
+        /* In V86 mode, must use VDS if available */
+        if (vds_is_present()) {
+            /* Use VDS to get physical address */
+            VDS_DDS dds;
+            if (vds_lock_region((void far*)virtual_address, 1, &dds) == VDS_SUCCESS) {
+                physical_addr = dds.physical;
+                vds_unlock_region(&dds);
+                return physical_addr;
+            }
         }
-        
-        /* Real mode fallback */
+        /* V86 without VDS - DMA not safe */
+        log_error("DMA Safety: Cannot get physical address in V86 without VDS!");
+        return 0;  /* Invalid address - will force bounce buffer */
+    }
+
+    /* Real mode fallback */
+    {
         uint16_t segment = FP_SEG(virtual_address);
         uint16_t offset = FP_OFF(virtual_address);
         physical_addr = ((uint32_t)segment << 4) + offset;
     }
-    
+
     return physical_addr;
 }
 
@@ -582,57 +618,54 @@ static uint32_t get_physical_address_vds(const void* virtual_address) {
  */
 static bool get_physical_mapping_full(const void* buffer, uint32_t size,
                                      uint32_t* phys_addr, bool* is_contiguous) {
-    vds_sg_entry_t sg_list[16];
-    vds_lock_handle_t lock_handle;
-    
+    VDS_DDS dds;
+
     /* Initialize outputs */
     *phys_addr = 0;
     *is_contiguous = false;
-    
+
     /* Check if we're in V86 mode */
-    if (is_v86_mode()) {
-        if (!is_vds_available()) {
+    if (vds_is_v86_mode()) {
+        if (!vds_is_present()) {
             /* GPT-5 Critical: Cannot do DMA in V86 without VDS */
             log_error("DMA Safety: V86 mode without VDS - DMA not safe!");
             return false;
         }
-        
-        /* Map buffer with VDS */
-        lock_handle = vds_map_buffer((void*)buffer, size, sg_list, 16);
-        if (lock_handle == 0) {
-            log_error("DMA Safety: VDS mapping failed");
+
+        /* Lock buffer with VDS to get physical address */
+        {
+            uint8_t vds_result = vds_lock_region((void far*)buffer, size, &dds);
+            if (vds_result != VDS_SUCCESS) {
+                log_error("DMA Safety: VDS lock failed with error 0x%02X", vds_result);
+                return false;
+            }
+
+            /* VDS lock succeeded - buffer is contiguous and we have physical address */
+            *phys_addr = dds.physical;
+            *is_contiguous = true;
+
+            /* Unlock the mapping */
+            vds_unlock_region(&dds);
+            return true;
+        }
+    }
+
+    /* Real mode: calculate physical address */
+    {
+        uint16_t segment = FP_SEG(buffer);
+        uint16_t offset = FP_OFF(buffer);
+        uint32_t linear = ((uint32_t)segment << 4) + offset;
+
+        /* Check if buffer wraps in real mode */
+        if (linear + size > 0x100000) {  /* 1MB real mode limit */
+            *is_contiguous = false;
             return false;
         }
-        
-        /* Check if contiguous */
-        if (sg_list[0].is_contiguous && sg_list[0].length == size) {
-            *phys_addr = sg_list[0].physical_addr;
-            *is_contiguous = true;
-        } else {
-            /* Non-contiguous - need bounce buffer */
-            *is_contiguous = false;
-            log_debug("DMA Safety: Buffer not contiguous in physical memory");
-        }
-        
-        /* Unlock the mapping */
-        vds_unmap_buffer(lock_handle);
+
+        *phys_addr = linear;
+        *is_contiguous = true;
         return true;
     }
-    
-    /* Real mode: calculate physical address */
-    uint16_t segment = FP_SEG(buffer);
-    uint16_t offset = FP_OFF(buffer);
-    uint32_t linear = ((uint32_t)segment << 4) + offset;
-    
-    /* Check if buffer wraps in real mode */
-    if (linear + size > 0x100000) {  /* 1MB real mode limit */
-        *is_contiguous = false;
-        return false;
-    }
-    
-    *phys_addr = linear;
-    *is_contiguous = true;
-    return true;
 }
 
 /**
@@ -720,7 +753,7 @@ static bool verify_physical_contiguity(const void* buf, uint32_t len) {
  * @param size Buffer size in bytes
  * @return true if buffer crosses 64KB boundary, false if safe
  */
-static bool dma_check_64kb_boundary(uint32_t physical_addr, uint32_t size) {
+bool dma_check_64kb_boundary(uint32_t physical_addr, uint32_t size) {
     if (size == 0) {
         return false; /* Zero-size buffer doesn't cross any boundary */
     }
@@ -736,14 +769,14 @@ static bool dma_check_64kb_boundary(uint32_t physical_addr, uint32_t size) {
  * @param desc Buffer descriptor
  * @return Physical address or 0 on error
  */
-static uint32_t dma_get_physical_address(dma_buffer_descriptor_t* desc) {
+uint32_t dma_get_physical_address(const dma_buffer_descriptor_t* desc) {
     if (!desc || !desc->virtual_address) {
         return 0;
     }
     
     /* Use bounce buffer physical address if available */
-    if (desc->is_bounce_buffer && desc->bounce_physical_address != 0) {
-        return desc->bounce_physical_address;
+    if (desc->is_bounce_buffer && desc->bounce_physical != 0) {
+        return desc->bounce_physical;
     }
     
     /* Otherwise calculate from virtual address */
@@ -759,7 +792,7 @@ static uint32_t dma_get_physical_address(dma_buffer_descriptor_t* desc) {
  * @param size Buffer size in bytes
  * @return true if buffer is within 16MB limit, false if exceeds
  */
-static bool dma_check_16mb_limit(uint32_t physical_addr, uint32_t size) {
+bool dma_check_16mb_limit(uint32_t physical_addr, uint32_t size) {
     uint32_t end_addr;
     
     if (size == 0) {
@@ -796,15 +829,22 @@ static int sync_bounce_buffer(dma_buffer_descriptor_t* desc, bool to_device) {
     
     log_debug("DMA Safety: Syncing bounce buffer %s", to_device ? "to device" : "from device");
     
-    /* For DOS real mode, bounce buffer sync is usually just a memory copy */
-    /* In a full implementation, this would handle cache flushing/invalidation */
-    
     if (to_device) {
-        /* Data is already in bounce buffer for device access */
-        /* In protected mode, would flush cache here */
+        /* CPU->Device: flush CPU cache to ensure device sees latest data */
+        if (is_cache_management_initialized()) {
+            cache_management_dma_prepare(desc->bounce_virtual, desc->size);
+        } else {
+            /* Fallback: use WBINVD on 486+ */
+            cache_flush_486();
+        }
     } else {
-        /* Device has written to bounce buffer */  
-        /* In protected mode, would invalidate cache here */
+        /* Device->CPU: invalidate cache to ensure CPU reads fresh data */
+        if (is_cache_management_initialized()) {
+            cache_management_dma_complete(desc->bounce_virtual, desc->size);
+        } else {
+            /* Fallback: use WBINVD on 486+ */
+            cache_flush_486();
+        }
     }
     
     return SUCCESS;
@@ -861,7 +901,7 @@ int dma_free_buffer(dma_buffer_descriptor_t* desc) {
  */
 static int register_device_constraints(const char* device_name, const dma_device_constraints_t* constraints) {
     if (g_dma_manager.device_count >= 8) {
-        return ERROR_TABLE_FULL;
+        return ERROR_REGISTRY_FULL;
     }
     
     g_dma_manager.constraints[g_dma_manager.device_count] = *constraints;
@@ -991,80 +1031,89 @@ int dma_safety_shutdown(void) {
 
 /**
  * @brief Build scatter-gather list with physical contiguity verification
- * 
+ *
  * GPT-5 CRITICAL FIX: "Physical contiguity is not verified across page boundaries.
  * This can produce segments that are not physically contiguous, which will break DMA."
- * 
+ *
  * This implementation:
  * 1. Walks 4KB pages to verify physical contiguity
  * 2. Uses VDS physical run lists when in V86 mode
  * 3. Falls back to bounce buffers when constraints cannot be met
- * 
+ *
  * @param buf Buffer virtual address
  * @param len Buffer length
  * @param caps Device capability descriptor
- * @param sg_list Caller-allocated SG list (GPT-5: Remove static for ISR safety)
- * @return 0 on success, negative on error
+ * @return Allocated SG list, or NULL on error
  */
-int dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps, dma_sg_list_t* sg_list)
+dma_sg_list_t* dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps)
 {
+    dma_sg_list_t* sg_list;
     uint8_t* current_ptr;
     uint32_t remaining_len;
     int segment_idx;
     uint32_t page_size = 4096;  /* 4KB pages */
-    
+    uint32_t start_phys;
+
     /* GPT-5: Input validation with proper error codes */
-    if (!buf || len == 0 || !caps || !sg_list) {
+    if (!buf || len == 0 || !caps) {
         log_error("DMA Safety: Invalid parameters for S/G build");
-        return ERROR_INVALID_PARAM;
+        return NULL;
     }
-    
+
     /* GPT-5: Validate caps->max_sg_entries against array size */
     if (caps->max_sg_entries > 8) {
         log_error("DMA Safety: max_sg_entries (%u) exceeds array size (8)", caps->max_sg_entries);
-        return ERROR_INVALID_PARAM;
+        return NULL;
     }
-    
-    /* Clear caller-provided scatter-gather list */
+
+    /* Allocate scatter-gather list */
+    sg_list = (dma_sg_list_t*)malloc(sizeof(dma_sg_list_t));
+    if (!sg_list) {
+        log_error("DMA Safety: Failed to allocate SG list");
+        return NULL;
+    }
+
+    /* Clear the scatter-gather list */
     memset(sg_list, 0, sizeof(dma_sg_list_t));
-    
+
     /* Check buffer start alignment - GPT-5: Don't mask length, check start address */
-    uint32_t start_phys = get_buffer_physical_address(buf);
+    start_phys = get_buffer_physical_address(buf);
     if (start_phys == 0) {
         log_error("DMA Safety: Cannot get physical address for S/G");
-        return ERROR_DMA_NOT_CONTIGUOUS;
+        free(sg_list);
+        return NULL;
     }
-    
+
     if (caps->alignment > 1 && (start_phys & (caps->alignment - 1)) != 0) {
         log_warning("DMA Safety: Buffer start 0x%08lX not aligned to %u bytes, needs bounce buffer",
                    start_phys, caps->alignment);
         sg_list->needs_bounce = true;
-        return SUCCESS;  /* Caller should use bounce buffer */
+        return sg_list;  /* Caller should use bounce buffer */
     }
-    
+
     /* Check device-specific constraints for entire buffer first */
     if (caps->dma_addr_bits == 24 && start_phys + len > DMA_ISA_LIMIT) {
         log_warning("DMA Safety: Buffer exceeds 16MB limit for ISA device, needs bounce buffer");
         sg_list->needs_bounce = true;
-        return SUCCESS;
+        return sg_list;
     }
-    
+
     /* Check if device supports scatter-gather */
     if (!caps->supports_sg || caps->max_sg_entries <= 1) {
         /* Single segment only - verify physical contiguity for entire buffer */
         if (!verify_physical_contiguity(buf, len)) {
             log_info("DMA Safety: Buffer not physically contiguous, needs bounce buffer");
             sg_list->needs_bounce = true;
-            return SUCCESS;
+            return sg_list;
         }
-        
+
         /* GPT-5 Critical: Check 64KB boundary crossing for ISA devices */
         if (caps->no_64k_cross && dma_check_64kb_boundary(start_phys, len)) {
             log_info("DMA Safety: Buffer crosses 64KB boundary, needs bounce buffer");
             sg_list->needs_bounce = true;
-            return SUCCESS;
+            return sg_list;
         }
-        
+
         /* Single segment is safe */
         sg_list->segment_count = 1;
         sg_list->segments[0].virt_addr = buf;
@@ -1072,9 +1121,9 @@ int dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps, dma_sg_list_
         sg_list->segments[0].length = len;  /* GPT-5: Use uint32_t, not uint16_t */
         sg_list->total_length = len;
         sg_list->needs_bounce = false;
-        
+
         log_debug("DMA Safety: Single segment S/G: phys=0x%08lX, len=%lu", start_phys, len);
-        return SUCCESS;
+        return sg_list;
     }
     
     /* Multi-segment scatter-gather build with page-walking */
@@ -1085,10 +1134,18 @@ int dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps, dma_sg_list_
     log_debug("DMA Safety: Building multi-segment S/G for %lu bytes", len);
     
     while (remaining_len > 0 && segment_idx < caps->max_sg_entries) {
-        uint32_t segment_start_phys = get_buffer_physical_address(current_ptr);
-        uint32_t segment_len = 0;
-        uint32_t max_segment_len = remaining_len;
-        
+        uint32_t segment_start_phys;
+        uint32_t segment_len;
+        uint32_t max_segment_len;
+        bool needs_boundary_split;
+        uint32_t current_page_phys;
+        uint32_t offset_in_page;
+        uint8_t* page_ptr;
+
+        segment_start_phys = get_buffer_physical_address(current_ptr);
+        segment_len = 0;
+        max_segment_len = remaining_len;
+
         /* Limit segment by device constraints */
         if (caps->dma_addr_bits == 24) {
             uint32_t limit_16mb = DMA_16MB_LIMIT - segment_start_phys;
@@ -1096,56 +1153,58 @@ int dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps, dma_sg_list_
                 max_segment_len = limit_16mb;
             }
         }
-        
+
         /* GPT-5 Critical: Limit segment by 64KB boundary if device requires it */
-        bool needs_boundary_split = caps->no_64k_cross;
-        
+        needs_boundary_split = caps->no_64k_cross;
+
         if (needs_boundary_split) {
-            uint32_t boundary_end = (segment_start_phys + 65536) & ~65535;
+            uint32_t boundary_end = (segment_start_phys + 65536) & ~65535UL;
             uint32_t boundary_limit = boundary_end - segment_start_phys;
             if (max_segment_len > boundary_limit) {
                 max_segment_len = boundary_limit;
             }
         }
-        
+
         /* Walk pages to find physically contiguous run */
-        uint32_t current_page_phys = segment_start_phys & ~(page_size - 1);
-        uint32_t offset_in_page = segment_start_phys & (page_size - 1);
-        
+        current_page_phys = segment_start_phys & ~(page_size - 1);
+        offset_in_page = segment_start_phys & (page_size - 1);
+
         segment_len = page_size - offset_in_page;  /* First page partial */
         if (segment_len > max_segment_len) {
             segment_len = max_segment_len;
         }
-        
+
         /* Extend segment through contiguous pages */
-        uint8_t* page_ptr = current_ptr + segment_len;
+        page_ptr = current_ptr + segment_len;
         while (segment_len < max_segment_len) {
             uint32_t next_page_phys = get_buffer_physical_address(page_ptr);
             uint32_t expected_phys = current_page_phys + page_size;
-            
+
             /* Check if next page is physically contiguous */
             if ((next_page_phys & ~(page_size - 1)) != expected_phys) {
                 log_debug("DMA Safety: Physical discontinuity at offset %lu, ending segment",
                          (uint32_t)(page_ptr - (uint8_t*)buf));
                 break;
             }
-            
+
             /* Extend segment to include this page */
-            uint32_t page_bytes = page_size;
-            if (segment_len + page_bytes > max_segment_len) {
-                page_bytes = max_segment_len - segment_len;
+            {
+                uint32_t page_bytes = page_size;
+                if (segment_len + page_bytes > max_segment_len) {
+                    page_bytes = max_segment_len - segment_len;
+                }
+
+                segment_len += page_bytes;
+                page_ptr += page_bytes;
+                current_page_phys = expected_phys;
             }
-            
-            segment_len += page_bytes;
-            page_ptr += page_bytes;
-            current_page_phys = expected_phys;
         }
         
         /* GPT-5: Ensure no zero-length segments */
         if (segment_len == 0) {
             log_error("DMA Safety: Zero-length segment detected, needs bounce buffer");
             sg_list->needs_bounce = true;
-            return SUCCESS;
+            return sg_list;
         }
         
         /* Add segment to list */
@@ -1167,23 +1226,23 @@ int dma_build_safe_sg(void* buf, uint32_t len, device_caps_t* caps, dma_sg_list_
         log_error("DMA Safety: Buffer too fragmented (%lu bytes remain in %d segments), needs bounce buffer",
                  remaining_len, caps->max_sg_entries);
         sg_list->needs_bounce = true;
-        return SUCCESS;
+        return sg_list;
     }
-    
+
     /* Successful multi-segment scatter-gather build */
     sg_list->segment_count = segment_idx;
     sg_list->total_length = len;
     sg_list->needs_bounce = false;
-    
+
     log_info("DMA Safety: Built S/G list with %d segments for %lu bytes",
              segment_idx, len);
-    
-    return SUCCESS;
+
+    return sg_list;
 }
 
 /**
  * @brief Free scatter-gather list
- * 
+ *
  * @param sg_list Scatter-gather list to free
  * @return SUCCESS or error code
  */
@@ -1192,10 +1251,10 @@ int dma_free_sg_list(dma_sg_list_t* sg_list)
     if (!sg_list) {
         return SUCCESS;  /* NULL is valid */
     }
-    
-    /* For static allocation, just clear the list */
-    memset(sg_list, 0, sizeof(dma_sg_list_t));
-    
+
+    /* Free the allocated list */
+    free(sg_list);
+
     return SUCCESS;
 }
 
@@ -1265,9 +1324,10 @@ dma_buffer_descriptor_t* dma_allocate_hybrid_buffer(uint32_t size, device_caps_t
         log_error("DMA Safety: Hybrid allocation failed for %s", device_name);
         return NULL;
     }
-    
+
     /* Validate buffer against device constraints */
-    uint32_t phys_addr = dma_get_physical_address(desc);
+    {
+        uint32_t phys_addr = dma_get_physical_address(desc);
     
     /* Check 16MB limit for ISA devices */
     if (caps->dma_addr_bits == 24 && !dma_check_16mb_limit(phys_addr, size)) {
@@ -1281,9 +1341,10 @@ dma_buffer_descriptor_t* dma_allocate_hybrid_buffer(uint32_t size, device_caps_t
         /* Scatter-gather or bounce buffer will handle this */
     }
     
-    log_info("DMA Safety: Allocated hybrid buffer for %s: %lu bytes at phys=0x%08lX",
-             device_name, size, phys_addr);
-    
+        log_info("DMA Safety: Allocated hybrid buffer for %s: %lu bytes at phys=0x%08lX",
+                 device_name, size, phys_addr);
+    }
+
     return desc;
 }
 
@@ -1376,15 +1437,17 @@ int dma_check_integrity(void) {
             errors++;
         }
     }
-    
+
     /* Check active buffers */
-    uint32_t active_count = read32_atomic(&g_dma_manager.active_count);
-    for (i = 0; i < active_count; i++) {
-        if (!validate_buffer_integrity(&g_dma_manager.active_buffers[i])) {
-            errors++;
+    {
+        uint32_t active_count = read32_atomic(&g_dma_manager.active_count);
+        for (i = 0; i < active_count; i++) {
+            if (!validate_buffer_integrity(&g_dma_manager.active_buffers[i])) {
+                errors++;
+            }
         }
     }
-    
+
     return errors;
 }
 
@@ -1403,25 +1466,26 @@ int dma_emergency_recovery(void) {
  */
 bool dma_periodic_validation(void) {
     static uint32_t validation_counter = 0;
-    
+    int errors;
+
     /* Only validate every N calls to reduce overhead */
     if (++validation_counter < 100) {
         return true;
     }
-    
+
     validation_counter = 0;
-    
+
     /* Quick integrity check */
-    int errors = dma_check_integrity();
+    errors = dma_check_integrity();
     if (errors > 0) {
         log_warning("DMA Safety: Periodic validation found %d errors", errors);
-        
+
         /* Attempt recovery */
         if (emergency_recovery() != SUCCESS) {
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -1437,17 +1501,18 @@ static int emergency_recovery(void) {
     uint32_t i;
     int corrupted_count = 0;
     int recovered_count = 0;
-    
+    uint32_t active_count;
+
     log_warning("DMA Safety: Starting emergency recovery procedure");
-    
+
     /* Level 1: Check and repair bounce buffers */
     for (i = 0; i < g_dma_manager.bounce_count; i++) {
         bounce_buffer_t* bounce = &g_dma_manager.bounce_pool[i];
-        
+
         if (!validate_bounce_buffer(bounce)) {
             corrupted_count++;
             log_warning("DMA Safety: Bounce buffer %u corrupted, attempting repair", i);
-            
+
             /* Try to repair by reinitializing protection */
             if (!bounce->in_use) {
                 init_bounce_protection(bounce);
@@ -1458,9 +1523,9 @@ static int emergency_recovery(void) {
             }
         }
     }
-    
+
     /* Level 2: Check active buffer descriptors */
-    uint32_t active_count = read32_atomic(&g_dma_manager.active_count);
+    active_count = read32_atomic(&g_dma_manager.active_count);
     for (i = 0; i < active_count; i++) {
         dma_buffer_descriptor_t* desc = &g_dma_manager.active_buffers[i];
         
@@ -1679,12 +1744,11 @@ typedef enum {
     DMA_DEVICE_PCI = 1     /* PCI device (coherent) */
 } dma_device_type_t;
 
-/* DMA direction for cache management */
-typedef enum {
-    DMA_DIR_TO_DEVICE = 1,     /* CPU -> Device (TX) */
-    DMA_DIR_FROM_DEVICE = 2,   /* Device -> CPU (RX) */
-    DMA_DIR_BIDIRECTIONAL = 3  /* Both directions */
-} dma_direction_t;
+/* DMA direction for cache management - use header-defined dma_direction_t */
+/* Compatibility aliases for local naming convention */
+#define DMA_DIR_TO_DEVICE     DMA_TO_DEVICE
+#define DMA_DIR_FROM_DEVICE   DMA_FROM_DEVICE
+#define DMA_DIR_BIDIRECTIONAL DMA_BIDIRECTIONAL
 
 /* Lock handle for VDS operations with coherency info */
 typedef struct dma_lock_s {
@@ -1706,8 +1770,8 @@ static bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok
 static bool dma_use_bounce_buffer(void __far *buf, uint32_t len, dma_direction_t direction,
                                   dma_lock_t *lock_out, dma_fragment_t *frags,
                                   uint16_t *frag_cnt);
-static void dma_sync_for_device(void __far *buf, uint32_t len, dma_direction_t direction);
-static void dma_sync_for_cpu(void __far *buf, uint32_t len, dma_direction_t direction);
+static void dma_sync_raw_for_device(void __far *buf, uint32_t len, dma_direction_t direction);
+static void dma_sync_raw_for_cpu(void __far *buf, uint32_t len, dma_direction_t direction);
 
 /**
  * @brief Validate ISA DMA physical constraints
@@ -1719,20 +1783,23 @@ static void dma_sync_for_cpu(void __far *buf, uint32_t len, dma_direction_t dire
  * @return true if buffer is ISA DMA safe
  */
 static bool validate_isa_dma_constraints(uint32_t phys, uint32_t len) {
+    uint32_t start_64k_page;
+    uint32_t end_64k_page;
+
     /* GPT-5: ISA DMA cannot access memory above 16MB */
     if (phys >= DMA_16MB_LIMIT) {
         log_error("DMA constraint: Buffer at 0x%08lX above 16MB limit", phys);
         return false;
     }
-    
+
     if ((phys + len) > DMA_16MB_LIMIT) {
         log_error("DMA constraint: Buffer end at 0x%08lX crosses 16MB limit", phys + len);
         return false;
     }
-    
+
     /* GPT-5: ISA DMA cannot cross 64KB physical boundaries */
-    uint32_t start_64k_page = phys / DMA_64KB_BOUNDARY;
-    uint32_t end_64k_page = (phys + len - 1) / DMA_64KB_BOUNDARY;
+    start_64k_page = phys / DMA_64KB_BOUNDARY;
+    end_64k_page = (phys + len - 1) / DMA_64KB_BOUNDARY;
     
     if (start_64k_page != end_64k_page) {
         log_error("DMA constraint: Buffer crosses 64KB boundary (0x%08lX-0x%08lX)",
@@ -1782,15 +1849,19 @@ static uint16_t split_at_64k_boundaries(uint32_t phys, uint32_t len,
     }
 
     while (len > 0) {
-        uint32_t low16 = (phys & 0xFFFFUL);
-        uint32_t room_to_boundary = 0x10000UL - low16; /* bytes before hitting 64KB boundary */
-        uint32_t chunk = (len < room_to_boundary) ? len : room_to_boundary;
-        
+        uint32_t low16;
+        uint32_t room_to_boundary;
+        uint32_t chunk;
+
+        low16 = (phys & 0xFFFFUL);
+        room_to_boundary = 0x10000UL - low16; /* bytes before hitting 64KB boundary */
+        chunk = (len < room_to_boundary) ? len : room_to_boundary;
+
         /* GPT-5 Critical Fix: Clamp to 0xFFFF to prevent wrap to 0 when casting to uint16_t */
         if (chunk > 0xFFFF) {
             chunk = 0xFFFF;
         }
-        
+
         /* GPT-5 Fix: Ensure length is multiple of 4 for 3C515 requirements */
         if ((chunk & 3) != 0) {
             /* Round down to nearest multiple of 4 */
@@ -1879,32 +1950,34 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
     lock_out->buffer_len = len;
 
     /* GPT-5 Fix: Prepare VDS flags based on direction and device type */
-    uint16_t vds_flags = 0;
-    /* Note: Direction is handled by VDS internally, not via flags */
-    if (device_type == DMA_DEVICE_ISA) {
-        vds_flags |= VDS_NO_CROSS_64K;    /* ISA devices cannot cross 64KB */
-    }
-    if (!sg_ok) {
-        vds_flags |= VDS_CONTIG_REQUIRED; /* Hardware needs contiguous buffer */
-    }
-    
-    /* GPT-5 Fix: Sync cache before DMA if needed */
-    if (direction == DMA_DIR_TO_DEVICE || direction == DMA_DIR_BIDIRECTIONAL) {
-        /* Flush CPU cache to ensure data is in memory */
-        dma_sync_for_device(buf, len, direction);
-    }
-    
-    /* Attempt to obtain physical mapping */
-    if (vds_available()) {
-        /* VDS path: Lock region and get scatter/gather list */
-        vds_sg_entry_t vds_frags[DMA_MAX_SG_INTERNAL];
-        uint16_t vds_count = 0;
-        uint16_t vds_handle = 0;
+    {
+        uint16_t vds_flags = 0;
+        /* Note: Direction is handled by VDS internally, not via flags */
+        if (device_type == DMA_DEVICE_ISA) {
+            vds_flags |= VDS_NO_CROSS_64K;    /* ISA devices cannot cross 64KB */
+        }
+        if (!sg_ok) {
+            vds_flags |= VDS_CONTIG_REQUIRED; /* Hardware needs contiguous buffer */
+        }
 
-        /* Call VDS lock_region with proper flags */
-        int rc = vds_lock_region_sg(buf, len, vds_flags,
-                                    vds_frags, DMA_MAX_SG_INTERNAL,
-                                    &vds_count, &vds_handle);
+        /* GPT-5 Fix: Sync cache before DMA if needed */
+        if (direction == DMA_DIR_TO_DEVICE || direction == DMA_DIR_BIDIRECTIONAL) {
+            /* Flush CPU cache to ensure data is in memory */
+            dma_sync_raw_for_device(buf, len, direction);
+        }
+
+        /* Attempt to obtain physical mapping */
+        if (vds_available()) {
+            /* VDS path: Lock region and get scatter/gather list */
+            vds_sg_entry_t vds_frags[DMA_MAX_SG_INTERNAL];
+            uint16_t vds_count = 0;
+            uint16_t vds_handle = 0;
+            int rc;
+
+            /* Call VDS lock_region with proper flags */
+            rc = vds_lock_region_sg(buf, len, vds_flags,
+                                        vds_frags, DMA_MAX_SG_INTERNAL,
+                                        &vds_count, &vds_handle);
         if (rc != 0 || vds_count == 0) {
             log_error("DMA map: VDS lock_region failed (rc=%d, count=%u)", rc, (unsigned)vds_count);
             
@@ -1931,8 +2004,8 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
             uint32_t remaining = len;
             uint16_t i;
             for (i = 0; i < vds_count && remaining > 0; ++i) {
-                uint32_t p = vds_frags[i].phys;
-                uint32_t l = vds_frags[i].len;
+                uint32_t p = vds_frags[i].physical_addr;
+                uint32_t l = vds_frags[i].size;
                 if (l > remaining) l = remaining;
 
                 if (tmp_in_count >= DMA_MAX_SG_INTERNAL) {
@@ -1948,54 +2021,59 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
                 remaining -= l;
             }
         }
-    } else {
-        /* GPT-5 Critical Fix: Check if we're in V86 mode without VDS */
-        if (is_v86_mode()) {
-            /* V86/paging active but no VDS - cannot safely do DMA */
-            log_error("DMA map: V86 mode detected without VDS - DMA unsafe!");
-            log_error("DMA map: Use pre-allocated bounce buffers or install VDS provider");
-            return false;
-        }
-        
-        /* Pure real mode: calculate physical address directly */
-        uint32_t phys = ((uint32_t)FP_SEG(buf) << 4) + (uint32_t)FP_OFF(buf);
-        
-        /* Check for real mode 1MB wrap */
-        if (phys + len > 0x100000) {
-            log_error("DMA map: buffer wraps in real mode");
-            return false;
-        }
-        
-        /* GPT-5 Critical Fix: Handle buffers > 64KB by chunking */
-        uint32_t remaining = len;
-        uint32_t current_phys = phys;
-        tmp_in_count = 0;
-        
-        while (remaining > 0 && tmp_in_count < DMA_MAX_SG_INTERNAL) {
-            /* Calculate bytes to next 64KB boundary */
-            uint32_t offset_in_64k = current_phys & 0xFFFF;
-            uint32_t bytes_to_boundary = 0x10000 - offset_in_64k;
-            
-            /* Take minimum of remaining, bytes to boundary, and 64KB-1 */
-            uint32_t chunk_size = remaining;
-            if (chunk_size > bytes_to_boundary) {
-                chunk_size = bytes_to_boundary;
+        } else {
+            /* GPT-5 Critical Fix: Check if we're in V86 mode without VDS */
+            if (vds_is_v86_mode()) {
+                /* V86/paging active but no VDS - cannot safely do DMA */
+                log_error("DMA map: V86 mode detected without VDS - DMA unsafe!");
+                log_error("DMA map: Use pre-allocated bounce buffers or install VDS provider");
+                return false;
             }
-            if (chunk_size > 0xFFFF) {
-                chunk_size = 0xFFFF;  /* Max 16-bit length */
+
+            /* Pure real mode: calculate physical address directly */
+            {
+                uint32_t phys = ((uint32_t)FP_SEG(buf) << 4) + (uint32_t)FP_OFF(buf);
+                uint32_t remaining;
+                uint32_t current_phys;
+
+                /* Check for real mode 1MB wrap */
+                if (phys + len > 0x100000) {
+                    log_error("DMA map: buffer wraps in real mode");
+                    return false;
+                }
+
+                /* GPT-5 Critical Fix: Handle buffers > 64KB by chunking */
+                remaining = len;
+                current_phys = phys;
+                tmp_in_count = 0;
+
+                while (remaining > 0 && tmp_in_count < DMA_MAX_SG_INTERNAL) {
+                    /* Calculate bytes to next 64KB boundary */
+                    uint32_t offset_in_64k = current_phys & 0xFFFF;
+                    uint32_t bytes_to_boundary = 0x10000 - offset_in_64k;
+
+                    /* Take minimum of remaining, bytes to boundary, and 64KB-1 */
+                    uint32_t chunk_size = remaining;
+                    if (chunk_size > bytes_to_boundary) {
+                        chunk_size = bytes_to_boundary;
+                    }
+                    if (chunk_size > 0xFFFF) {
+                        chunk_size = 0xFFFF;  /* Max 16-bit length */
+                    }
+
+                    tmp_in[tmp_in_count].phys = current_phys;
+                    tmp_in[tmp_in_count].len = (uint16_t)chunk_size;
+                    tmp_in_count++;
+
+                    current_phys += chunk_size;
+                    remaining -= chunk_size;
+                }
+
+                if (remaining > 0) {
+                    log_error("DMA map: buffer too fragmented for real mode");
+                    return false;
+                }
             }
-            
-            tmp_in[tmp_in_count].phys = current_phys;
-            tmp_in[tmp_in_count].len = (uint16_t)chunk_size;
-            tmp_in_count++;
-            
-            current_phys += chunk_size;
-            remaining -= chunk_size;
-        }
-        
-        if (remaining > 0) {
-            log_error("DMA map: buffer too fragmented for real mode");
-            return false;
         }
     }
 
@@ -2061,15 +2139,17 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
     }
 
     /* GPT-5 Fix: Validate caller's fragment array capacity BEFORE copying */
-    uint16_t caller_capacity = *frag_cnt;  /* Input: max fragments caller can accept */
-    if (caller_capacity < tmp_out_count) {
-        log_error("DMA map: caller fragment array too small (capacity %u < needed %u)", 
-                  (unsigned)caller_capacity, (unsigned)tmp_out_count);
-        if (lock_out->vds_used) {
-            vds_unlock_region_sg(lock_out->vds_handle);
-            lock_out->vds_used = 0;
+    {
+        uint16_t caller_capacity = *frag_cnt;  /* Input: max fragments caller can accept */
+        if (caller_capacity < tmp_out_count) {
+            log_error("DMA map: caller fragment array too small (capacity %u < needed %u)",
+                      (unsigned)caller_capacity, (unsigned)tmp_out_count);
+            if (lock_out->vds_used) {
+                vds_unlock_region_sg(lock_out->vds_handle);
+                lock_out->vds_used = 0;
+            }
+            return false;
         }
-        return false;
     }
 
     /* Copy fragments to caller's buffer */
@@ -2079,10 +2159,10 @@ bool dma_lock_and_map_buffer_ex(void __far *buf, uint32_t len, bool sg_ok,
             frags[i] = tmp_out[i];
         }
     }
-    
+
     /* GPT-5 Fix: Set output count to actual fragments used */
     *frag_cnt = tmp_out_count;
-    
+
     /* GPT-5 Fix: Coherency info already stored at beginning */
 
     return true;
@@ -2119,12 +2199,14 @@ bool dma_buffer_is_safe(void __far *buf, uint16_t len, bool using_3c515_bus_mast
     }
     
     /* Use the new locking implementation to validate */
-    bool ok = dma_lock_and_map_buffer(buf, len, true, &lock, frags, &frag_count);
-    
-    /* Immediately unlock since this is just a validation check */
-    dma_unlock_buffer(&lock);
-    
-    return ok;
+    {
+        bool ok = dma_lock_and_map_buffer(buf, len, true, &lock, frags, &frag_count);
+
+        /* Immediately unlock since this is just a validation check */
+        dma_unlock_buffer(&lock);
+
+        return ok;
+    }
 }
 
 /**
@@ -2146,16 +2228,18 @@ static bool validate_buffer_integrity(const dma_buffer_descriptor_t* desc) {
     }
     
     /* Validate checksum */
-    uint16_t expected = desc->checksum;
-    uint16_t actual = calculate_checksum((uint8_t*)desc + sizeof(desc->signature) + sizeof(desc->checksum),
-                                        sizeof(*desc) - sizeof(desc->signature) - sizeof(desc->checksum));
-    
-    if (expected != actual) {
-        log_error("DMA Safety: Buffer checksum mismatch (expected 0x%04X, got 0x%04X)", 
-                 expected, actual);
-        return false;
+    {
+        uint16_t expected = desc->checksum;
+        uint16_t actual = calculate_checksum((uint8_t*)desc + sizeof(desc->signature) + sizeof(desc->checksum),
+                                            sizeof(*desc) - sizeof(desc->signature) - sizeof(desc->checksum));
+
+        if (expected != actual) {
+            log_error("DMA Safety: Buffer checksum mismatch (expected 0x%04X, got 0x%04X)",
+                     expected, actual);
+            return false;
+        }
     }
-    
+
     return true;
 }
 
@@ -2178,15 +2262,17 @@ static bool validate_bounce_buffer(const bounce_buffer_t* bounce) {
     }
     
     /* Validate checksum */
-    uint16_t expected = bounce->checksum;
-    uint16_t actual = calculate_checksum((uint8_t*)bounce + offsetof(bounce_buffer_t, virtual_address),
-                                        offsetof(bounce_buffer_t, checksum) - offsetof(bounce_buffer_t, virtual_address));
-    
-    if (expected != actual) {
-        log_error("DMA Safety: Bounce checksum mismatch");
-        return false;
+    {
+        uint16_t expected = bounce->checksum;
+        uint16_t actual = calculate_checksum((uint8_t*)bounce + offsetof(bounce_buffer_t, virtual_address),
+                                            offsetof(bounce_buffer_t, checksum) - offsetof(bounce_buffer_t, virtual_address));
+
+        if (expected != actual) {
+            log_error("DMA Safety: Bounce checksum mismatch");
+            return false;
+        }
     }
-    
+
     return true;
 }
 
@@ -2239,7 +2325,7 @@ static bool dma_use_bounce_buffer(void __far *buf, uint32_t len, dma_direction_t
     bounce_buffer_t *bounce;
     
     /* Allocate bounce buffer */
-    bounce = allocate_bounce_buffer(DMA_BUFFER_TYPE_GENERAL);
+    bounce = allocate_bounce_buffer(len, DMA_BUFFER_TYPE_GENERAL);
     if (!bounce) {
         log_error("DMA bounce: No available bounce buffers");
         return false;
@@ -2287,13 +2373,13 @@ static bool dma_use_bounce_buffer(void __far *buf, uint32_t len, dma_direction_t
  * @param len Buffer length
  * @param direction DMA direction
  */
-static void dma_sync_for_device(void __far *buf, uint32_t len, dma_direction_t direction)
+static void dma_sync_raw_for_device(void __far *buf, uint32_t len, dma_direction_t direction)
 {
     /* GPT-5 Fix: Use existing safe cache operations instead of inline assembly */
     extern int cache_wbinvd_safe(void);  /* From cache_ops.asm */
     extern int cache_clflush_safe(void __far *addr, uint32_t size);  /* From cache_ops.asm */
     extern bool g_clflush_available;  /* From cache_coherency system */
-    
+
     /* Only flush for non-coherent DMA */
     if (direction == DMA_DIR_TO_DEVICE || direction == DMA_DIR_BIDIRECTIONAL) {
         /* Try CLFLUSH first if available (more efficient) */
@@ -2319,13 +2405,13 @@ static void dma_sync_for_device(void __far *buf, uint32_t len, dma_direction_t d
  * @param len Buffer length
  * @param direction DMA direction
  */
-static void dma_sync_for_cpu(void __far *buf, uint32_t len, dma_direction_t direction)
+static void dma_sync_raw_for_cpu(void __far *buf, uint32_t len, dma_direction_t direction)
 {
     /* GPT-5 Fix: Use existing safe cache operations */
     extern int cache_wbinvd_safe(void);  /* WBINVD is safer than INVD */
     extern int cache_clflush_safe(void __far *addr, uint32_t size);
     extern bool g_clflush_available;
-    
+
     /* Invalidate cache lines for data coming from device */
     if (direction == DMA_DIR_FROM_DEVICE || direction == DMA_DIR_BIDIRECTIONAL) {
         /* Note: INVD is dangerous as it doesn't write back dirty lines */
@@ -2374,8 +2460,8 @@ void dma_unlock_buffer_ex(dma_lock_t *lock)
     }
     
     /* Sync cache for CPU access */
-    if (lock->direction == DMA_DIR_FROM_DEVICE || 
+    if (lock->direction == DMA_DIR_FROM_DEVICE ||
         lock->direction == DMA_DIR_BIDIRECTIONAL) {
-        dma_sync_for_cpu(lock->buffer_addr, lock->buffer_len, lock->direction);
+        dma_sync_raw_for_cpu(lock->buffer_addr, lock->buffer_len, lock->direction);
     }
 }

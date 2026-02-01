@@ -6,34 +6,61 @@
  * configuration information. Useful for debugging and system inventory.
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <stdlib.h>
 #include <string.h>
 #include <dos.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include "pci_bios.h"
 #include "pci_shim.h"
+#include "ovl_data.h"
+
+/* C89 compatibility - types are provided by pci_bios.h via portabl.h */
+/* No local type definitions needed since headers handle this */
+
+/* PCI BIOS function codes for INT 1Ah (if not defined by headers) */
+#ifndef PCI_FUNCTION_ID
+#define PCI_FUNCTION_ID         0xB1
+#endif
+#ifndef PCI_BIOS_PRESENT
+#define PCI_BIOS_PRESENT        0x01
+#endif
+
+/* PCI register offset compatibility macros */
+#ifndef PCI_BASE_ADDRESS_0
+#define PCI_BASE_ADDRESS_0      0x10    /* Same as PCI_BAR0 */
+#endif
+#ifndef PCI_CLASS_REVISION
+#define PCI_CLASS_REVISION      0x08    /* Class code and revision */
+#endif
+#ifndef PCI_SUBSYSTEM_VENDOR_ID
+#define PCI_SUBSYSTEM_VENDOR_ID 0x2C    /* Subsystem vendor ID */
+#endif
+#ifndef PCI_SUBSYSTEM_ID
+#define PCI_SUBSYSTEM_ID        0x2E    /* Subsystem ID */
+#endif
+#ifndef PCI_CAPABILITY_LIST
+#define PCI_CAPABILITY_LIST     0x34    /* Capabilities pointer */
+#endif
 
 /* Display options */
 static struct {
-    bool verbose;       /* Show detailed information */
-    bool show_bars;     /* Display BAR information */
-    bool show_caps;     /* Show capabilities */
-    bool use_shim;      /* Use enhanced shim */
-    bool raw_dump;      /* Dump raw config space */
-    uint8_t target_bus; /* Specific bus to scan (-1 for all) */
+    int verbose;        /* Show detailed information */
+    int show_bars;      /* Display BAR information */
+    int show_caps;      /* Show capabilities */
+    int use_shim;       /* Use enhanced shim */
+    int raw_dump;       /* Dump raw config space */
+    uint8_t target_bus; /* Specific bus to scan (0xFF for all) */
 } options = {
-    .verbose = false,
-    .show_bars = false,
-    .show_caps = false,
-    .use_shim = false,
-    .raw_dump = false,
-    .target_bus = 0xFF
+    0,      /* verbose */
+    0,      /* show_bars */
+    0,      /* show_caps */
+    0,      /* use_shim */
+    0,      /* raw_dump */
+    0xFF    /* target_bus */
 };
 
 /* PCI class code names */
-static const char* get_class_name(uint8_t class_code) {
+static const char *get_class_name(uint8_t class_code) {
     switch (class_code) {
         case 0x00: return "Pre-PCI 2.0";
         case 0x01: return "Mass Storage";
@@ -58,7 +85,7 @@ static const char* get_class_name(uint8_t class_code) {
 }
 
 /* Get subclass name for network devices */
-static const char* get_network_subclass(uint8_t subclass) {
+static const char *get_network_subclass(uint8_t subclass) {
     switch (subclass) {
         case 0x00: return "Ethernet";
         case 0x01: return "Token Ring";
@@ -72,13 +99,19 @@ static const char* get_network_subclass(uint8_t subclass) {
     }
 }
 
+/*
+ * Init-only PCI vendor/device lookup tables - placed in overlay segment.
+ * With OVL_DETECT_CONST, these tables are loaded/unloaded with the overlay.
+ * String literals go to code segment via -zc.
+ */
+
 /* Known vendor names */
 typedef struct {
     uint16_t vendor_id;
-    const char* name;
+    const char *name;
 } vendor_info_t;
 
-static const vendor_info_t known_vendors[] = {
+static OVL_DETECT_CONST vendor_info_t known_vendors[] = {
     {0x8086, "Intel"},
     {0x1022, "AMD"},
     {0x10DE, "NVIDIA"},
@@ -103,7 +136,7 @@ static const vendor_info_t known_vendors[] = {
 };
 
 /* Get vendor name */
-static const char* get_vendor_name(uint16_t vendor_id) {
+static const char *get_vendor_name(uint16_t vendor_id) {
     int i;
     for (i = 0; known_vendors[i].name != NULL; i++) {
         if (known_vendors[i].vendor_id == vendor_id) {
@@ -113,13 +146,13 @@ static const char* get_vendor_name(uint16_t vendor_id) {
     return "Unknown";
 }
 
-/* Known 3Com device names */
+/* Known 3Com device names - overlay-local */
 typedef struct {
     uint16_t device_id;
-    const char* name;
+    const char *name;
 } device_info_t;
 
-static const device_info_t known_3com_devices[] = {
+static OVL_DETECT_CONST device_info_t known_3com_devices[] = {
     {0x5900, "3C590 Vortex 10Mbps"},
     {0x5920, "3C592 EISA 10Mbps Demon"},
     {0x5950, "3C595 Vortex 100baseTx"},
@@ -161,7 +194,7 @@ static const device_info_t known_3com_devices[] = {
 };
 
 /* Get 3Com device name */
-static const char* get_3com_device_name(uint16_t device_id) {
+static const char __far *get_3com_device_name(uint16_t device_id) {
     int i;
     for (i = 0; known_3com_devices[i].name != NULL; i++) {
         if (known_3com_devices[i].device_id == device_id) {
@@ -175,60 +208,64 @@ static const char* get_3com_device_name(uint16_t device_id) {
 static void display_bar(uint8_t bus, uint8_t dev, uint8_t func, int bar_num) {
     uint8_t offset = PCI_BASE_ADDRESS_0 + (bar_num * 4);
     uint32_t bar_value, size, original;
-    
+    uint16_t io_base;
+    uint32_t mem_base;
+    uint8_t mem_type;
+    const char *type_str;
+
     /* Read current BAR value */
     bar_value = pci_read_config_dword(bus, dev, func, offset);
-    
-    if (bar_value == 0 || bar_value == 0xFFFFFFFF) {
+
+    if (bar_value == 0 || bar_value == 0xFFFFFFFFUL) {
         return;  /* BAR not implemented */
     }
-    
+
     /* Save original value */
     original = bar_value;
-    
+
     /* Write all 1s to determine size */
-    pci_write_config_dword(bus, dev, func, offset, 0xFFFFFFFF);
+    pci_write_config_dword(bus, dev, func, offset, 0xFFFFFFFFUL);
     size = pci_read_config_dword(bus, dev, func, offset);
-    
+
     /* Restore original value */
     pci_write_config_dword(bus, dev, func, offset, original);
-    
-    if (size == 0 || size == 0xFFFFFFFF) {
+
+    if (size == 0 || size == 0xFFFFFFFFUL) {
         return;
     }
-    
+
     /* Determine type and size */
     if (bar_value & 0x01) {
         /* I/O space */
-        uint16_t io_base = bar_value & 0xFFFC;
+        io_base = (uint16_t)(bar_value & 0xFFFC);
         size = (~(size & 0xFFFC) + 1) & 0xFFFF;
-        printf("    BAR%d: I/O at 0x%04X [size=%u]\n", bar_num, io_base, size);
+        printf("    BAR%d: I/O at 0x%04X [size=%lu]\n", bar_num, io_base, size);
     } else {
         /* Memory space */
-        uint32_t mem_base = bar_value & 0xFFFFFFF0;
-        uint8_t mem_type = (bar_value >> 1) & 0x03;
-        const char* type_str = "";
-        
+        mem_base = bar_value & 0xFFFFFFF0UL;
+        mem_type = (uint8_t)((bar_value >> 1) & 0x03);
+        type_str = "";
+
         switch (mem_type) {
             case 0: type_str = "32-bit"; break;
             case 1: type_str = "< 1MB"; break;
             case 2: type_str = "64-bit"; break;
             case 3: type_str = "Reserved"; break;
         }
-        
-        size = ~(size & 0xFFFFFFF0) + 1;
-        
+
+        size = ~(size & 0xFFFFFFF0UL) + 1;
+
         if (size < 1024) {
             printf("    BAR%d: Memory at 0x%08lX [%s, size=%lu]\n",
                    bar_num, mem_base, type_str, size);
-        } else if (size < 1048576) {
+        } else if (size < 1048576UL) {
             printf("    BAR%d: Memory at 0x%08lX [%s, size=%luK]\n",
                    bar_num, mem_base, type_str, size / 1024);
         } else {
             printf("    BAR%d: Memory at 0x%08lX [%s, size=%luM]\n",
-                   bar_num, mem_base, type_str, size / 1048576);
+                   bar_num, mem_base, type_str, size / 1048576UL);
         }
-        
+
         /* Skip next BAR if 64-bit */
         if (mem_type == 2) {
             bar_num++;
@@ -287,19 +324,21 @@ static void display_capabilities(uint8_t bus, uint8_t dev, uint8_t func) {
 /* Dump raw config space */
 static void dump_config_space(uint8_t bus, uint8_t dev, uint8_t func) {
     int i, j;
+    uint8_t byte;
+
     printf("    Config Space:\n");
 
     for (i = 0; i < 256; i += 16) {
         printf("      %02X:", i);
 
         for (j = 0; j < 16; j++) {
-            uint8_t byte = pci_read_config_byte(bus, dev, func, i + j);
+            byte = pci_read_config_byte(bus, dev, func, i + j);
             printf(" %02X", byte);
         }
 
         printf("  ");
         for (j = 0; j < 16; j++) {
-            uint8_t byte = pci_read_config_byte(bus, dev, func, i + j);
+            byte = pci_read_config_byte(bus, dev, func, i + j);
             if (byte >= 32 && byte < 127) {
                 printf("%c", byte);
             } else {
@@ -317,7 +356,13 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     uint32_t class_code;
     uint8_t header_type;
     uint8_t irq, int_pin;
-    
+    uint8_t pci_class, subclass, prog_if;
+    uint8_t revision;
+    uint16_t subsys_vendor, subsys_device;
+    uint16_t command, status;
+    uint8_t latency, cache_line;
+    int i;
+
     /* Read vendor ID */
     vendor_id = pci_read_config_word(bus, dev, func, PCI_VENDOR_ID);
     
@@ -335,13 +380,13 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     printf("%02X:%02X.%X ", bus, dev, func);
     
     /* Class and subclass */
-    uint8_t class = (class_code >> 16) & 0xFF;
-    uint8_t subclass = (class_code >> 8) & 0xFF;
-    uint8_t prog_if = class_code & 0xFF;
+    pci_class = (class_code >> 16) & 0xFF;
+    subclass = (class_code >> 8) & 0xFF;
+    prog_if = class_code & 0xFF;
+
+    printf("%s", get_class_name(pci_class));
     
-    printf("%s", get_class_name(class));
-    
-    if (class == 0x02) {  /* Network */
+    if (pci_class == 0x02) {  /* Network */
         printf("/%s", get_network_subclass(subclass));
     } else if (subclass != 0) {
         printf("/%02X", subclass);
@@ -360,7 +405,7 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     }
     
     /* Revision */
-    uint8_t revision = pci_read_config_byte(bus, dev, func, PCI_CLASS_REVISION);
+    revision = pci_read_config_byte(bus, dev, func, PCI_CLASS_REVISION);
     if (revision != 0) {
         printf(" (rev %02X)", revision);
     }
@@ -370,16 +415,16 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     /* Verbose information */
     if (options.verbose) {
         /* Subsystem IDs */
-        uint16_t subsys_vendor = pci_read_config_word(bus, dev, func, PCI_SUBSYSTEM_VENDOR_ID);
-        uint16_t subsys_device = pci_read_config_word(bus, dev, func, PCI_SUBSYSTEM_ID);
-        
+        subsys_vendor = pci_read_config_word(bus, dev, func, PCI_SUBSYSTEM_VENDOR_ID);
+        subsys_device = pci_read_config_word(bus, dev, func, PCI_SUBSYSTEM_ID);
+
         if (subsys_vendor != 0 && subsys_vendor != 0xFFFF) {
             printf("    Subsystem: %04X:%04X\n", subsys_vendor, subsys_device);
         }
-        
+
         /* Command and status */
-        uint16_t command = pci_read_config_word(bus, dev, func, PCI_COMMAND);
-        uint16_t status = pci_read_config_word(bus, dev, func, PCI_STATUS);
+        command = pci_read_config_word(bus, dev, func, PCI_COMMAND);
+        status = pci_read_config_word(bus, dev, func, PCI_STATUS);
         
         printf("    Control: I/O%c Mem%c BusMaster%c",
                (command & 0x01) ? '+' : '-',
@@ -418,8 +463,8 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
         }
         
         /* Latency and cache line */
-        uint8_t latency = pci_read_config_byte(bus, dev, func, PCI_LATENCY_TIMER);
-        uint8_t cache_line = pci_read_config_byte(bus, dev, func, PCI_CACHE_LINE_SIZE);
+        latency = pci_read_config_byte(bus, dev, func, PCI_LATENCY_TIMER);
+        cache_line = pci_read_config_byte(bus, dev, func, PCI_CACHE_LINE_SIZE);
         
         if (latency != 0 || cache_line != 0) {
             printf("    Latency: %d", latency);
@@ -432,7 +477,6 @@ static void scan_device(uint8_t bus, uint8_t dev, uint8_t func) {
     
     /* BARs */
     if (options.show_bars) {
-        int i;
         for (i = 0; i < 6; i++) {
             display_bar(bus, dev, func, i);
         }
@@ -456,14 +500,21 @@ static void scan_pci_bus(void) {
     uint8_t max_bus = 0;
     uint8_t header_type;
     int devices_found = 0;
-    
+    pci_shim_stats_t stats;
+    uint8_t start_bus = 0;
+    uint8_t end_bus;
+    uint8_t bus, dev, func;
+    uint16_t vendor_id;
+    unsigned long total_accesses;
+    unsigned long hit_percent;
+
     /* Get maximum bus number */
     memset(&regs, 0, sizeof(regs));
     memset(&sregs, 0, sizeof(sregs));
-    
-    regs.x.ax = PCI_FUNCTION_ID | PCI_BIOS_PRESENT;
+
+    regs.x.ax = (PCI_FUNCTION_ID << 8) | PCI_BIOS_PRESENT;
     int86x(0x1A, &regs, &regs, &sregs);
-    
+
     if (regs.x.cflag == 0) {
         max_bus = regs.h.cl;
         printf("PCI BIOS v%d.%d present, last bus=%d\n\n",
@@ -472,38 +523,34 @@ static void scan_pci_bus(void) {
         printf("PCI BIOS not present!\n");
         return;
     }
-    
+
     /* Install enhanced shim if requested */
     if (options.use_shim) {
         if (pci_shim_enhanced_install()) {
             printf("Enhanced PCI shim installed\n");
-            
+
             /* Show shim stats */
-            pci_shim_stats_t stats;
             pci_shim_get_extended_stats(&stats);
-            
+
             printf("  V86 mode: %s\n", stats.in_v86_mode ? "Yes" : "No");
             printf("  Cache: %s\n", stats.cache_enabled ? "Enabled" : "Disabled");
             printf("  Mechanism: #%d\n\n", stats.mechanism);
         }
     }
-    
+
     /* Determine bus range to scan */
-    uint8_t start_bus = 0;
-    uint8_t end_bus = max_bus;
-    
+    end_bus = max_bus;
+
     if (options.target_bus != 0xFF) {
         start_bus = options.target_bus;
         end_bus = options.target_bus;
     }
 
     /* Scan buses */
-    {
-    uint8_t bus, dev;
     for (bus = start_bus; bus <= end_bus; bus++) {
         for (dev = 0; dev < 32; dev++) {
             /* Check function 0 first */
-            uint16_t vendor_id = pci_read_config_word(bus, dev, 0, PCI_VENDOR_ID);
+            vendor_id = pci_read_config_word(bus, dev, 0, PCI_VENDOR_ID);
 
             if (vendor_id == 0xFFFF || vendor_id == 0x0000) {
                 continue;  /* No device */
@@ -518,7 +565,6 @@ static void scan_pci_bus(void) {
 
             if (header_type & 0x80) {
                 /* Multi-function device, scan other functions */
-                uint8_t func;
                 for (func = 1; func < 8; func++) {
                     vendor_id = pci_read_config_word(bus, dev, func, PCI_VENDOR_ID);
 
@@ -530,27 +576,31 @@ static void scan_pci_bus(void) {
             }
         }
     }
-    }
-    
+
     printf("\nTotal devices found: %d\n", devices_found);
-    
+
     /* Show shim statistics if used */
     if (options.use_shim) {
-        pci_shim_stats_t stats;
         pci_shim_get_extended_stats(&stats);
-        
+
         printf("\nShim Statistics:\n");
         printf("  Total calls: %lu\n", stats.total_calls);
-        printf("  Cache hits: %lu (%.1f%%)\n",
-               stats.cache_hits,
-               stats.cache_hits * 100.0 / (stats.cache_hits + stats.cache_misses + 1));
-        
+
+        /* Calculate percentage without floating point */
+        total_accesses = stats.cache_hits + stats.cache_misses;
+        if (total_accesses > 0) {
+            hit_percent = (stats.cache_hits * 100UL) / total_accesses;
+        } else {
+            hit_percent = 0;
+        }
+        printf("  Cache hits: %lu (%lu%%)\n", stats.cache_hits, hit_percent);
+
         pci_shim_enhanced_uninstall();
     }
 }
 
 /* Display help */
-static void show_help(const char* prog_name) {
+static void show_help(const char *prog_name) {
     printf("PCI Bus Scanner v1.0\n");
     printf("Usage: %s [options]\n", prog_name);
     printf("Options:\n");
@@ -569,21 +619,21 @@ static void show_help(const char* prog_name) {
 }
 
 /* Parse command line */
-static void parse_args(int argc, char* argv[]) {
+static void parse_args(int argc, char *argv[]) {
     int i;
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            options.verbose = true;
+            options.verbose = 1;
         } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--bars") == 0) {
-            options.show_bars = true;
+            options.show_bars = 1;
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--caps") == 0) {
-            options.show_caps = true;
+            options.show_caps = 1;
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--shim") == 0) {
-            options.use_shim = true;
+            options.use_shim = 1;
         } else if (strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--raw") == 0) {
-            options.raw_dump = true;
+            options.raw_dump = 1;
         } else if (strcmp(argv[i], "-B") == 0 && i + 1 < argc) {
-            options.target_bus = atoi(argv[++i]);
+            options.target_bus = (uint8_t)atoi(argv[++i]);
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             show_help(argv[0]);
             exit(0);
@@ -596,7 +646,7 @@ static void parse_args(int argc, char* argv[]) {
 }
 
 /* Main function */
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     /* Parse command line */
     parse_args(argc, argv);
     

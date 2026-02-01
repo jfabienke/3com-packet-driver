@@ -10,7 +10,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <malloc.h>  /* For _ffree on Watcom */
 #include "../../include/main.h"
@@ -20,6 +20,7 @@
 #include "../../include/logging.h"
 #include "../../include/vds.h"
 #include "../../include/config.h"
+#include "../../include/ovl_data.h"
 
 /* Forward declarations for VDS manager cleanup */
 extern void vds_manager_cleanup(void);
@@ -67,16 +68,26 @@ static void unwind_api_active(void);
  * This table is in REVERSE order of initialization phases.
  * During unwind, we iterate through this table from top to bottom.
  * This ensures proper cleanup in reverse initialization order.
- * 
+ *
  * Example: If init order is: CPU -> Platform -> Config -> ... -> API -> Interrupts
  *          Then unwind is:   Interrupts -> API -> ... -> Config -> Platform -> CPU
- * 
+ *
  * Current ordering is CORRECT:
  * - TSR comes BEFORE API_HOOKS in this unwind table
  * - This means TSR was initialized AFTER API_HOOKS (correct init order)
  * - During unwind, API_HOOKS cleanup happens before TSR cleanup (correct)
  */
-static const unwind_entry_t unwind_table[] = {
+
+/*
+ * Init-only unwind table - placed in INIT_FINAL overlay segment.
+ * With OVL_FINAL_CONST, this table is loaded/unloaded with the overlay.
+ * String literals go to code segment via -zc.
+ *
+ * NOTE: This table contains function pointers to unwind functions which
+ * are also in this overlay. Both table and functions are co-located.
+ */
+
+static OVL_FINAL_CONST unwind_entry_t unwind_table[] = {
     { UNWIND_PHASE_API_ACTIVE,     "API Activation",     unwind_api_active },
     { UNWIND_PHASE_INTERRUPTS,     "Interrupt Enable",   unwind_interrupts },
     { UNWIND_PHASE_API_HOOKS,      "API Hooks",         unwind_api_hooks },

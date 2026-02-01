@@ -7,7 +7,7 @@
  */
 
 #include <string.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <stdlib.h>
 #ifdef __WATCOMC__
 #include <malloc.h>     /* For halloc/hfree on Watcom */

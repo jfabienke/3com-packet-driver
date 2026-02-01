@@ -12,13 +12,13 @@
  * - All patching done before TSR installation
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
-#include "../include/module_header.h"
-#include "../include/cpu_detect.h"
+#include "../include/modhdr.h"
+#include "../include/cpudet.h"
 #include "../include/logging.h"
-#include "../include/production.h"
+#include "../include/prod.h"
 #include "../include/platform_probe.h"
 #include "../include/config.h"
 #include "../include/vds.h"
@@ -34,6 +34,9 @@
 extern void asm_atomic_patch(void far* dest, const void far* src, uint16_t size);
 extern void asm_flush_prefetch(void);
 extern uint16_t asm_measure_pit_ticks(void);
+
+/* Forward declarations */
+int verify_patches_applied(void);
 
 /* Statistics for patch operations */
 static struct {
@@ -97,7 +100,8 @@ static int apply_single_patch(void far* dest, const uint8_t* patch, uint8_t size
     
     /* Flush prefetch queue with near JMP */
     __asm {
-        jmp short $+2   ; Near jump to flush prefetch
+        jmp short flush_label   ; Near jump to flush prefetch
+    flush_label:
     }
     
     _enable();
@@ -174,12 +178,12 @@ do_patch:
 
     /* Compute rel16 to transfer_{dma|pio} from PATCH_3c515_transfer+3 */
     {
-        extern void far PATCH_3c515_transfer(void);
+        extern uint8_t far PATCH_3c515_transfer;
         extern void transfer_dma(void);
         extern void transfer_pio(void);
 
         uint16_t target_off = (uint16_t)(use_dma ? FP_OFF(transfer_dma) : FP_OFF(transfer_pio));
-        uint16_t site_off = FP_OFF(PATCH_3c515_transfer);
+        uint16_t site_off = FP_OFF(&PATCH_3c515_transfer);
         rel = (uint16_t)(target_off - (site_off + 3));
         patch_bytes[1] = (uint8_t)(rel & 0xFF);
         patch_bytes[2] = (uint8_t)((rel >> 8) & 0xFF);
@@ -188,7 +192,7 @@ do_patch:
     /* Apply patch atomically */
     {
         extern uint8_t far PATCH_3c515_transfer;
-        int rc = apply_single_patch(&PATCH_3c515_transfer, patch_bytes, 5);
+        int rc = apply_single_patch((void far*)&PATCH_3c515_transfer, patch_bytes, 5);
         if (rc == SUCCESS) {
             LOG_INFO("3C515 transfer method: %s", use_dma ? "DMA" : "PIO");
         } else {
@@ -211,14 +215,15 @@ static const uint8_t* select_patch_variant(const patch_entry_t* entry,
     switch (cpu_type) {
     case CPU_TYPE_8086:
         return entry->cpu_8086;
+    case CPU_TYPE_80186:
+        return entry->cpu_8086;  /* Use 8086 variant for 186 */
     case CPU_TYPE_80286:
         return entry->cpu_286;
     case CPU_TYPE_80386:
         return entry->cpu_386;
     case CPU_TYPE_80486:
         return entry->cpu_486;
-    case CPU_TYPE_PENTIUM:
-    case CPU_TYPE_PENTIUM_PRO:
+    case CPU_TYPE_CPUID_CAPABLE:  /* Pentium and later */
         return entry->cpu_pentium;
     default:
         return entry->cpu_8086;  /* Fallback to 8086 */
@@ -315,62 +320,77 @@ int apply_module_patches(module_header_t* module, const cpu_info_t* cpu_info) {
 /**
  * @brief Initialize and apply all SMC patches
  * @return SUCCESS or error code
- * 
+ *
  * Main entry point for patch application during loader initialization.
  * Called once before TSR installation.
  */
 int patch_init_and_apply(void) {
     const cpu_info_t* cpu_info;
-    module_header_t* packet_api_module;
-    module_header_t* nic_irq_module;
-    module_header_t* hardware_module;
     int result;
-    
+
     LOG_INFO("Initializing SMC patch framework");
-    
+
     /* Get CPU information */
     cpu_info = cpu_get_info();
     if (!cpu_info) {
         LOG_ERROR("CPU information not available");
         return -1;
     }
-    
+
     LOG_INFO("Applying patches for %s CPU", cpu_info->cpu_name);
-    
-    /* Apply patches to each module */
-    /* Note: Module addresses would be provided by the loader */
-    
+
     #ifdef PRODUCTION
     printf("Optimizing for %s...\n", cpu_info->cpu_name);
     #endif
-    
+
     /* Apply patches to packet API module */
-    extern module_header_t packet_api_module_header;
-    result = apply_module_patches(&packet_api_module_header, cpu_info);
-    if (result != SUCCESS) {
-        LOG_ERROR("Failed to patch packet_api module");
-        return result;
+    {
+        extern module_header_t packet_api_module_header;
+        result = apply_module_patches(&packet_api_module_header, cpu_info);
+        if (result != SUCCESS) {
+            LOG_ERROR("Failed to patch packet_api module");
+            return result;
+        }
     }
-    
+
     /* CRITICAL FIX: Apply patches to NIC IRQ module (contains DMA/cache safety points) */
-    extern module_header_t nic_irq_module_header;
-    result = apply_module_patches(&nic_irq_module_header, cpu_info);
-    if (result != SUCCESS) {
-        LOG_ERROR("Failed to patch nic_irq module");
-        return result;
+    {
+        extern module_header_t nic_irq_module_header;
+        result = apply_module_patches(&nic_irq_module_header, cpu_info);
+        if (result != SUCCESS) {
+            LOG_ERROR("Failed to patch nic_irq module");
+            return result;
+        }
     }
-    
+
     /* Apply patches to hardware module */
-    extern module_header_t hardware_module_header;
-    result = apply_module_patches(&hardware_module_header, cpu_info);
-    if (result != SUCCESS) {
-        LOG_ERROR("Failed to patch hardware module");
-        return result;
+    {
+        extern module_header_t hardware_module_header;
+        result = apply_module_patches(&hardware_module_header, cpu_info);
+        if (result != SUCCESS) {
+            LOG_ERROR("Failed to patch hardware module");
+            return result;
+        }
     }
-    
-    LOG_INFO("SMC patching complete: %d total patches applied", 
+
+    /* Platform init (sets g_platform and policy) */
+    platform_init();
+
+    /* Verify critical patches present */
+    result = verify_patches_applied();
+    if (result != SUCCESS) {
+        /* Proceed with PIO enforced */
+    }
+
+    /* Apply DMA vs PIO selection (3C515 only) */
+    {
+        extern config_t g_config;
+        apply_dma_pio_selection(&g_config);
+    }
+
+    LOG_INFO("SMC patching complete: %d total patches applied",
             patch_stats.patches_applied);
-    
+
     return SUCCESS;
 }
 
@@ -402,29 +422,31 @@ int validate_timing_constraints(void) {
  * If patches are still NOPs, forces PIO mode for safety.
  */
 int verify_patches_applied(void) {
+    /* C89: All declarations at start of block */
+    extern uint8_t far PATCH_dma_boundary_check;
+    extern uint8_t far PATCH_cache_flush_pre;
+    extern uint8_t far PATCH_3c515_transfer;
+    extern int global_force_pio_mode;
     uint8_t far *patch_site;
     int patches_valid = 1;
-    
+
     /* Check critical patch points are not NOPs */
-    
+
     /* Check DMA boundary check patch */
-    extern uint8_t far PATCH_dma_boundary_check;
     patch_site = &PATCH_dma_boundary_check;
     if (patch_site[0] == 0x90 && patch_site[1] == 0x90) {  /* NOPs */
         LOG_ERROR("CRITICAL: DMA boundary check patch not applied!");
         patches_valid = 0;
     }
-    
+
     /* Check cache flush pre patch */
-    extern uint8_t far PATCH_cache_flush_pre;
     patch_site = &PATCH_cache_flush_pre;
     if (patch_site[0] == 0x90 && patch_site[1] == 0x90) {  /* NOPs */
         LOG_ERROR("CRITICAL: Cache flush pre patch not applied!");
         patches_valid = 0;
     }
-    
+
     /* Check 3C515 transfer patch (should be PIO by default) */
-    extern uint8_t far PATCH_3c515_transfer;
     patch_site = &PATCH_3c515_transfer;
     if (patch_site[0] == 0xE8) {  /* CALL instruction */
         LOG_INFO("3C515 transfer patch verified (CALL instruction present)");
@@ -432,21 +454,20 @@ int verify_patches_applied(void) {
         LOG_ERROR("CRITICAL: 3C515 transfer patch not applied!");
         patches_valid = 0;
     }
-    
+
     if (!patches_valid) {
         LOG_ERROR("Safety patches missing - forcing PIO mode!");
-        
+
         /* Set global flag to force PIO for all NICs */
-        extern int global_force_pio_mode;
         global_force_pio_mode = 1;
-        
+
         #ifdef PRODUCTION
         printf("WARNING: Safety patches not active, using PIO mode\n");
         #endif
-        
+
         return -1;
     }
-    
+
     LOG_INFO("All critical patches verified as active");
     return SUCCESS;
 }
@@ -461,36 +482,3 @@ void asm_flush_prefetch(void) {
 
 /* Restore default code segment */
 #pragma code_seg()
-
-/* Public entry to initialize and apply patches including DMA/PIO selection */
-int patch_init_and_apply(void) {
-    int result;
-    const cpu_info_t* cpu_info = cpu_get_info();
-    if (!cpu_info) return -1;
-
-    /* Apply CPU-class patches to all modules */
-    extern module_header_t packet_api_module_header;
-    extern module_header_t nic_irq_module_header;
-    extern module_header_t hardware_module_header;
-    result = apply_module_patches(&packet_api_module_header, cpu_info);
-    if (result != SUCCESS) return result;
-    result = apply_module_patches(&nic_irq_module_header, cpu_info);
-    if (result != SUCCESS) return result;
-    result = apply_module_patches(&hardware_module_header, cpu_info);
-    if (result != SUCCESS) return result;
-
-    /* Platform init (sets g_platform and policy) */
-    platform_init();
-
-    /* Verify critical patches present */
-    result = verify_patches_applied();
-    if (result != SUCCESS) {
-        /* Proceed with PIO enforced */
-    }
-
-    /* Apply DMA vs PIO selection (3C515 only) */
-    extern config_t g_config;
-    apply_dma_pio_selection(&g_config);
-
-    return SUCCESS;
-}

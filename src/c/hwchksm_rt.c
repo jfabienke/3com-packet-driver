@@ -33,7 +33,8 @@
 #include "main.h"
 #include "diag.h"
 #include <string.h>
-#include <stdio.h>
+/* NOTE: stdio.h REMOVED to avoid C library bloat (~40KB)
+ * hw_checksum_print_stats() is now a stub - use hwchksm_init.c for diagnostics */
 
 /* ========================================================================== */
 /* External declarations for global state (defined in hwchksm_init.c)        */
@@ -454,19 +455,9 @@ int hw_checksum_clear_stats(void) {
 }
 
 void hw_checksum_print_stats(void) {
-    printf("\n=== Hardware Checksum Statistics ===\n");
-    printf("TX Checksums Calculated: %lu\n", global_checksum_stats.tx_checksums_calculated);
-    printf("RX Checksums Validated:  %lu\n", global_checksum_stats.rx_checksums_validated);
-    printf("Hardware Offloads:       %lu\n", global_checksum_stats.hardware_offloads);
-    printf("Software Fallbacks:      %lu\n", global_checksum_stats.software_fallbacks);
-    printf("Checksum Errors:         %lu\n", global_checksum_stats.checksum_errors);
-    printf("Total Bytes Processed:   %lu\n", global_checksum_stats.total_bytes_processed);
-    printf("\nProtocol Breakdown:\n");
-    printf("  IP Checksums:   %lu\n", global_checksum_stats.ip_checksums);
-    printf("  TCP Checksums:  %lu\n", global_checksum_stats.tcp_checksums);
-    printf("  UDP Checksums:  %lu\n", global_checksum_stats.udp_checksums);
-    printf("  ICMP Checksums: %lu\n", global_checksum_stats.icmp_checksums);
-    printf("=====================================\n");
+    /* Stub - diagnostic printing removed from runtime to save ~40KB
+     * Full diagnostic output is in hwchksm_init.c (OVERLAY segment)
+     * Statistics can still be retrieved via hw_checksum_get_stats() */
 }
 
 /* ========================================================================== */

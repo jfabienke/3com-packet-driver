@@ -9,7 +9,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include "../../include/common.h"
 #include "../../include/xmsdet.h"
@@ -65,6 +65,91 @@ static xms_info_t xms_info = {0};
 static xms_handle_t xms_handles[XMS_MAX_HANDLES];
 static int num_handles = 0;
 
+#ifdef __WATCOMC__
+/*
+ * Watcom C requires #pragma aux for inline assembly.
+ * These helper functions provide XMS driver calling capability.
+ */
+
+/* Structure for passing XMS call parameters and results */
+typedef struct {
+    uint8_t  ah_in;      /* Function number (AH input) */
+    uint16_t dx_in;      /* DX input value */
+    uint16_t ax_out;     /* AX return value */
+    uint16_t dx_out;     /* DX return value */
+    uint8_t  bl_out;     /* BL return value (error code) */
+} xms_call_data_t;
+
+/* Structure for XMS move call parameters */
+typedef struct {
+    uint16_t ds_in;      /* DS value for move params segment */
+    uint16_t si_in;      /* SI value for move params offset */
+    uint16_t ax_out;     /* AX return value */
+    uint8_t  bl_out;     /* BL return value (error code) */
+} xms_move_data_t;
+
+/*
+ * Raw XMS call helper - calls XMS entry point with AH=function, DX=param
+ * Parameters passed via far pointer to data structure
+ */
+void xms_call_raw(xms_call_data_t far* data, void (far *entry)(void));
+#pragma aux xms_call_raw = \
+    "push ds"               \
+    "push si"               \
+    "push bx"               \
+    "mov si, ax"            \
+    "mov ds, dx"            \
+    "mov ah, [si]"          \
+    "mov dx, [si+1]"        \
+    "push ds"               \
+    "push si"               \
+    "push cx"               \
+    "push di"               \
+    "call dword ptr [di]"   \
+    "pop di"                \
+    "pop cx"                \
+    "pop si"                \
+    "pop ds"                \
+    "mov [si+3], ax"        \
+    "mov [si+5], dx"        \
+    "mov [si+7], bl"        \
+    "pop bx"                \
+    "pop si"                \
+    "pop ds"                \
+    parm [dx ax] [cx di]    \
+    modify [ax bx dx];
+
+/*
+ * XMS move call helper - calls XMS entry point with DS:SI pointing to move params
+ */
+void xms_move_raw(xms_move_data_t far* data, void (far *entry)(void));
+#pragma aux xms_move_raw = \
+    "push ds"               \
+    "push si"               \
+    "push bx"               \
+    "mov bx, ax"            \
+    "mov ds, dx"            \
+    "push ds"               \
+    "push bx"               \
+    "mov ah, 0Bh"           \
+    "mov si, [bx+2]"        \
+    "mov ds, [bx]"          \
+    "push cx"               \
+    "push di"               \
+    "call dword ptr [di]"   \
+    "pop di"                \
+    "pop cx"                \
+    "pop bx"                \
+    "pop ds"                \
+    "mov [bx+4], ax"        \
+    "mov [bx+6], bl"        \
+    "pop bx"                \
+    "pop si"                \
+    "pop ds"                \
+    parm [dx ax] [cx di]    \
+    modify [ax bx dx si];
+#endif /* __WATCOMC__ */
+
 /**
  * @brief Check if XMS driver is installed
  * @return 1 if installed, 0 if not
@@ -114,14 +199,15 @@ static int xms_call(int function, int dx) {
     /* Call XMS driver through far function pointer */
     /* Use inline assembly for proper XMS driver call */
 #ifdef __WATCOMC__
-    /* Watcom C inline assembly */
-    _asm {
-        mov ah, byte ptr function
-        mov dx, word ptr dx
-        call dword ptr xms_entry_point
-        mov word ptr regs.x.ax, ax
-        mov word ptr regs.x.dx, dx
-        mov word ptr regs.h.bl, bl
+    /* Watcom C - use #pragma aux helper function */
+    {
+        xms_call_data_t call_data;
+        call_data.ah_in = (uint8_t)function;
+        call_data.dx_in = (uint16_t)dx;
+        xms_call_raw(&call_data, xms_entry_point);
+        regs.x.ax = call_data.ax_out;
+        regs.x.dx = call_data.dx_out;
+        regs.h.bl = call_data.bl_out;
     }
 #elif defined(__TURBOC__)
     /* Turbo C inline assembly */
@@ -175,13 +261,15 @@ static int xms_call_extended(int function, int dx, uint16_t *ax_ret, uint16_t *d
     
     /* Call XMS driver through far function pointer */
 #ifdef __WATCOMC__
-    _asm {
-        mov ah, byte ptr function
-        mov dx, word ptr dx
-        call dword ptr xms_entry_point
-        mov word ptr regs.x.ax, ax
-        mov word ptr regs.x.dx, dx
-        mov byte ptr regs.h.bl, bl
+    /* Watcom C - use #pragma aux helper function */
+    {
+        xms_call_data_t call_data;
+        call_data.ah_in = (uint8_t)function;
+        call_data.dx_in = (uint16_t)dx;
+        xms_call_raw(&call_data, xms_entry_point);
+        regs.x.ax = call_data.ax_out;
+        regs.x.dx = call_data.dx_out;
+        regs.h.bl = call_data.bl_out;
     }
 #elif defined(__TURBOC__)
     asm {
@@ -549,28 +637,28 @@ int xms_move_memory(uint16_t dest_handle, uint32_t dest_offset,
         uint16_t dest_handle;
         uint32_t dest_offset;
     } PACKED move_params;
-    
+
     uint8_t bl_val;
-    
+    union REGS regs;
+    struct SREGS sregs;
+
     if (!xms_available) {
         return XMS_ERR_NOT_AVAILABLE;
     }
-    
+
     if (length == 0) {
         return 0; /* Nothing to move */
     }
-    
+
     /* Set up move parameters structure */
     move_params.length = length;
     move_params.src_handle = src_handle;
     move_params.src_offset = src_offset;
     move_params.dest_handle = dest_handle;
     move_params.dest_offset = dest_offset;
-    
+
     /* Call XMS move function with DS:SI pointing to parameters */
     /* Note: This requires more complex assembly for the parameter block */
-    union REGS regs;
-    struct SREGS sregs;
     
     regs.h.ah = XMS_MOVE_EXTENDED;
     sregs.ds = FP_SEG(&move_params);
@@ -578,14 +666,14 @@ int xms_move_memory(uint16_t dest_handle, uint32_t dest_offset,
     
     /* Call XMS driver through far function pointer */
 #ifdef __WATCOMC__
-    _asm {
-        push ds
-        mov ah, XMS_MOVE_EXTENDED
-        lds si, dword ptr move_params
-        call dword ptr xms_entry_point
-        pop ds
-        mov byte ptr bl_val, bl
-        mov word ptr regs.x.ax, ax
+    /* Watcom C - use #pragma aux helper function */
+    {
+        xms_move_data_t move_data;
+        move_data.ds_in = FP_SEG(&move_params);
+        move_data.si_in = FP_OFF(&move_params);
+        xms_move_raw(&move_data, xms_entry_point);
+        regs.x.ax = move_data.ax_out;
+        bl_val = move_data.bl_out;
     }
 #elif defined(__TURBOC__)
     asm {

@@ -14,27 +14,16 @@
  * - ALL CPU detection is performed by Assembly module
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
 #include <stdint.h>
-#include "../include/cpu_detect.h"
+#include "../include/cpudet.h"
 #include "../include/platform_probe.h"
 #include "../include/logging.h"
-#include "../include/production.h"
+#include "../include/prod.h"
 
-/* External assembly routines (from cpu_detect.asm) */
-extern unsigned short asm_detect_cpu_type(void);
-extern unsigned long asm_get_cpu_flags(void);  /* Returns 32-bit flags in DX:AX */
-extern unsigned char asm_get_cpu_vendor(void);
-extern char far* asm_get_cpu_vendor_string(void);
-extern unsigned char asm_has_cyrix_extensions(void);
-extern unsigned char asm_get_cpu_family(void);
-extern unsigned char asm_get_cpu_model(void);
-extern unsigned char asm_get_cpu_stepping(void);
-extern unsigned long asm_get_cpuid_max_level(void);
-/* V86 detection removed - unreliable and unnecessary (GPT-5 recommendation) */
-extern uint8_t asm_is_hypervisor(void);
+/* Additional assembly routines not declared in cpudet.h */
 extern void asm_get_cache_info(uint16_t* l1d, uint16_t* l1i, uint16_t* l2, uint8_t* line);
 extern uint16_t asm_get_cpu_speed(void);
 extern uint8_t asm_get_speed_confidence(void);
@@ -191,19 +180,17 @@ static const cpu_model_entry_t transmeta_cpus[] = {
 /**
  * @brief Detect Current Privilege Level (CPL)
  * @return Current CPL (0-3), where 0 = ring 0 (kernel)
- * 
+ *
  * GPT-5 Critical: WBINVD requires CPL 0, not just real mode
  */
 static uint8_t detect_current_cpl(void) {
     uint16_t cs_selector;
-    
-    __asm__ volatile (
-        "mov %%cs, %0"
-        : "=r" (cs_selector)
-        :
-        : 
-    );
-    
+
+    _asm {
+        mov ax, cs
+        mov cs_selector, ax
+    }
+
     /* CPL is in the bottom 2 bits of CS selector */
     return (uint8_t)(cs_selector & 3);
 }
@@ -211,25 +198,24 @@ static uint8_t detect_current_cpl(void) {
 /**
  * @brief Detect V86 mode by checking EFLAGS VM bit
  * @return true if running in Virtual 8086 mode
- * 
+ *
  * GPT-5 Critical: V86 mode prevents privileged instructions on 486
  */
 static bool detect_v86_mode(void) {
     uint32_t eflags;
-    
+
     /* Only meaningful on 386+ */
     if (g_cpu_info.cpu_type < CPU_TYPE_80386) {
         return false;
     }
-    
-    __asm__ volatile (
-        "pushfl\n\t"        /* Push EFLAGS onto stack */
-        "popl %0"           /* Pop into variable */
-        : "=r" (eflags)
-        :
-        : 
-    );
-    
+
+    _asm {
+        .386
+        pushfd              ; Push EFLAGS onto stack (32-bit)
+        pop eax             ; Pop into EAX
+        mov eflags, eax     ; Store in variable
+    }
+
     /* VM bit is bit 17 (0x20000) */
     return (eflags & 0x20000) != 0;
 }
@@ -315,7 +301,8 @@ const char* cpu_type_to_string(cpu_type_t type) {
 int cpu_detect_init(void) {
     char far* vendor_str;
     int i;
-    
+    platform_probe_result_t platform;
+
     LOG_DEBUG("Starting CPU detection...");
 
     /* Clear CPU info structure */
@@ -512,7 +499,7 @@ int cpu_detect_init(void) {
     }
     
     /* Platform detection now handled by platform_probe module */
-    platform_probe_result_t platform = platform_detect();
+    platform = platform_detect();
     
     LOG_INFO("Platform environment: %s", platform.environment_desc);
     LOG_INFO("DMA policy: %s", platform_get_policy_desc(platform.recommended_policy));

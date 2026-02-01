@@ -21,7 +21,7 @@
  * Runtime functions are in xms_core_rt.c (ROOT segment).
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
 #include "common.h"

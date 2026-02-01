@@ -211,38 +211,40 @@ void clear_interrupt_stats(interrupt_mitigation_context_t *ctx) {
  * Get performance metrics
  */
 int get_performance_metrics(interrupt_mitigation_context_t *ctx,
-                           float *cpu_utilization,
-                           float *avg_events_per_interrupt,
-                           float *batching_efficiency) {
+                           unsigned long *cpu_utilization_tenths,
+                           unsigned long *avg_events_per_int_tenths,
+                           unsigned long *batching_efficiency_tenths) {
     if (!ctx) {
         return -1;
     }
 
-    if (cpu_utilization) {
-        /* Estimate based on processing time */
+    if (cpu_utilization_tenths) {
+        /* Result in tenths of a percent (e.g., 125 = 12.5%) */
         if (ctx->stats.total_interrupts > 0) {
-            *cpu_utilization = (float)ctx->stats.total_processing_time_us /
-                             (float)(ctx->stats.total_interrupts * 1000);
+            *cpu_utilization_tenths = (ctx->stats.total_processing_time_us * 10) /
+                                     (ctx->stats.total_interrupts * 1000);
         } else {
-            *cpu_utilization = 0.0f;
+            *cpu_utilization_tenths = 0;
         }
     }
 
-    if (avg_events_per_interrupt) {
+    if (avg_events_per_int_tenths) {
+        /* Result in tenths (e.g., 35 = 3.5 events/interrupt) */
         if (ctx->stats.total_interrupts > 0) {
-            *avg_events_per_interrupt = (float)ctx->stats.events_processed /
-                                       (float)ctx->stats.total_interrupts;
+            *avg_events_per_int_tenths = (ctx->stats.events_processed * 10) /
+                                         ctx->stats.total_interrupts;
         } else {
-            *avg_events_per_interrupt = 0.0f;
+            *avg_events_per_int_tenths = 0;
         }
     }
 
-    if (batching_efficiency) {
+    if (batching_efficiency_tenths) {
+        /* Result in tenths of a percent (e.g., 955 = 95.5%) */
         if (ctx->stats.total_interrupts > 0) {
-            *batching_efficiency = (float)ctx->stats.batched_interrupts * 100.0f /
-                                 (float)ctx->stats.total_interrupts;
+            *batching_efficiency_tenths = (ctx->stats.batched_interrupts * 1000) /
+                                          ctx->stats.total_interrupts;
         } else {
-            *batching_efficiency = 0.0f;
+            *batching_efficiency_tenths = 0;
         }
     }
 

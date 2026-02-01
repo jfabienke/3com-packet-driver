@@ -24,7 +24,7 @@
  * This file is part of the 3Com Packet Driver project.
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
 #include "pktops.h"
@@ -1472,9 +1472,10 @@ int packet_verify_loopback_integrity(const uint8_t *original_data, const uint8_t
         /* Analyze error patterns */
         packet_analyze_error_patterns(integrity_result);
 
-        log_error("Packet integrity check FAILED: %d mismatches out of %d bytes (%.2f%%)",
+        log_error("Packet integrity check FAILED: %d mismatches out of %d bytes (%d.%02d%%)",
                  integrity_result->mismatch_count, data_length,
-                 (float)integrity_result->error_rate_percent);
+                 integrity_result->error_rate_percent,
+                 (int)((integrity_result->mismatch_count * 10000UL) / data_length) % 100);
 
         return PACKET_ERR_INTEGRITY_FAILED;
     }

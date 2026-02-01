@@ -1,10 +1,10 @@
 /**
  * @file eeprom_mac.c
  * @brief EEPROM MAC address reading and validation
- * 
+ *
  * Reads MAC address from 3Com NIC EEPROM with checksum validation,
  * sanity checks, and fallback to locally administered address.
- * 
+ *
  * EEPROM programming is DISABLED by default for safety. Enable only
  * with ALLOW_EEPROM_WRITE build flag and runtime permission.
  */
@@ -14,15 +14,41 @@
 #define ALLOW_EEPROM_WRITE 0
 #endif
 
-#include <dos.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdio.h>
+#include "dos_io.h"
+
+/* DOS-specific includes - only for DOS compilers */
+#if defined(__TURBOC__) || defined(__WATCOMC__) || defined(_MSC_VER)
+#include <dos.h>
+#endif
+
 #include "eeprom_mac.h"
 #include "hardware.h"
-#include "logging.h"
 #include "common.h"
+#include "diag.h"
+
+/* MAC address status codes */
+typedef enum {
+    MAC_VALID = 0,
+    MAC_INVALID,
+    MAC_CHECKSUM_BAD,
+    MAC_GENERATED,
+    MAC_OVERRIDE,
+    MAC_READ_ERROR
+} mac_status_t;
+
+/* Provide delay_us as alias for udelay if not available */
+#ifndef delay_us
+#define delay_us(us) udelay(us)
+#endif
+
+/* Provide _disable/_enable if not available from DOS headers */
+#if !defined(__TURBOC__) && !defined(__WATCOMC__) && !defined(_MSC_VER)
+#define _disable() do { } while(0)
+#define _enable()  do { } while(0)
+#endif
 
 /* 3Com EEPROM commands and registers */
 #define EEPROM_CMD              0x0A    /* EEPROM command register */
@@ -177,13 +203,12 @@ static bool validate_mac_address(const uint8_t *mac) {
     /* Check 3Com OUI if not locally administered (advisory only) */
     if (!(mac[0] & MAC_LOCAL_ADMIN_BIT)) {
         /* Common 3Com OUIs: 00:20:AF, 00:50:04, 00:60:08, 00:A0:24, 00:01:02 */
-        bool known_3com_oui = ((mac[0] == 0x00 && mac[1] == 0x20 && mac[2] == 0xAF) ||
-                               (mac[0] == 0x00 && mac[1] == 0x50 && mac[2] == 0x04) ||
-                               (mac[0] == 0x00 && mac[1] == 0x60 && mac[2] == 0x08) ||
-                               (mac[0] == 0x00 && mac[1] == 0xA0 && mac[2] == 0x24) ||
-                               (mac[0] == 0x00 && mac[1] == 0x01 && mac[2] == 0x02));
-        
-        if (known_3com_oui) {
+        /* C89: evaluate condition inline instead of declaring bool mid-block */
+        if ((mac[0] == 0x00 && mac[1] == 0x20 && mac[2] == 0xAF) ||
+            (mac[0] == 0x00 && mac[1] == 0x50 && mac[2] == 0x04) ||
+            (mac[0] == 0x00 && mac[1] == 0x60 && mac[2] == 0x08) ||
+            (mac[0] == 0x00 && mac[1] == 0xA0 && mac[2] == 0x24) ||
+            (mac[0] == 0x00 && mac[1] == 0x01 && mac[2] == 0x02)) {
             LOG_DEBUG("Recognized 3Com OUI %02X:%02X:%02X", mac[0], mac[1], mac[2]);
         } else {
             LOG_INFO("MAC OUI %02X:%02X:%02X not recognized as 3Com (may be OEM)",
@@ -210,7 +235,7 @@ static void generate_local_mac(uint8_t *mac) {
     /* Start with locally administered OUI */
     mac[0] = 0x02;  /* Locally administered, unicast */
     mac[1] = 0x3C;  /* '3C' for 3Com */
-    mac[2] = 0x0M;  /* 'M' for generated MAC */
+    mac[2] = 0x0D;  /* 'D' for dynamically generated MAC */
     
     /* Use system timer for uniqueness */
     _disable();

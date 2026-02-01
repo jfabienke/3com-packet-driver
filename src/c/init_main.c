@@ -12,7 +12,7 @@
  * Last Updated: 2026-01-26 14:45:00 UTC
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
 #include "common.h"

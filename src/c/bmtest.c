@@ -14,11 +14,12 @@
  * This file is part of the 3Com Packet Driver project.
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include "bmtest.h"
+#include "nicctx.h"   /* For full nic_context_t definition */
 #include "logging.h"
 #include "cpudet.h"
 #include "hardware.h"
@@ -36,7 +37,7 @@ static data_integrity_patterns_t g_test_patterns;
 /* Internal function prototypes */
 static int initialize_test_patterns(data_integrity_patterns_t *patterns);
 static uint32_t get_time_ms(void);
-static void delay_ms(uint32_t ms);
+static void bm_delay_ms(uint32_t ms);
 static uint16_t calculate_checksum(const uint8_t *data, size_t size);
 static bool verify_pattern_integrity(const uint8_t *expected, const uint8_t *actual, size_t size);
 static int setup_dma_test_buffer(nic_context_t *ctx, uint32_t size);
@@ -128,11 +129,18 @@ int perform_automated_busmaster_test(nic_context_t *ctx,
              (mode == BM_TEST_MODE_FULL) ? "FULL" : "QUICK", 
              results->test_duration_ms);
     
-    g_test_start_time = get_time_ms();
-    uint32_t total_score = 0;
-    
-    /* Validate test environment before starting */
-    if (!validate_test_environment_safety(ctx)) {
+    {
+        /* C89: Use block scope for declarations */
+        uint32_t total_score = 0;
+        dma_controller_info_t dma_info;
+        memory_coherency_info_t coherency_info;
+        timing_constraint_info_t timing_info;
+        uint32_t elapsed_time;
+
+        g_test_start_time = get_time_ms();
+
+        /* Validate test environment before starting */
+        if (!validate_test_environment_safety(ctx)) {
         strcpy(results->failure_reason, "Test environment safety validation failed");
         results->confidence_level = BM_CONFIDENCE_FAILED;
         results->requires_fallback = true;
@@ -142,8 +150,7 @@ int perform_automated_busmaster_test(nic_context_t *ctx,
     /* Phase 1: Basic Tests (70-250 points) */
     log_info("=== Phase 1: Basic Functionality Tests ===");
     results->test_phase = BM_TEST_BASIC;
-    
-    dma_controller_info_t dma_info;
+
     results->dma_controller_score = test_dma_controller_presence(ctx, &dma_info);
     total_score += results->dma_controller_score;
     log_info("DMA Controller Test: %u/%u points", 
@@ -153,8 +160,7 @@ int perform_automated_busmaster_test(nic_context_t *ctx,
         emergency_stop_busmaster_test(ctx);
         return -1;
     }
-    
-    memory_coherency_info_t coherency_info;
+
     results->memory_coherency_score = test_memory_coherency(ctx, &coherency_info);
     total_score += results->memory_coherency_score;
     results->dma_coherency_passed = coherency_info.cache_coherent && 
@@ -168,8 +174,7 @@ int perform_automated_busmaster_test(nic_context_t *ctx,
         emergency_stop_busmaster_test(ctx);
         return -1;
     }
-    
-    timing_constraint_info_t timing_info;
+
     results->timing_constraints_score = test_timing_constraints(ctx, &timing_info);
     total_score += results->timing_constraints_score;
     results->burst_timing_passed = timing_info.timing_constraints_met;
@@ -272,34 +277,42 @@ int perform_automated_busmaster_test(nic_context_t *ctx,
             break;
     }
     
-    uint32_t elapsed_time = get_time_ms() - g_test_start_time;
+    elapsed_time = get_time_ms() - g_test_start_time;
     log_info("Bus mastering test completed in %lu ms", elapsed_time);
-    log_info("Final Score: %u/%u (%.1f%%) - Confidence: %s", 
-             total_score, BM_SCORE_TOTAL_MAX, 
-             (total_score * 100.0) / BM_SCORE_TOTAL_MAX,
+    log_info("Final Score: %u/%u (%lu.%lu%%) - Confidence: %s",
+             total_score, BM_SCORE_TOTAL_MAX,
+             ((unsigned long)total_score * 100) / BM_SCORE_TOTAL_MAX,
+             (((unsigned long)total_score * 1000) / BM_SCORE_TOTAL_MAX) % 10,
              (results->confidence_level == BM_CONFIDENCE_HIGH) ? "HIGH" :
              (results->confidence_level == BM_CONFIDENCE_MEDIUM) ? "MEDIUM" :
              (results->confidence_level == BM_CONFIDENCE_LOW) ? "LOW" : "FAILED");
-    
+
     return (results->confidence_level != BM_CONFIDENCE_FAILED) ? 0 : -1;
+    }
 }
 
 /**
  * @brief Test DMA controller presence and capabilities (70 points max)
  */
 uint16_t test_dma_controller_presence(nic_context_t *ctx, dma_controller_info_t *info) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    uint16_t io_base;
+    uint32_t test_addr = 0x12345678;
+    uint32_t read_back;
+    uint16_t dma_status;
+    uint16_t dma_len;
+
     if (!ctx || !info) {
         log_error("test_dma_controller_presence: NULL parameters");
         return 0;
     }
-    
+
     log_debug("Testing DMA controller presence and capabilities...");
     memset(info, 0, sizeof(dma_controller_info_t));
-    
-    uint16_t score = 0;
-    
+
     /* Test 1: Check if NIC supports DMA (20 points) */
-    if (ctx->nic_info.type == NIC_TYPE_3C515_TX) {
+    if (ctx->nic_type == NIC_TYPE_3C515_TX) {
         score += 20;
         log_debug("3C515-TX NIC supports DMA operations (+20 points)");
     } else {
@@ -317,12 +330,11 @@ uint16_t test_dma_controller_presence(nic_context_t *ctx, dma_controller_info_t 
     }
     
     /* Test 3: Test DMA register accessibility (20 points) */
-    uint16_t io_base = ctx->nic_info.io_base;
-    uint32_t test_addr = 0x12345678;
-    
+    io_base = ctx->io_base;
+
     /* Try to write/read DMA address register */
     outl(io_base + 0x24, test_addr);  /* Window 7 Master Address */
-    uint32_t read_back = inl(io_base + 0x24);
+    read_back = inl(io_base + 0x24);
     
     if (read_back == test_addr) {
         score += 20;
@@ -334,7 +346,7 @@ uint16_t test_dma_controller_presence(nic_context_t *ctx, dma_controller_info_t 
     }
     
     /* Test 4: Check DMA channel availability (10 points) */
-    uint16_t dma_status = inw(io_base + 0x0E);  /* Status register */
+    dma_status = inw(io_base + 0x0E);  /* Status register */
     if ((dma_status & 0x8000) == 0) {  /* DMA not busy */
         score += 10;
         log_debug("DMA controller available (+10 points)");
@@ -343,7 +355,7 @@ uint16_t test_dma_controller_presence(nic_context_t *ctx, dma_controller_info_t 
     
     /* Test 5: Test basic DMA setup (5 points) */
     outw(io_base + 0x26, 64);  /* Set small DMA length */
-    uint16_t dma_len = inw(io_base + 0x26);
+    dma_len = inw(io_base + 0x26);
     if (dma_len == 64) {
         score += 5;
         log_debug("DMA length register functional (+5 points)");
@@ -361,25 +373,31 @@ uint16_t test_dma_controller_presence(nic_context_t *ctx, dma_controller_info_t 
  * @brief Test memory coherency between CPU and DMA (80 points max)
  */
 uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    const uint32_t test_size = 1024;
+    uint8_t *test_buffer;
+    uint8_t *pattern_buffer;
+    bool coherent;
+    bool cache_coherent;
+    uint32_t i;
+
     if (!ctx || !info) {
         log_error("test_memory_coherency: NULL parameters");
         return 0;
     }
-    
+
     log_debug("Testing memory coherency between CPU and DMA...");
     memset(info, 0, sizeof(memory_coherency_info_t));
-    
-    uint16_t score = 0;
-    const uint32_t test_size = 1024;
-    
+
     /* Allocate test buffer */
-    uint8_t *test_buffer = (uint8_t *)malloc(test_size);
+    test_buffer = (uint8_t *)malloc(test_size);
     if (!test_buffer) {
         log_error("Failed to allocate memory coherency test buffer");
         return 0;
     }
-    
-    uint8_t *pattern_buffer = (uint8_t *)malloc(test_size);
+
+    pattern_buffer = (uint8_t *)malloc(test_size);
     if (!pattern_buffer) {
         log_error("Failed to allocate pattern buffer");
         free(test_buffer);
@@ -407,10 +425,9 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
     /* Test 2: DMA write -> CPU read coherency (30 points) */
     /* Simulate DMA write by directly modifying memory */
     memset(test_buffer, 0x55, test_size);
-    
+
     /* CPU reads the modified memory */
-    bool coherent = true;
-    uint32_t i;
+    coherent = true;
     for (i = 0; i < test_size; i++) {
         if (test_buffer[i] != 0x55) {
             coherent = false;
@@ -438,7 +455,7 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
     #endif
     
     /* Verify pattern integrity */
-    bool cache_coherent = true;
+    cache_coherent = true;
     for (i = 0; i < test_size; i++) {
         if (test_buffer[i] != (uint8_t)(i & 0xFF)) {
             cache_coherent = false;
@@ -465,35 +482,43 @@ uint16_t test_memory_coherency(nic_context_t *ctx, memory_coherency_info_t *info
  * @brief Test timing constraints for bus mastering (100 points max)
  */
 uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *info) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    uint16_t io_base;
+    uint32_t start_time;
+    uint32_t end_time;
+    uint32_t elapsed_ms;
+    uint32_t burst_data = 0x12345678;
+    int i;
+
     if (!ctx || !info) {
         log_error("test_timing_constraints: NULL parameters");
         return 0;
     }
-    
+
     log_debug("Testing timing constraints for bus mastering...");
     memset(info, 0, sizeof(timing_constraint_info_t));
-    
-    uint16_t score = 0;
-    uint16_t io_base = ctx->nic_info.io_base;
-    
+
+    io_base = ctx->io_base;
+
     /* Set expected timing constraints for 80286 systems */
     info->min_setup_time_ns = 100;     /* 100ns minimum setup time */
     info->min_hold_time_ns = 50;       /* 50ns minimum hold time */
     info->max_burst_duration_ns = 10000; /* 10us maximum burst duration */
-    
+
     /* Test 1: Setup time measurement (30 points) */
-    uint32_t start_time = get_time_ms();
-    int i;
+    start_time = get_time_ms();
 
     /* Perform a series of register accesses to measure timing */
     for (i = 0; i < 100; i++) {
+        volatile uint16_t dummy;
         outw(io_base + 0x0E, 0x0000);  /* Write to command register */
-        volatile uint16_t dummy = inw(io_base + 0x0E);  /* Read back */
+        dummy = inw(io_base + 0x0E);  /* Read back */
         (void)dummy;  /* Suppress unused variable warning */
     }
-    
-    uint32_t end_time = get_time_ms();
-    uint32_t elapsed_ms = end_time - start_time;
+
+    end_time = get_time_ms();
+    elapsed_ms = end_time - start_time;
     
     /* Estimate timing (very rough on DOS systems) */
     info->measured_setup_time_ns = (elapsed_ms * 1000000) / 100;  /* ns per access */
@@ -533,7 +558,6 @@ uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *i
     start_time = get_time_ms();
 
     /* Simulate a burst transfer */
-    uint32_t burst_data = 0x12345678;
     for (i = 0; i < 16; i++) {
         outl(io_base + 0x24, burst_data + i);  /* Burst write to DMA address */
     }
@@ -562,17 +586,22 @@ uint16_t test_timing_constraints(nic_context_t *ctx, timing_constraint_info_t *i
  * @brief Test data integrity with various patterns (85 points max)
  */
 uint16_t test_data_integrity_patterns(nic_context_t *ctx, data_integrity_patterns_t *patterns) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    const size_t pattern_size = 256;
+    uint8_t *test_buffer;
+    uint16_t expected_checksum;
+    uint16_t actual_checksum;
+
     if (!ctx || !patterns) {
         log_error("test_data_integrity_patterns: NULL parameters");
         return 0;
     }
-    
+
     log_debug("Testing data integrity with various patterns...");
-    
-    uint16_t score = 0;
-    const size_t pattern_size = 256;
-    uint8_t *test_buffer = (uint8_t *)malloc(pattern_size);
-    
+
+    test_buffer = (uint8_t *)malloc(pattern_size);
+
     if (!test_buffer) {
         log_error("Failed to allocate data integrity test buffer");
         return 0;
@@ -621,9 +650,9 @@ uint16_t test_data_integrity_patterns(nic_context_t *ctx, data_integrity_pattern
     }
     
     /* Test 7: Checksum verification pattern (13 points) */
-    uint16_t expected_checksum = calculate_checksum(patterns->checksum_pattern, pattern_size);
+    expected_checksum = calculate_checksum(patterns->checksum_pattern, pattern_size);
     memcpy(test_buffer, patterns->checksum_pattern, pattern_size);
-    uint16_t actual_checksum = calculate_checksum(test_buffer, pattern_size);
+    actual_checksum = calculate_checksum(test_buffer, pattern_size);
     
     if (expected_checksum == actual_checksum) {
         score += 13;
@@ -640,37 +669,41 @@ uint16_t test_data_integrity_patterns(nic_context_t *ctx, data_integrity_pattern
  * @brief Test burst transfer capability (82 points max)
  */
 uint16_t test_burst_transfer_capability(nic_context_t *ctx) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    uint16_t io_base;
+    static const uint32_t burst_sizes[] = {64, 128, 256, 512, 1024, 2048, 4096};
+    uint32_t num_sizes = sizeof(burst_sizes) / sizeof(burst_sizes[0]);
+    uint32_t i;
+    uint32_t burst_size;
+    uint32_t start_addr;
+    uint16_t status;
+
     if (!ctx) {
         log_error("test_burst_transfer_capability: NULL context");
         return 0;
     }
-    
+
     log_debug("Testing burst transfer capability...");
-    
-    uint16_t score = 0;
-    uint16_t io_base = ctx->nic_info.io_base;
-    
-    /* Test different burst sizes */
-    uint32_t burst_sizes[] = {64, 128, 256, 512, 1024, 2048, 4096};
-    uint32_t num_sizes = sizeof(burst_sizes) / sizeof(burst_sizes[0]);
-    uint32_t i;
+
+    io_base = ctx->io_base;
 
     for (i = 0; i < num_sizes; i++) {
-        uint32_t burst_size = burst_sizes[i];
-        
+        burst_size = burst_sizes[i];
+
         /* Test burst write capability */
-        uint32_t start_addr = 0x10000 + (i * 0x1000);
-        
+        start_addr = 0x10000 + (i * 0x1000);
+
         /* Set up DMA for burst transfer */
         outl(io_base + 0x24, start_addr);      /* DMA address */
         outw(io_base + 0x26, burst_size);      /* DMA length */
-        
+
         /* Start burst transfer simulation */
         outw(io_base + 0x0E, 0x8000);          /* Start DMA down */
-        
+
         /* Check if burst completed successfully */
-        delay_ms(1);  /* Brief delay for transfer */
-        uint16_t status = inw(io_base + 0x0E);
+        bm_delay_ms(1);  /* Brief delay for transfer */
+        status = inw(io_base + 0x0E);
         
         if ((status & 0x8000) == 0) {  /* DMA completed */
             score += (82 / num_sizes);  /* Distribute points across burst sizes */
@@ -692,44 +725,50 @@ uint16_t test_burst_transfer_capability(nic_context_t *ctx) {
  * @brief Test error recovery mechanisms (85 points max)
  */
 uint16_t test_error_recovery_mechanisms(nic_context_t *ctx) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    uint16_t io_base;
+    uint16_t status;
+    uint16_t saved_value;
+    uint16_t test_value;
+
     if (!ctx) {
         log_error("test_error_recovery_mechanisms: NULL context");
         return 0;
     }
-    
+
     log_debug("Testing error recovery mechanisms...");
-    
-    uint16_t score = 0;
-    uint16_t io_base = ctx->nic_info.io_base;
-    
+
+    io_base = ctx->io_base;
+
     /* Test 1: DMA timeout recovery (25 points) */
     /* Set up a DMA transfer that will timeout */
     outl(io_base + 0x24, 0xFFFFFFFF);  /* Invalid address */
     outw(io_base + 0x26, 1024);        /* Transfer size */
     outw(io_base + 0x0E, 0x8000);      /* Start DMA */
-    
+
     /* Wait for timeout */
-    delay_ms(10);
-    
+    bm_delay_ms(10);
+
     /* Check if we can recover */
     outw(io_base + 0x0E, 0x0000);      /* Reset DMA */
-    delay_ms(1);
-    
-    uint16_t status = inw(io_base + 0x0E);
+    bm_delay_ms(1);
+
+    status = inw(io_base + 0x0E);
     if ((status & 0x8000) == 0) {      /* DMA reset successful */
         score += 25;
         log_debug("DMA timeout recovery successful (+25 points)");
     }
-    
+
     /* Test 2: Invalid address recovery (20 points) */
     /* Try to access invalid register addresses and recover */
-    uint16_t saved_value = inw(io_base + 0x0E);
-    
+    saved_value = inw(io_base + 0x0E);
+
     /* Try invalid register access */
     outw(io_base + 0xFF, 0x1234);      /* Invalid register */
-    
+
     /* Verify we can still access valid registers */
-    uint16_t test_value = inw(io_base + 0x0E);
+    test_value = inw(io_base + 0x0E);
     if (test_value == saved_value) {
         score += 20;
         log_debug("Invalid address recovery successful (+20 points)");
@@ -738,9 +777,9 @@ uint16_t test_error_recovery_mechanisms(nic_context_t *ctx) {
     /* Test 3: Reset and reinitialize (25 points) */
     /* Perform a complete reset */
     outw(io_base + 0x0E, 0x0004);      /* Global reset */
-    delay_ms(10);
+    bm_delay_ms(10);
     outw(io_base + 0x0E, 0x0000);      /* Clear reset */
-    delay_ms(1);
+    bm_delay_ms(1);
     
     /* Verify NIC is responsive after reset */
     status = inw(io_base + 0x0E);
@@ -768,61 +807,68 @@ uint16_t test_error_recovery_mechanisms(nic_context_t *ctx) {
  * @brief Test long duration stability (50 points max)
  */
 uint16_t test_long_duration_stability(nic_context_t *ctx, uint32_t duration_ms) {
+    /* C89: All declarations at start of function */
+    uint16_t score = 0;
+    uint16_t io_base;
+    uint32_t start_time;
+    uint32_t error_count = 0;
+    uint32_t transfer_count = 0;
+    uint32_t timeout;
+    uint32_t elapsed_time;
+    unsigned long success_rate_tenths; /* in tenths of percent */
+
     if (!ctx) {
         log_error("test_long_duration_stability: NULL context");
         return 0;
     }
-    
+
     log_info("Testing long duration stability for %lu ms...", duration_ms);
-    
-    uint16_t score = 0;
-    uint16_t io_base = ctx->nic_info.io_base;
-    uint32_t start_time = get_time_ms();
-    uint32_t error_count = 0;
-    uint32_t transfer_count = 0;
-    
+
+    io_base = ctx->io_base;
+    start_time = get_time_ms();
+
     /* Continuous operation test */
     while ((get_time_ms() - start_time) < duration_ms) {
         if (g_emergency_stop_requested) {
             log_warning("Emergency stop requested during stability test");
             break;
         }
-        
+
         /* Perform a small DMA operation */
         outl(io_base + 0x24, 0x10000);     /* DMA address */
         outw(io_base + 0x26, 64);          /* Small transfer */
         outw(io_base + 0x0E, 0x8000);      /* Start DMA */
-        
+
         /* Wait for completion */
-        uint32_t timeout = 0;
+        timeout = 0;
         while ((inw(io_base + 0x0E) & 0x8000) && timeout < 1000) {
-            delay_ms(1);
+            bm_delay_ms(1);
             timeout++;
         }
-        
+
         if (timeout >= 1000) {
             error_count++;
             log_debug("Stability test timeout #%lu", error_count);
         } else {
             transfer_count++;
         }
-        
+
         /* Reset for next iteration */
         outw(io_base + 0x0E, 0x0000);
-        
+
         /* Brief delay between operations */
-        delay_ms(10);
+        bm_delay_ms(10);
     }
-    
-    uint32_t elapsed_time = get_time_ms() - start_time;
+
+    elapsed_time = get_time_ms() - start_time;
     
     /* Calculate score based on success rate */
     if (transfer_count > 0) {
-        double success_rate = (double)(transfer_count) / (transfer_count + error_count);
-        score = (uint16_t)(50 * success_rate);
-        
-        log_info("Stability test completed: %lu transfers, %lu errors (%.1f%% success) in %lu ms",
-                transfer_count, error_count, success_rate * 100.0, elapsed_time);
+        success_rate_tenths = (transfer_count * 1000) / (transfer_count + error_count);
+        score = (uint16_t)((50 * transfer_count) / (transfer_count + error_count));
+
+        log_info("Stability test completed: %lu transfers, %lu errors (%lu.%lu%% success) in %lu ms",
+                transfer_count, error_count, success_rate_tenths / 10, success_rate_tenths % 10, elapsed_time);
     }
     
     log_debug("Long duration stability test completed: %u/50 points", score);
@@ -851,7 +897,7 @@ busmaster_confidence_t determine_confidence_level(uint16_t score) {
 bool cpu_supports_busmaster_operations(void) {
     /* Allow 286+ systems to attempt bus mastering tests */
     /* The actual safety will be determined by comprehensive testing */
-    return (g_cpu_info.type >= CPU_TYPE_80286);
+    return (g_cpu_info.cpu_type >= CPU_DET_80286);
 }
 
 /**
@@ -859,14 +905,14 @@ bool cpu_supports_busmaster_operations(void) {
  */
 bool cpu_requires_conservative_testing(void) {
     /* 286 systems require more rigorous testing due to chipset inconsistencies */
-    return (g_cpu_info.type == CPU_TYPE_80286);
+    return (g_cpu_info.cpu_type == CPU_DET_80286);
 }
 
 /**
  * @brief Get minimum confidence threshold for bus mastering based on CPU
  */
 uint16_t get_cpu_appropriate_confidence_threshold(void) {
-    if (g_cpu_info.type == CPU_TYPE_80286) {
+    if (g_cpu_info.cpu_type == CPU_DET_80286) {
         /* 286 systems require HIGH confidence due to chipset risks */
         return BM_CONFIDENCE_HIGH_THRESHOLD;  /* 400+ points */
     } else {
@@ -879,18 +925,20 @@ uint16_t get_cpu_appropriate_confidence_threshold(void) {
  * @brief Safe fallback to programmed I/O mode
  */
 int fallback_to_programmed_io(nic_context_t *ctx, config_t *config, const char *reason) {
+    uint16_t io_base;
+
     if (!ctx || !config) {
         log_error("fallback_to_programmed_io: NULL parameters");
         return -1;
     }
-    
+
     log_warning("Falling back to programmed I/O mode: %s", reason ? reason : "Unknown reason");
-    
+
     /* Disable bus mastering in configuration */
     config->busmaster = BUSMASTER_OFF;
-    
+
     /* Ensure NIC is configured for PIO mode */
-    uint16_t io_base = ctx->nic_info.io_base;
+    io_base = ctx->io_base;
     
     /* Reset any DMA operations */
     outw(io_base + 0x0E, 0x0000);      /* Clear DMA bits */
@@ -906,16 +954,20 @@ int fallback_to_programmed_io(nic_context_t *ctx, config_t *config, const char *
  * @brief Validate test environment safety
  */
 bool validate_test_environment_safety(nic_context_t *ctx) {
+    uint16_t io_base;
+    uint16_t status;
+    void *test_ptr;
+
     if (!ctx) {
         log_error("validate_test_environment_safety: NULL context");
         return false;
     }
-    
+
     log_debug("Validating test environment safety...");
-    
+
     /* Check if NIC is present and accessible */
-    uint16_t io_base = ctx->nic_info.io_base;
-    uint16_t status = inw(io_base + 0x0E);
+    io_base = ctx->io_base;
+    status = inw(io_base + 0x0E);
     
     /* Check for reasonable status values */
     if (status == 0xFFFF || status == 0x0000) {
@@ -930,7 +982,7 @@ bool validate_test_environment_safety(nic_context_t *ctx) {
     }
     
     /* Check memory availability */
-    void *test_ptr = malloc(4096);
+    test_ptr = malloc(4096);
     if (!test_ptr) {
         log_error("Insufficient memory for testing");
         return false;
@@ -945,19 +997,21 @@ bool validate_test_environment_safety(nic_context_t *ctx) {
  * @brief Emergency stop function for testing
  */
 void emergency_stop_busmaster_test(nic_context_t *ctx) {
+    uint16_t io_base;
+
     g_emergency_stop_requested = true;
-    
+
     log_warning("EMERGENCY STOP: Bus mastering test halted");
-    
+
     if (ctx) {
-        uint16_t io_base = ctx->nic_info.io_base;
+        io_base = ctx->io_base;
         
         /* Immediately stop all DMA operations */
         outw(io_base + 0x0E, 0x0000);      /* Clear all control bits */
         
         /* Reset the NIC to a safe state */
         outw(io_base + 0x0E, 0x0004);      /* Global reset */
-        delay_ms(10);
+        bm_delay_ms(10);
         outw(io_base + 0x0E, 0x0000);      /* Clear reset */
     }
     
@@ -1023,9 +1077,9 @@ static uint32_t get_time_ms(void) {
 }
 
 /**
- * @brief Delay for specified milliseconds
+ * @brief Delay for specified milliseconds (local version to avoid conflict with common.h)
  */
-static void delay_ms(uint32_t ms) {
+static void bm_delay_ms(uint32_t ms) {
     uint32_t start = get_time_ms();
     while ((get_time_ms() - start) < ms) {
         /* Busy wait */
@@ -1060,7 +1114,7 @@ static int perform_basic_safety_checks(nic_context_t *ctx) {
     }
     
     /* Verify NIC type is appropriate for bus mastering */
-    if (ctx->nic_info.type != NIC_TYPE_3C515_TX) {
+    if (ctx->nic_type != NIC_TYPE_3C515_TX) {
         log_info("NIC type does not support bus mastering");
         return 0;  /* Not an error, just not supported */
     }
@@ -1142,36 +1196,41 @@ static uint32_t get_chipset_identifier(void) {
  * @brief Load cached test results from disk
  */
 int load_busmaster_test_cache(nic_context_t *ctx, busmaster_test_cache_t *cache) {
+    char cache_path[256];
+    dos_file_t file;
+    size_t read_size;
+    uint32_t expected_checksum;
+    uint32_t actual_checksum;
+
     if (!ctx || !cache) {
         return -1;
     }
-    
-    char cache_path[256];
+
     get_cache_file_path(cache_path, sizeof(cache_path));
-    
-    FILE *file = fopen(cache_path, "rb");
-    if (!file) {
+
+    file = dos_fopen(cache_path, "rb");
+    if (file < 0) {
         log_debug("No cache file found at %s", cache_path);
         return -1;
     }
-    
-    size_t read_size = fread(cache, 1, sizeof(busmaster_test_cache_t), file);
-    fclose(file);
-    
+
+    read_size = dos_fread(cache, 1, sizeof(busmaster_test_cache_t), file);
+    dos_fclose(file);
+
     if (read_size != sizeof(busmaster_test_cache_t)) {
         log_warning("Cache file corrupted - size mismatch");
         return -1;
     }
-    
+
     /* Verify signature */
     if (strncmp(cache->signature, CACHE_SIGNATURE, strlen(CACHE_SIGNATURE)) != 0) {
         log_warning("Cache file corrupted - invalid signature");
         return -1;
     }
-    
+
     /* Verify checksum */
-    uint32_t expected_checksum = cache->checksum;
-    uint32_t actual_checksum = calculate_cache_checksum(cache);
+    expected_checksum = cache->checksum;
+    actual_checksum = calculate_cache_checksum(cache);
     if (expected_checksum != actual_checksum) {
         log_warning("Cache file corrupted - checksum mismatch");
         return -1;
@@ -1185,22 +1244,27 @@ int load_busmaster_test_cache(nic_context_t *ctx, busmaster_test_cache_t *cache)
  * @brief Save test results to cache file
  */
 int save_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_results_t *results) {
+    busmaster_test_cache_t cache;
+    char cache_path[256];
+    dos_file_t file;
+    size_t written;
+
     if (!ctx || !results) {
         return -1;
     }
-    
-    busmaster_test_cache_t cache = {0};
+
+    memset(&cache, 0, sizeof(cache));
     
     /* Fill cache header */
     strncpy(cache.signature, CACHE_SIGNATURE, sizeof(cache.signature) - 1);
     cache.cache_version = CACHE_VERSION;
     cache.test_date = get_current_timestamp();
-    cache.cpu_type = g_cpu_info.type;
+    cache.cpu_type = g_cpu_info.cpu_type;
     cache.chipset_id = get_chipset_identifier();
-    cache.io_base = ctx->nic_info.io_base;
+    cache.io_base = ctx->io_base;
     
     /* Fill test results */
-    cache.test_mode = results->test_mode;
+    cache.test_mode = BM_TEST_MODE_FULL;  /* Default to full, actual mode not stored in results */
     cache.confidence_score = results->confidence_score;
     cache.confidence_level = results->confidence_level;
     cache.test_completed = results->test_completed;
@@ -1218,19 +1282,18 @@ int save_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_results_t
     
     /* Calculate and store checksum */
     cache.checksum = calculate_cache_checksum(&cache);
-    
+
     /* Write to file */
-    char cache_path[256];
     get_cache_file_path(cache_path, sizeof(cache_path));
-    
-    FILE *file = fopen(cache_path, "wb");
-    if (!file) {
+
+    file = dos_fopen(cache_path, "wb");
+    if (file < 0) {
         log_error("Failed to create cache file %s", cache_path);
         return -1;
     }
-    
-    size_t written = fwrite(&cache, 1, sizeof(busmaster_test_cache_t), file);
-    fclose(file);
+
+    written = dos_fwrite(&cache, 1, sizeof(busmaster_test_cache_t), file);
+    dos_fclose(file);
     
     if (written != sizeof(busmaster_test_cache_t)) {
         log_error("Failed to write complete cache file");
@@ -1244,34 +1307,36 @@ int save_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_results_t
 /**
  * @brief Validate cached test results
  */
-int validate_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_cache_t *cache, 
+int validate_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_cache_t *cache,
                                 cache_validation_info_t *validation) {
+    uint32_t current_chipset;
+
     if (!ctx || !cache || !validation) {
         return -1;
     }
-    
+
     /* Initialize validation structure */
     memset(validation, 0, sizeof(cache_validation_info_t));
     get_cache_file_path(validation->cache_file_path, sizeof(validation->cache_file_path));
-    
+
     /* Check cache version */
     if (cache->cache_version != CACHE_VERSION) {
-        strncpy(validation->invalidation_reason, "Driver version changed", 
+        strncpy(validation->invalidation_reason, "Driver version changed",
                 sizeof(validation->invalidation_reason) - 1);
         validation->driver_version_changed = true;
         return -1;
     }
-    
+
     /* Check CPU type */
-    if (cache->cpu_type != g_cpu_info.type) {
-        strncpy(validation->invalidation_reason, "CPU type changed", 
+    if (cache->cpu_type != g_cpu_info.cpu_type) {
+        strncpy(validation->invalidation_reason, "CPU type changed",
                 sizeof(validation->invalidation_reason) - 1);
         validation->hardware_changed = true;
         return -1;
     }
-    
+
     /* Check chipset */
-    uint32_t current_chipset = get_chipset_identifier();
+    current_chipset = get_chipset_identifier();
     if (cache->chipset_id != current_chipset) {
         strncpy(validation->invalidation_reason, "Chipset changed", 
                 sizeof(validation->invalidation_reason) - 1);
@@ -1280,7 +1345,7 @@ int validate_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_cache
     }
     
     /* Check NIC I/O base */
-    if (cache->io_base != ctx->nic_info.io_base) {
+    if (cache->io_base != ctx->io_base) {
         strncpy(validation->invalidation_reason, "NIC I/O address changed", 
                 sizeof(validation->invalidation_reason) - 1);
         validation->hardware_changed = true;
@@ -1296,11 +1361,12 @@ int validate_busmaster_test_cache(nic_context_t *ctx, const busmaster_test_cache
  * @brief Invalidate cached test results (force retest)
  */
 int invalidate_busmaster_test_cache(nic_context_t *ctx, const char *reason) {
+    char cache_path[256];
+
     if (!ctx) {
         return -1;
     }
-    
-    char cache_path[256];
+
     get_cache_file_path(cache_path, sizeof(cache_path));
     
     if (remove(cache_path) == 0) {
@@ -1322,9 +1388,9 @@ int cache_to_test_results(const busmaster_test_cache_t *cache, busmaster_test_re
     
     /* Clear results structure */
     memset(results, 0, sizeof(busmaster_test_results_t));
-    
+
     /* Fill from cache */
-    results->test_mode = cache->test_mode;
+    /* Note: test_mode from cache is not stored in results struct */
     results->confidence_score = cache->confidence_score;
     results->confidence_level = cache->confidence_level;
     results->test_completed = cache->test_completed;

@@ -8,56 +8,121 @@
  *
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include "../include/config.h"
-#include "../include/statrt.h"
-#include "../include/logging.h"
-#include "../include/cpudet.h"
-#include "../include/bmtest.h"
-#include "../include/prod.h"
-#include "../include/bufcfg.h"
+#include "config.h"
+#include "statrt.h"
+#include "logging.h"
+#include "cpudet.h"
+#include "bmtest.h"
+#include "prod.h"
+#include "bufcfg.h"
+#include "nicctx.h"
+#include "ovl_data.h"
+
+/* Forward declarations for static helper functions */
+static int perform_cpu_aware_testing(nic_context_t *ctx, config_t *config,
+                                     busmaster_test_results_t *results, bool quick_mode);
+static bool prompt_user_for_exhaustive_test(void);
 
 /* All functions in this file go to cold section (discarded after init) */
 #pragma code_seg("COLD_TEXT", "CODE")
 
-/* Default configuration values */
-static const config_t default_config = {
-    0,              /* debug_level */
-    1,              /* use_xms */
-    1,              /* enable_routing */
-    0,              /* enable_static_routing */
-    4,              /* buffer_count */
-    1514,           /* buffer_size */
-    0x60,           /* interrupt_vector */
-    0x300,          /* io_base (legacy) */
-    5,              /* irq (legacy) */
-    1,              /* enable_stats */
-    0,              /* promiscuous_mode */
-    1,              /* enable_logging */
-    0,              /* test_mode */
-    
-    CONFIG_DEFAULT_IO1_BASE,    /* io1_base */
-    CONFIG_DEFAULT_IO2_BASE,    /* io2_base */
-    CONFIG_DEFAULT_IRQ1,        /* irq1 */
-    CONFIG_DEFAULT_IRQ2,        /* irq2 */
-    CONFIG_DEFAULT_SPEED,       /* speed */
-    CONFIG_DEFAULT_BUSMASTER,   /* busmaster */
-    PCI_ENABLED,                /* pci (enabled if available) */
-    CONFIG_DEFAULT_LOG_ENABLED, /* log_enabled */
-    {{0}},                      /* routes (initialized to zero) */
-    0,                          /* route_count */
-    
+/*
+ * Init-only configuration defaults - placed in INIT_EARLY overlay segment.
+ * With OVL_EARLY_CONST, this data is loaded/unloaded with the overlay.
+ * String literals go to code segment via -zc.
+ */
+
+/* Default configuration values - must match config_t struct order in config.h */
+static OVL_EARLY_CONST config_t default_config = {
+    CONFIG_MAGIC,               /* magic - config structure validation */
+    /* Original settings */
+    0,                          /* debug_level */
+    1,                          /* use_xms */
+    1,                          /* enable_routing */
+    0,                          /* enable_static_routing */
+    4,                          /* buffer_count */
+    1514,                       /* buffer_size */
+    0x60,                       /* interrupt_vector */
+    0x300,                      /* io_base (legacy) */
+    5,                          /* irq (legacy) */
+    1,                          /* enable_stats */
+    0,                          /* promiscuous_mode */
+    1,                          /* enable_logging */
+    0,                          /* test_mode */
+
     /* Buffer auto-configuration overrides (0 = auto) */
     0,                          /* override_buffer_size */
     0,                          /* override_tx_ring_count */
     0,                          /* override_rx_ring_count */
     0,                          /* force_pio_mode */
     0,                          /* force_minimal_buffers */
-    0                           /* force_optimal_buffers */
+    0,                          /* force_optimal_buffers */
+
+    /* 3Com packet driver specific settings */
+    CONFIG_DEFAULT_IO1_BASE,    /* io1_base */
+    CONFIG_DEFAULT_IO2_BASE,    /* io2_base */
+    CONFIG_DEFAULT_IRQ1,        /* irq1 */
+    CONFIG_DEFAULT_IRQ2,        /* irq2 */
+    CFG_SPEED_AUTO,             /* speed */
+    BUSMASTER_AUTO,             /* busmaster */
+    PCI_ENABLED,                /* pci (enabled if available) */
+    1,                          /* log_enabled (use 1 for true in C89) */
+    /* routes[MAX_ROUTES] - zero-initialized via partial init */
+    {
+        {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0},
+        {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0},
+        {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0},
+        {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}
+    },
+    0,                          /* route_count */
+
+    /* IRQ handling settings */
+    0,                          /* poll_interval (0=auto) */
+    0,                          /* shared_irq */
+
+    /* Enhanced settings */
+    {0, 0, 0, 0, 0, 0},         /* mac_address[ETH_ALEN] */
+    0,                          /* use_custom_mac */
+    CONFIG_DEFAULT_MTU,         /* mtu */
+    0,                          /* receive_mode */
+    CONFIG_DEFAULT_TX_TIMEOUT,  /* tx_timeout */
+    CONFIG_DEFAULT_RX_BUFFERS,  /* rx_buffer_count */
+    CONFIG_DEFAULT_TX_BUFFERS,  /* tx_buffer_count */
+    0,                          /* tx_threshold */
+    0,                          /* rx_threshold */
+    1,                          /* auto_detect */
+    0,                          /* load_balancing */
+    0,                          /* packet_routing */
+    1,                          /* statistics_enabled */
+    CONFIG_DEFAULT_LOG_LEVEL,   /* log_level */
+    CONFIG_DEFAULT_TSR_SIZE,    /* resident_size */
+    1,                          /* install_tsr */
+    1,                          /* enable_multicast */
+    1,                          /* enable_broadcast */
+    0,                          /* enable_full_duplex */
+    0,                          /* enable_flow_control */
+    1,                          /* enable_checksums */
+    CONFIG_DEFAULT_LINK_CHECK,  /* link_check_interval */
+    CONFIG_DEFAULT_STATS_INTERVAL, /* statistics_interval */
+    CONFIG_DEFAULT_WATCHDOG,    /* watchdog_timeout */
+    0,                          /* debug_enabled */
+    0,                          /* debug_flags */
+    "",                         /* debug_output[32] */
+    0,                          /* verbose_mode */
+    "",                         /* config_file[128] */
+    0,                          /* save_on_exit */
+    0                           /* load_defaults */
 };
+
+/* Global configuration instance - Phase 5: moved from linkstubs.c
+ * This is the actual runtime configuration used throughout the driver.
+ * Initialized to defaults in config_init().
+ */
+config_t g_config;
 
 /* Configuration parameter names and handlers */
 typedef struct {
@@ -106,10 +171,21 @@ static char* normalize_parameter_name(const char* param);
 static int parse_hex_value(const char* value, unsigned int* result);
 static int parse_network_address(const char* addr_str, uint32_t* network, uint32_t* netmask);
 static int parse_ip_address(const char* addr_str, uint32_t* ip_addr);
-static int stricmp(const char* s1, const char* s2);
+static int cfg_stricmp(const char* s1, const char* s2);
+static int count_set_bits(uint32_t value);
 
-/* Configuration parameters table */
-static const config_param_t config_params[] = {
+/* C89-compatible popcount: count number of set bits in a 32-bit value */
+static int count_set_bits(uint32_t value) {
+    int count = 0;
+    while (value) {
+        count += (int)(value & 1);
+        value >>= 1;
+    }
+    return count;
+}
+
+/* Configuration parameters table - overlay-local (INIT_EARLY) */
+static OVL_EARLY_CONST config_param_t config_params[] = {
     /* Legacy parameters */
     {"DEBUG", handle_debug_level, "Debug level (0-3)"},
     {"XMS", handle_use_xms, "Use XMS memory (0/1)"},
@@ -157,22 +233,24 @@ int config_parse_params(const char *params, config_t *config) {
     char *param_copy, *token, *value;
     char *saveptr = NULL;
     int i, found, result = 0;
-    
+    char* param_name;
+    char* normalized_name;
+
     if (!config) {
         log_error("config_parse_params: NULL config parameter");
         return CONFIG_ERR_INVALID_PARAM;
     }
-    
+
     /* Initialize with defaults */
     *config = default_config;
-    
+
     if (!params || strlen(params) == 0) {
         log_info("No configuration parameters, using defaults");
         return 0;
     }
-    
+
     log_info("Parsing configuration: %s", params);
-    
+
     /* Make a copy of the parameter string for parsing */
     param_copy = malloc(strlen(params) + 1);
     if (!param_copy) {
@@ -180,19 +258,17 @@ int config_parse_params(const char *params, config_t *config) {
         return CONFIG_ERR_MEMORY;
     }
     strcpy(param_copy, params);
-    
+
     /* Parse each parameter - support both /PARAM=VALUE and PARAM=VALUE formats */
     token = strtok(param_copy, " \t");
     while (token != NULL) {
-        char* param_name;
-        
         /* Skip leading slash if present */
         if (token[0] == '/') {
             param_name = token + 1;
         } else {
             param_name = token;
         }
-        
+
         /* Find '=' separator */
         value = strchr(param_name, '=');
         if (value) {
@@ -201,9 +277,9 @@ int config_parse_params(const char *params, config_t *config) {
         } else {
             value = "1"; /* Default value for flags */
         }
-        
+
         /* Normalize parameter name (uppercase, handle aliases) */
-        char* normalized_name = normalize_parameter_name(param_name);
+        normalized_name = normalize_parameter_name(param_name);
         if (!normalized_name) {
             log_error("Failed to allocate memory for parameter name");
             free(param_copy);
@@ -336,7 +412,7 @@ int config_validate(const config_t *config) {
     }
     
     /* Validate network speed */
-    if (config->speed != SPEED_AUTO && config->speed != SPEED_10 && config->speed != SPEED_100) {
+    if (config->speed != CFG_SPEED_AUTO && config->speed != CFG_SPEED_10 && config->speed != CFG_SPEED_100) {
         log_error("Invalid network speed: %d (valid: 10, 100, AUTO)", config->speed);
         return CONFIG_ERR_INVALID_SPEED;
     }
@@ -373,10 +449,15 @@ int config_get_defaults(config_t *config) {
  * @param level Log level to use
  */
 void config_print(const config_t *config, int level) {
+    /* C89: All declarations must be at the start of the block */
+    const char* speed_str;
+    const char* busmaster_str;
+    int i;
+
     if (!config) {
         return;
     }
-    
+
     log_at_level(level, "Configuration:");
     log_at_level(level, "  Debug Level: %d", config->debug_level);
     log_at_level(level, "  Use XMS: %d", config->use_xms);
@@ -391,23 +472,20 @@ void config_print(const config_t *config, int level) {
     log_at_level(level, "  Promiscuous Mode: %d", config->promiscuous_mode);
     log_at_level(level, "  Enable Logging: %d", config->enable_logging);
     log_at_level(level, "  Test Mode: %d", config->test_mode);
-    
+
     /* 3Com packet driver specific settings */
     log_at_level(level, "  IO1 Base: 0x%04X", config->io1_base);
     log_at_level(level, "  IO2 Base: 0x%04X", config->io2_base);
     log_at_level(level, "  IRQ1: %d", config->irq1);
     log_at_level(level, "  IRQ2: %d", config->irq2);
-    
-    const char* speed_str;
     switch (config->speed) {
-        case SPEED_AUTO: speed_str = "AUTO"; break;
-        case SPEED_10: speed_str = "10 Mbps"; break;
-        case SPEED_100: speed_str = "100 Mbps"; break;
+        case CFG_SPEED_AUTO: speed_str = "AUTO"; break;
+        case CFG_SPEED_10: speed_str = "10 Mbps"; break;
+        case CFG_SPEED_100: speed_str = "100 Mbps"; break;
         default: speed_str = "Unknown"; break;
     }
     log_at_level(level, "  Network Speed: %s", speed_str);
-    
-    const char* busmaster_str;
+
     switch (config->busmaster) {
         case BUSMASTER_OFF: busmaster_str = "OFF"; break;
         case BUSMASTER_ON: busmaster_str = "ON"; break;
@@ -418,17 +496,17 @@ void config_print(const config_t *config, int level) {
     log_at_level(level, "  Logging: %s", config->log_enabled ? "ON" : "OFF");
     
     if (config->route_count > 0) {
-        int i;
         log_at_level(level, "  Static Routes (%d):", config->route_count);
         for (i = 0; i < config->route_count; i++) {
-            const route_entry_t* route = &config->routes[i];
+            const ip_route_entry_t* route;
+            route = &config->routes[i];
             if (route->active) {
                 log_at_level(level, "    %d.%d.%d.%d/%d -> NIC %d",
                            (route->network >> 24) & 0xFF,
                            (route->network >> 16) & 0xFF,
                            (route->network >> 8) & 0xFF,
                            route->network & 0xFF,
-                           __builtin_popcount(route->netmask),
+                           count_set_bits(route->netmask),
                            route->nic_id);
             }
         }
@@ -480,8 +558,12 @@ static int handle_buffer_size(config_t *config, const char *value) {
 }
 
 static int handle_interrupt_vector(config_t *config, const char *value) {
-    unsigned int vector;
-    if (sscanf(value, "%x", &vector) != 1 || vector > 0xFF) {
+    unsigned long vector;
+    vector = dos_hextoul(value);
+    if (vector == 0 && value[0] != '0') {
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+    if (vector > 0xFF) {
         return CONFIG_ERR_INVALID_VALUE;
     }
     config->interrupt_vector = (uint8_t)vector;
@@ -489,8 +571,12 @@ static int handle_interrupt_vector(config_t *config, const char *value) {
 }
 
 static int handle_io_base(config_t *config, const char *value) {
-    unsigned int base;
-    if (sscanf(value, "%x", &base) != 1 || base > 0xFFFF) {
+    unsigned long base;
+    base = dos_hextoul(value);
+    if (base == 0 && value[0] != '0') {
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+    if (base > 0xFFFF) {
         return CONFIG_ERR_INVALID_VALUE;
     }
     config->io_base = (uint16_t)base;
@@ -567,12 +653,12 @@ static int handle_irq2(config_t *config, const char *value) {
 }
 
 static int handle_speed(config_t *config, const char *value) {
-    if (stricmp(value, "AUTO") == 0) {
-        config->speed = SPEED_AUTO;
-    } else if (stricmp(value, "10") == 0) {
-        config->speed = SPEED_10;
-    } else if (stricmp(value, "100") == 0) {
-        config->speed = SPEED_100;
+    if (cfg_stricmp(value, "AUTO") == 0) {
+        config->speed = CFG_SPEED_AUTO;
+    } else if (cfg_stricmp(value, "10") == 0) {
+        config->speed = CFG_SPEED_10;
+    } else if (cfg_stricmp(value, "100") == 0) {
+        config->speed = CFG_SPEED_100;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
     }
@@ -580,11 +666,11 @@ static int handle_speed(config_t *config, const char *value) {
 }
 
 static int handle_busmaster(config_t *config, const char *value) {
-    if (stricmp(value, "ON") == 0) {
+    if (cfg_stricmp(value, "ON") == 0) {
         config->busmaster = BUSMASTER_ON;
-    } else if (stricmp(value, "OFF") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0) {
         config->busmaster = BUSMASTER_OFF;
-    } else if (stricmp(value, "AUTO") == 0) {
+    } else if (cfg_stricmp(value, "AUTO") == 0) {
         config->busmaster = BUSMASTER_AUTO;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
@@ -593,11 +679,11 @@ static int handle_busmaster(config_t *config, const char *value) {
 }
 
 static int handle_pci(config_t *config, const char *value) {
-    if (stricmp(value, "ON") == 0 || stricmp(value, "ENABLED") == 0) {
+    if (cfg_stricmp(value, "ON") == 0 || cfg_stricmp(value, "ENABLED") == 0) {
         config->pci = PCI_ENABLED;
-    } else if (stricmp(value, "OFF") == 0 || stricmp(value, "DISABLED") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0 || cfg_stricmp(value, "DISABLED") == 0) {
         config->pci = PCI_DISABLED;
-    } else if (stricmp(value, "REQUIRED") == 0) {
+    } else if (cfg_stricmp(value, "REQUIRED") == 0) {
         config->pci = PCI_REQUIRED;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
@@ -606,10 +692,10 @@ static int handle_pci(config_t *config, const char *value) {
 }
 
 static int handle_log(config_t *config, const char *value) {
-    if (stricmp(value, "ON") == 0) {
+    if (cfg_stricmp(value, "ON") == 0) {
         config->log_enabled = true;
         config->enable_logging = 1; /* Update legacy field */
-    } else if (stricmp(value, "OFF") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0) {
         config->log_enabled = false;
         config->enable_logging = 0; /* Update legacy field */
     } else {
@@ -619,12 +705,15 @@ static int handle_log(config_t *config, const char *value) {
 }
 
 static int handle_route(config_t *config, const char *value) {
+    ip_route_entry_t* route;
+    int result;
+
     if (config->route_count >= MAX_ROUTES) {
         return CONFIG_ERR_TOO_MANY_ROUTES;
     }
-    
-    route_entry_t* route = &config->routes[config->route_count];
-    int result = config_parse_route_entry(value, route);
+
+    route = &config->routes[config->route_count];
+    result = config_parse_route_entry(value, route);
     if (result == 0) {
         config->route_count++;
         config->enable_static_routing = 1; /* Enable static routing */
@@ -667,10 +756,10 @@ static int handle_rx_ring_count(config_t *config, const char *value) {
 
 static int handle_force_pio(config_t *config, const char *value) {
     /* PIO can be specified without value or with ON/OFF */
-    if (!value || stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
+    if (!value || cfg_stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
         config->force_pio_mode = 1;
         log_info("Forcing PIO mode (bus master disabled)");
-    } else if (stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
         config->force_pio_mode = 0;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
@@ -680,10 +769,10 @@ static int handle_force_pio(config_t *config, const char *value) {
 
 static int handle_minimal_buffers(config_t *config, const char *value) {
     /* MINIMAL can be specified without value or with ON/OFF */
-    if (!value || stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
+    if (!value || cfg_stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
         config->force_minimal_buffers = 1;
         log_info("Forcing minimal 3KB buffer configuration");
-    } else if (stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
         config->force_minimal_buffers = 0;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
@@ -693,10 +782,10 @@ static int handle_minimal_buffers(config_t *config, const char *value) {
 
 static int handle_optimal_buffers(config_t *config, const char *value) {
     /* OPTIMAL can be specified without value or with ON/OFF */
-    if (!value || stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
+    if (!value || cfg_stricmp(value, "ON") == 0 || strcmp(value, "1") == 0) {
         config->force_optimal_buffers = 1;
         log_info("Forcing optimal buffer configuration");
-    } else if (stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
+    } else if (cfg_stricmp(value, "OFF") == 0 || strcmp(value, "0") == 0) {
         config->force_optimal_buffers = 0;
     } else {
         return CONFIG_ERR_INVALID_VALUE;
@@ -707,11 +796,48 @@ static int handle_optimal_buffers(config_t *config, const char *value) {
 static int handle_buffer_config(config_t *config, const char *value) {
     /* Parse format: size,tx,rx */
     int size, tx, rx;
-    
-    if (sscanf(value, "%d,%d,%d", &size, &tx, &rx) != 3) {
+    char numbuf[16];
+    const char *p;
+    const char *comma1;
+    const char *comma2;
+    int len;
+
+    /* Find first comma */
+    comma1 = strchr(value, ',');
+    if (!comma1) {
         log_error("BUFFERS format: size,tx,rx (e.g., 1024,16,16)");
         return CONFIG_ERR_INVALID_VALUE;
     }
+    /* Find second comma */
+    comma2 = strchr(comma1 + 1, ',');
+    if (!comma2) {
+        log_error("BUFFERS format: size,tx,rx (e.g., 1024,16,16)");
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+
+    /* Parse size */
+    len = (int)(comma1 - value);
+    if (len <= 0 || len >= (int)sizeof(numbuf)) {
+        log_error("BUFFERS format: size,tx,rx (e.g., 1024,16,16)");
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+    memcpy(numbuf, value, len);
+    numbuf[len] = '\0';
+    size = dos_atoi(numbuf);
+
+    /* Parse tx */
+    p = comma1 + 1;
+    len = (int)(comma2 - p);
+    if (len <= 0 || len >= (int)sizeof(numbuf)) {
+        log_error("BUFFERS format: size,tx,rx (e.g., 1024,16,16)");
+        return CONFIG_ERR_INVALID_VALUE;
+    }
+    memcpy(numbuf, p, len);
+    numbuf[len] = '\0';
+    tx = dos_atoi(numbuf);
+
+    /* Parse rx */
+    rx = dos_atoi(comma2 + 1);
     
     /* Validate size */
     if (size != 256 && size != 512 && size != 1024 && size != 1536) {
@@ -742,13 +868,13 @@ static int handle_buffer_config(config_t *config, const char *value) {
 /* Helper functions */
 
 static char* normalize_parameter_name(const char* param) {
+    int i;
     char* normalized = malloc(strlen(param) + 1);
     if (!normalized) {
         return NULL;
     }
-    
+
     /* Convert to uppercase */
-    int i;
     for (i = 0; param[i]; i++) {
         normalized[i] = toupper(param[i]);
     }
@@ -759,7 +885,7 @@ static char* normalize_parameter_name(const char* param) {
 
 static int parse_hex_value(const char* value, unsigned int* result) {
     char* endptr;
-    
+
     /* Handle 0x prefix */
     if (strncmp(value, "0x", 2) == 0 || strncmp(value, "0X", 2) == 0) {
         *result = strtoul(value, &endptr, 16);
@@ -775,32 +901,71 @@ static int parse_hex_value(const char* value, unsigned int* result) {
 }
 
 static int parse_network_address(const char* addr_str, uint32_t* network, uint32_t* netmask) {
-    char* addr_copy = malloc(strlen(addr_str) + 1);
+    char* addr_copy;
+    char* mask_str;
+    unsigned int a, b, c, d;
+    int cidr;
+
+    addr_copy = malloc(strlen(addr_str) + 1);
     if (!addr_copy) {
         return CONFIG_ERR_MEMORY;
     }
     strcpy(addr_copy, addr_str);
-    
+
     /* Split network/mask */
-    char* mask_str = strchr(addr_copy, '/');
+    mask_str = strchr(addr_copy, '/');
     if (!mask_str) {
         free(addr_copy);
         return CONFIG_ERR_ROUTE_SYNTAX;
     }
     *mask_str = '\0';
     mask_str++;
-    
-    /* Parse network address (simplified - would need proper IP parsing in real implementation) */
-    unsigned int a, b, c, d;
-    if (sscanf(addr_copy, "%u.%u.%u.%u", &a, &b, &c, &d) != 4 ||
-        a > 255 || b > 255 || c > 255 || d > 255) {
+
+    /* Parse network address using dos_atoi with dot-separated parsing */
+    {
+        const char *p = addr_copy;
+        const char *dot;
+        char octet_buf[4];
+        int olen;
+
+        /* Parse a */
+        dot = strchr(p, '.');
+        if (!dot) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        a = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse b */
+        dot = strchr(p, '.');
+        if (!dot) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        b = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse c */
+        dot = strchr(p, '.');
+        if (!dot) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) { free(addr_copy); return CONFIG_ERR_ROUTE_SYNTAX; }
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        c = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse d */
+        d = (unsigned int)dos_atoi(p);
+    }
+    if (a > 255 || b > 255 || c > 255 || d > 255) {
         free(addr_copy);
         return CONFIG_ERR_ROUTE_SYNTAX;
     }
     *network = (a << 24) | (b << 16) | (c << 8) | d;
-    
+
     /* Parse netmask (CIDR notation) */
-    int cidr = atoi(mask_str);
+    cidr = atoi(mask_str);
     if (cidr < 0 || cidr > 32) {
         free(addr_copy);
         return CONFIG_ERR_ROUTE_SYNTAX;
@@ -817,17 +982,53 @@ static int parse_network_address(const char* addr_str, uint32_t* network, uint32
 }
 
 static int parse_ip_address(const char* addr_str, uint32_t* ip_addr) {
+    unsigned int a, b, c, d;
+
     if (!addr_str || !ip_addr) {
         return CONFIG_ERR_INVALID_PARAM;
     }
-    
-    /* Parse IP address in dotted decimal notation */
-    unsigned int a, b, c, d;
-    if (sscanf(addr_str, "%u.%u.%u.%u", &a, &b, &c, &d) != 4 ||
-        a > 255 || b > 255 || c > 255 || d > 255) {
+
+    /* Parse IP address in dotted decimal notation using dos_atoi */
+    {
+        const char *p = addr_str;
+        const char *dot;
+        char octet_buf[4];
+        int olen;
+
+        /* Parse a */
+        dot = strchr(p, '.');
+        if (!dot) return CONFIG_ERR_ROUTE_SYNTAX;
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) return CONFIG_ERR_ROUTE_SYNTAX;
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        a = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse b */
+        dot = strchr(p, '.');
+        if (!dot) return CONFIG_ERR_ROUTE_SYNTAX;
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) return CONFIG_ERR_ROUTE_SYNTAX;
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        b = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse c */
+        dot = strchr(p, '.');
+        if (!dot) return CONFIG_ERR_ROUTE_SYNTAX;
+        olen = (int)(dot - p);
+        if (olen <= 0 || olen > 3) return CONFIG_ERR_ROUTE_SYNTAX;
+        memcpy(octet_buf, p, olen); octet_buf[olen] = '\0';
+        c = (unsigned int)dos_atoi(octet_buf);
+        p = dot + 1;
+
+        /* Parse d */
+        d = (unsigned int)dos_atoi(p);
+    }
+    if (a > 255 || b > 255 || c > 255 || d > 255) {
         return CONFIG_ERR_ROUTE_SYNTAX;
     }
-    
+
     *ip_addr = (a << 24) | (b << 16) | (c << 8) | d;
     return 0;
 }
@@ -844,14 +1045,18 @@ bool config_is_valid_irq_number(uint8_t irq) {
 }
 
 bool config_check_io_conflict(uint16_t io1, uint16_t io2) {
+    /* C89: All declarations at the start of block */
+    uint16_t io1_end;
+    uint16_t io2_end;
+
     if (io1 == io2) {
         return false; /* Same address is a conflict */
     }
-    
+
     /* Check if ranges overlap (each NIC uses 32 bytes) */
-    uint16_t io1_end = io1 + CONFIG_IO_RANGE_SIZE - 1;
-    uint16_t io2_end = io2 + CONFIG_IO_RANGE_SIZE - 1;
-    
+    io1_end = io1 + CONFIG_IO_RANGE_SIZE - 1;
+    io2_end = io2 + CONFIG_IO_RANGE_SIZE - 1;
+
     return !(io1 <= io2_end && io2 <= io1_end);
 }
 
@@ -861,67 +1066,74 @@ bool config_check_irq_conflict(uint8_t irq1, uint8_t irq2) {
 
 bool config_cpu_supports_busmaster(void) {
     /* Updated to allow 286+ systems to attempt bus mastering with testing */
-    if (g_cpu_info.type >= CPU_TYPE_80286) {
+    const cpu_info_t* cpu_info = cpu_get_info();
+    if (cpu_info && cpu_info->cpu_type >= CPU_DET_80286) {
         return true;
     }
     return false;
 }
 
-int config_parse_route_entry(const char* route_str, route_entry_t* route) {
+int config_parse_route_entry(const char* route_str, ip_route_entry_t* route) {
+    char* route_copy;
+    char* nic_str;
+    char* gateway_str;
+    int result;
+    int nic_id;
+
     if (!route_str || !route) {
         return CONFIG_ERR_INVALID_PARAM;
     }
-    
+
     /* Parse format: network/mask,nic[,gateway] */
-    char* route_copy = malloc(strlen(route_str) + 1);
+    route_copy = malloc(strlen(route_str) + 1);
     if (!route_copy) {
         return CONFIG_ERR_MEMORY;
     }
     strcpy(route_copy, route_str);
-    
+
     /* Find first comma (before NIC) */
-    char* nic_str = strrchr(route_copy, ',');
+    nic_str = strrchr(route_copy, ',');
     if (!nic_str) {
         free(route_copy);
         return CONFIG_ERR_ROUTE_SYNTAX;
     }
     *nic_str = '\0';
     nic_str++;
-    
+
     /* Check for gateway (third parameter) */
-    char* gateway_str = strchr(nic_str, ',');
+    gateway_str = strchr(nic_str, ',');
     if (gateway_str) {
         *gateway_str = '\0';
         gateway_str++;
     }
-    
+
     /* Parse network address */
-    int result = parse_network_address(route_copy, &route->network, &route->netmask);
+    result = parse_network_address(route_copy, &route->network, &route->netmask);
     if (result != 0) {
         free(route_copy);
         return result;
     }
-    
+
     /* Parse NIC ID */
-    int nic_id = atoi(nic_str);
+    nic_id = atoi(nic_str);
     if (nic_id < 0 || nic_id >= MAX_NICS) {
         free(route_copy);
         return CONFIG_ERR_ROUTE_SYNTAX;
     }
     route->nic_id = (uint8_t)nic_id;
     route->active = true;
-    
+
     /* Add route to static routing system */
     if (static_routing_is_enabled()) {
         ip_addr_t dest_network, netmask, gateway;
-        
+        uint32_t gw_addr;
+
         /* Convert from uint32_t to ip_addr_t */
         ip_addr_from_uint32(&dest_network, route->network);
         ip_addr_from_uint32(&netmask, route->netmask);
-        
+
         if (gateway_str) {
             /* Parse gateway address */
-            uint32_t gw_addr;
             if (parse_ip_address(gateway_str, &gw_addr) == 0) {
                 ip_addr_from_uint32(&gateway, gw_addr);
                 result = static_route_add(&dest_network, &netmask, &gateway, nic_id, 1);
@@ -956,8 +1168,9 @@ int config_validate_cross_parameters(const config_t* config) {
     
     /* Validate busmaster setting against CPU capability */
     if (config->busmaster == BUSMASTER_ON && !config_cpu_supports_busmaster()) {
-        log_error("Bus mastering requires 386+ CPU, but %s detected", 
-                 cpu_type_to_string(g_cpu_info.type));
+        const cpu_info_t* cpu_info = cpu_get_info();
+        log_error("Bus mastering requires 386+ CPU, but %s detected",
+                 cpu_info ? cpu_type_to_string(cpu_info->cpu_type) : "Unknown");
         return CONFIG_ERR_CPU_REQUIRED;
     }
     
@@ -979,53 +1192,60 @@ int config_validate_cross_parameters(const config_t* config) {
  * @return 0 on success, negative on error
  */
 int config_perform_busmaster_auto_test(config_t *config, nic_context_t *ctx, bool quick_mode) {
+    bool is_286_system;
+    uint16_t cpu_threshold;
+    busmaster_test_cache_t cached_results;
+    cache_validation_info_t validation;
+    busmaster_test_results_t test_results;
+    int apply_result;
+    busmaster_test_mode_t test_mode;
+    const cpu_info_t* cpu_info;
+
     if (!config || !ctx) {
         log_error("config_perform_busmaster_auto_test: NULL parameters");
         return CONFIG_ERR_INVALID_PARAM;
     }
-    
+
     /* Only perform testing for 3C515-TX NICs */
-    if (ctx->nic_info.type != NIC_TYPE_3C515_TX) {
-        log_info("Bus mastering not supported on %s - using programmed I/O", 
-                (ctx->nic_info.type == NIC_TYPE_3C509B) ? "3C509B" : "Unknown NIC");
+    if (ctx->nic_type != NIC_TYPE_3C515_TX) {
+        log_info("Bus mastering not supported on %s - using programmed I/O",
+                (ctx->nic_type == NIC_TYPE_3C509B) ? "3C509B" : "Unknown NIC");
         config->busmaster = BUSMASTER_OFF;
         return 0;
     }
-    
+
     /* Check CPU compatibility - now supports 286+ systems */
     if (!config_cpu_supports_busmaster()) {
         log_info("CPU does not support bus mastering - using programmed I/O");
         config->busmaster = BUSMASTER_OFF;
         return 0;
     }
-    
+
     /* CPU-specific information */
-    bool is_286_system = cpu_requires_conservative_testing();
-    uint16_t cpu_threshold = get_cpu_appropriate_confidence_threshold();
-    
+    cpu_info = cpu_get_info();
+    is_286_system = cpu_requires_conservative_testing();
+    cpu_threshold = get_cpu_appropriate_confidence_threshold();
+
     log_info("=== CPU-Aware Bus Mastering Configuration ===");
-    log_info("Detected: %s CPU", 
-             (g_cpu_info.type == CPU_TYPE_80286) ? "80286" :
-             (g_cpu_info.type == CPU_TYPE_80386) ? "80386" :
-             (g_cpu_info.type == CPU_TYPE_80486) ? "80486" :
-             (g_cpu_info.type >= CPU_TYPE_PENTIUM) ? "Pentium+" : "Unknown");
-    
+    log_info("Detected: %s CPU",
+             cpu_info ? (
+             (cpu_info->cpu_type == CPU_DET_80286) ? "80286" :
+             (cpu_info->cpu_type == CPU_DET_80386) ? "80386" :
+             (cpu_info->cpu_type == CPU_DET_80486) ? "80486" :
+             (cpu_info->cpu_type >= CPU_DET_CPUID_CAPABLE) ? "Pentium+" : "Unknown") : "Unknown");
+
     /* Step 1: Try to load cached results */
-    busmaster_test_cache_t cached_results;
-    cache_validation_info_t validation;
-    busmaster_test_results_t test_results;
-    
     if (load_busmaster_test_cache(ctx, &cached_results) == 0) {
         /* Cache found - validate it */
         if (validate_busmaster_test_cache(ctx, &cached_results, &validation) == 0) {
             /* Cache is valid - use cached results */
             log_info("Using cached bus mastering test results");
             cache_to_test_results(&cached_results, &test_results);
-            
+
             /* Apply configuration and exit */
-            int apply_result = apply_busmaster_configuration(ctx, &test_results, config);
+            apply_result = apply_busmaster_configuration(ctx, &test_results, config);
             if (apply_result == 0) {
-                log_info("Bus mastering configured from cache: %s", 
+                log_info("Bus mastering configured from cache: %s",
                          (config->busmaster == BUSMASTER_ON) ? "ENABLED" : "DISABLED");
             }
             return apply_result;
@@ -1036,18 +1256,18 @@ int config_perform_busmaster_auto_test(config_t *config, nic_context_t *ctx, boo
     } else {
         log_info("No cached test results found");
     }
-    
+
     /* Step 2: Perform CPU-appropriate testing */
     if (is_286_system) {
         /* 286 System: Conservative approach */
         log_info("80286 system detected - conservative testing required for bus mastering");
         log_info("Quick test (10s) will run first, exhaustive test (45s) required for bus mastering");
-        
+
         /* Always start with quick test */
         if (perform_cpu_aware_testing(ctx, config, &test_results, true) != 0) {
             return fallback_to_programmed_io(ctx, config, "Quick test failed");
         }
-        
+
         /* If quick test passed but confidence too low for 286, prompt for exhaustive test */
         if (test_results.confidence_score < cpu_threshold) {
             if (!quick_mode && prompt_user_for_exhaustive_test()) {
@@ -1062,23 +1282,24 @@ int config_perform_busmaster_auto_test(config_t *config, nic_context_t *ctx, boo
                 return 0;
             }
         }
-        
+
     } else {
         /* 386+ System: Streamlined approach */
         log_info("80386+ system detected - quick test sufficient for bus mastering");
-        
+
         /* Quick test is sufficient for 386+ systems */
-        busmaster_test_mode_t test_mode = quick_mode ? BM_TEST_MODE_QUICK : BM_TEST_MODE_FULL;
-        log_info("Running %s test (user preference)...", 
+        test_mode = quick_mode ? BM_TEST_MODE_QUICK : BM_TEST_MODE_FULL;
+        (void)test_mode; /* Silence unused variable warning */
+        log_info("Running %s test (user preference)...",
                  quick_mode ? "quick 10-second" : "comprehensive 45-second");
-                 
+
         if (perform_cpu_aware_testing(ctx, config, &test_results, quick_mode) != 0) {
             return fallback_to_programmed_io(ctx, config, "Test failed");
         }
     }
-    
+
     /* Step 3: Apply configuration based on results */
-    int apply_result = apply_busmaster_configuration(ctx, &test_results, config);
+    apply_result = apply_busmaster_configuration(ctx, &test_results, config);
     if (apply_result != 0) {
         log_error("Failed to apply bus mastering configuration");
         return apply_result;
@@ -1103,23 +1324,27 @@ int config_perform_busmaster_auto_test(config_t *config, nic_context_t *ctx, boo
 /**
  * @brief Perform CPU-aware testing with proper initialization and cleanup
  */
-static int perform_cpu_aware_testing(nic_context_t *ctx, config_t *config, 
+static int perform_cpu_aware_testing(nic_context_t *ctx, config_t *config,
                                    busmaster_test_results_t *results, bool quick_mode) {
+    busmaster_test_mode_t test_mode;
+    int test_result;
+
     /* Initialize the testing framework */
     if (busmaster_test_init(ctx) != 0) {
         log_error("Failed to initialize bus mastering test framework");
         return -1;
     }
-    
+
     /* Perform the test */
-    busmaster_test_mode_t test_mode = quick_mode ? BM_TEST_MODE_QUICK : BM_TEST_MODE_FULL;
-    int test_result = perform_automated_busmaster_test(ctx, test_mode, results);
+    test_mode = quick_mode ? BM_TEST_MODE_QUICK : BM_TEST_MODE_FULL;
+    test_result = perform_automated_busmaster_test(ctx, test_mode, results);
     
     /* Log detailed test results */
     log_info("Bus mastering test completed:");
-    log_info("  Total Score: %u/%u (%.1f%%)", 
+    log_info("  Total Score: %u/%u (%lu.%lu%%)",
              results->confidence_score, BM_SCORE_TOTAL_MAX,
-             (results->confidence_score * 100.0) / BM_SCORE_TOTAL_MAX);
+             ((unsigned long)results->confidence_score * 100) / BM_SCORE_TOTAL_MAX,
+             (((unsigned long)results->confidence_score * 1000) / BM_SCORE_TOTAL_MAX) % 10);
     log_info("  Confidence Level: %s",
              (results->confidence_level == BM_CONFIDENCE_HIGH) ? "HIGH" :
              (results->confidence_level == BM_CONFIDENCE_MEDIUM) ? "MEDIUM" :
@@ -1144,13 +1369,15 @@ static int perform_cpu_aware_testing(nic_context_t *ctx, config_t *config,
  * @brief Prompt user for exhaustive test on 286 systems
  */
 static bool prompt_user_for_exhaustive_test(void) {
+    char response;
+
     /* For DOS, we'll use a simple prompt */
     printf("\n80286 system requires 45-second exhaustive test for bus mastering.\n");
     printf("[E]xhaustive test (recommended) or [S]kip (use PIO): ");
-    
-    char response = getchar();
+
+    response = getchar();
     getchar(); /* consume newline */
-    
+
     return (response == 'E' || response == 'e');
 }
 
@@ -1201,14 +1428,16 @@ int apply_busmaster_configuration(nic_context_t *ctx,
  */
 int generate_busmaster_test_report(const busmaster_test_results_t *results,
                                  char *buffer, size_t buffer_size) {
+    int written;
+
     if (!results || !buffer || buffer_size == 0) {
         return CONFIG_ERR_INVALID_PARAM;
     }
-    
-    int written = snprintf(buffer, buffer_size,
+
+    written = snprintf(buffer, buffer_size,
         "Bus Mastering Capability Test Report\n"
         "====================================\n"
-        "Overall Score: %u/%u points (%.1f%%)\n"
+        "Overall Score: %u/%u points (%lu.%lu%%)\n"
         "Confidence Level: %s\n"
         "Test Duration: %lu ms\n"
         "\n"
@@ -1231,7 +1460,7 @@ int generate_busmaster_test_report(const busmaster_test_results_t *results,
         "  Transfers Completed: %lu\n"
         "  Bytes Transferred: %lu\n"
         "  Error Count: %u\n"
-        "  Success Rate: %.1f%%\n"
+        "  Success Rate: %lu.%lu%%\n"
         "\n"
         "Recommendations:\n"
         "%s\n"
@@ -1239,7 +1468,8 @@ int generate_busmaster_test_report(const busmaster_test_results_t *results,
         "Safe for Production: %s\n"
         "Requires Fallback: %s\n",
         results->confidence_score, BM_SCORE_TOTAL_MAX,
-        (results->confidence_score * 100.0) / BM_SCORE_TOTAL_MAX,
+        ((unsigned long)results->confidence_score * 100) / BM_SCORE_TOTAL_MAX,
+        (((unsigned long)results->confidence_score * 1000) / BM_SCORE_TOTAL_MAX) % 10,
         (results->confidence_level == BM_CONFIDENCE_HIGH) ? "HIGH" :
         (results->confidence_level == BM_CONFIDENCE_MEDIUM) ? "MEDIUM" :
         (results->confidence_level == BM_CONFIDENCE_LOW) ? "LOW" : "FAILED",
@@ -1258,8 +1488,10 @@ int generate_busmaster_test_report(const busmaster_test_results_t *results,
         results->transfers_completed,
         results->bytes_transferred,
         results->error_count,
-        (results->transfers_completed > 0) ? 
-            ((results->transfers_completed * 100.0) / (results->transfers_completed + results->error_count)) : 0.0,
+        (results->transfers_completed > 0) ?
+            ((unsigned long)(results->transfers_completed * 100) / (results->transfers_completed + results->error_count)) : 0UL,
+        (results->transfers_completed > 0) ?
+            (((unsigned long)(results->transfers_completed * 1000) / (results->transfers_completed + results->error_count)) % 10) : 0UL,
         results->recommendations,
         results->safe_for_production ? "YES" : "NO",
         results->requires_fallback ? "YES" : "NO"
@@ -1269,17 +1501,17 @@ int generate_busmaster_test_report(const busmaster_test_results_t *results,
 }
 
 /* Case-insensitive string comparison (DOS-compatible) */
-static int stricmp(const char* s1, const char* s2) {
+static int cfg_stricmp(const char* s1, const char* s2) {
     while (*s1 && *s2) {
-        char c1 = toupper(*s1);
-        char c2 = toupper(*s2);
+        char c1 = (char)toupper((unsigned char)*s1);
+        char c2 = (char)toupper((unsigned char)*s2);
         if (c1 != c2) {
             return c1 - c2;
         }
         s1++;
         s2++;
     }
-    return toupper(*s1) - toupper(*s2);
+    return toupper((unsigned char)*s1) - toupper((unsigned char)*s2);
 }
 
 /* Restore default code segment */

@@ -12,7 +12,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 
 /* C89 compatibility - include portability header for types */
@@ -200,8 +200,9 @@ int multiplex_control(int argc, char *argv[]) {
             printf("  Total calls: %lu\n", total);
             printf("  Fallback calls: %lu\n", fallback);
             if (total > 0) {
-                printf("  Fallback rate: %.1f%%\n",
-                       (fallback * 100.0) / total);
+                printf("  Fallback rate: %lu.%lu%%\n",
+                       (fallback * 100) / total,
+                       ((fallback * 1000) / total) % 10);
             }
         }
 

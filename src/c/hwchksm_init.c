@@ -40,7 +40,7 @@
 #include "main.h"
 #include "diag.h"
 #include <string.h>
-#include <stdio.h>
+#include "dos_io.h"
 
 /* ========================================================================== */
 /* GLOBAL STATE DEFINITIONS (extern'd by hwchksm_rt.c)                       */

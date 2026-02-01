@@ -141,7 +141,20 @@ HOT_C_OBJS = $(BUILDDIR)/api.obj &
              $(BUILDDIR)/linkstubs.obj &
              $(BUILDDIR)/hardware_rt.obj &
              $(BUILDDIR)/3c509b_rt.obj &
-             $(BUILDDIR)/3c515_rt.obj
+             $(BUILDDIR)/3c515_rt.obj &
+             $(BUILDDIR)/api_rt.obj &
+             $(BUILDDIR)/dmabnd_rt.obj &
+             $(BUILDDIR)/dmamap_rt.obj &
+             $(BUILDDIR)/pci_shim_rt.obj &
+             $(BUILDDIR)/pcimux_rt.obj &
+             $(BUILDDIR)/hwchksm_rt.obj &
+             $(BUILDDIR)/irqmit_rt.obj &
+             $(BUILDDIR)/rxbatch_rt.obj &
+             $(BUILDDIR)/txlazy_rt.obj &
+             $(BUILDDIR)/xms_core_rt.obj &
+             $(BUILDDIR)/pktops_rt.obj &
+             $(BUILDDIR)/logging_rt.obj &
+             $(BUILDDIR)/dos_io.obj
 
 # --- COLD SECTION - Initialization Assembly Objects ---
 COLD_ASM_OBJS = $(BUILDDIR)/cpudet.obj &
@@ -178,6 +191,18 @@ COLD_C_OBJS_BASE = $(BUILDDIR)/main.obj &
                    $(BUILDDIR)/3c515_init.obj &
                    $(BUILDDIR)/3c509b.obj &
                    $(BUILDDIR)/3c509b_init.obj &
+                   $(BUILDDIR)/api_init.obj &
+                   $(BUILDDIR)/dmabnd_init.obj &
+                   $(BUILDDIR)/dmamap_init.obj &
+                   $(BUILDDIR)/pci_shim_init.obj &
+                   $(BUILDDIR)/pcimux_init.obj &
+                   $(BUILDDIR)/hwchksm_init.obj &
+                   $(BUILDDIR)/irqmit_init.obj &
+                   $(BUILDDIR)/rxbatch_init.obj &
+                   $(BUILDDIR)/txlazy_init.obj &
+                   $(BUILDDIR)/xms_core_init.obj &
+                   $(BUILDDIR)/pktops_init.obj &
+                   $(BUILDDIR)/logging_init.obj &
                    $(BUILDDIR)/entval.obj &
                    $(BUILDDIR)/pltprob.obj &
                    $(BUILDDIR)/dmacap.obj &
@@ -646,6 +671,10 @@ $(BUILDDIR)/xms_core.obj: $(CDIR)/xms_core.c
     @echo 'Compiling ROOT:' $[@
     $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
 
+$(BUILDDIR)/dos_io.obj: $(CDIR)/dos_io.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS_RELEASE) $[@ -fo=$@
+
 $(BUILDDIR)/linkstubs.obj: $(CDIR)/linkstubs.c
     @echo 'Compiling ROOT:' $[@
     $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
@@ -822,6 +851,96 @@ $(BUILDDIR)/dmamap_rt.obj: $(CDIR)/dmamap_rt.c
     $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
 
 $(BUILDDIR)/dmamap_init.obj: $(CDIR)/dmamap_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split api - Phase 6 expanded overlay structure
+$(BUILDDIR)/api_rt.obj: $(CDIR)/api_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/api_init.obj: $(CDIR)/api_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split DMA binding - Phase 6 expanded overlay structure
+$(BUILDDIR)/dmabnd_rt.obj: $(CDIR)/dmabnd_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/dmabnd_init.obj: $(CDIR)/dmabnd_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split PCI shim - Phase 6 expanded overlay structure
+$(BUILDDIR)/pci_shim_rt.obj: $(CDIR)/pci_shim_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/pci_shim_init.obj: $(CDIR)/pci_shim_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split PCI mux - Phase 6 expanded overlay structure
+$(BUILDDIR)/pcimux_rt.obj: $(CDIR)/pcimux_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/pcimux_init.obj: $(CDIR)/pcimux_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split hardware checksum - Phase 6 expanded overlay structure
+$(BUILDDIR)/hwchksm_rt.obj: $(CDIR)/hwchksm_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/hwchksm_init.obj: $(CDIR)/hwchksm_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split IRQ mitigation - Phase 6 expanded overlay structure
+$(BUILDDIR)/irqmit_rt.obj: $(CDIR)/irqmit_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/irqmit_init.obj: $(CDIR)/irqmit_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split RX batching - Phase 6 expanded overlay structure
+$(BUILDDIR)/rxbatch_rt.obj: $(CDIR)/rxbatch_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/rxbatch_init.obj: $(CDIR)/rxbatch_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split TX lazy - Phase 6 expanded overlay structure
+$(BUILDDIR)/txlazy_rt.obj: $(CDIR)/txlazy_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/txlazy_init.obj: $(CDIR)/txlazy_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split XMS core - Phase 6 expanded overlay structure
+$(BUILDDIR)/xms_core_rt.obj: $(CDIR)/xms_core_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/xms_core_init.obj: $(CDIR)/xms_core_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# Split logging - Phase 6 expanded overlay structure
+$(BUILDDIR)/logging_rt.obj: $(CDIR)/logging_rt.c
+    @echo 'Compiling ROOT:' $[@
+    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
+
+$(BUILDDIR)/logging_init.obj: $(CDIR)/logging_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 

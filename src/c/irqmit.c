@@ -8,10 +8,15 @@
 
 #include <string.h>
 #include <dos.h>
-#include "../include/irqmit.h"
-#include "../include/hardware.h"
-#include "../include/logging.h"
-#include "../include/common.h"
+#include "irqmit.h"
+#include "hardware.h"
+#include "logging.h"
+#include "common.h"
+
+/* External packet handler declarations - moved to file scope for C89 compliance */
+extern int handle_rx_complete(struct nic_info *nic);
+extern int handle_tx_complete(struct nic_info *nic);
+extern void update_nic_stats(struct nic_info *nic);
 
 /* Global mitigation parameters (from runtime config AH=95h) */
 extern uint8_t g_mitigation_batch;    /* Max packets per interrupt */
@@ -110,7 +115,6 @@ static int process_3c515_event(interrupt_mitigation_context_t *ctx, interrupt_ev
         outw(io_base + 0x0E, 0x0010);
         
         /* Handle packet reception (delegate to packet_ops) */
-        extern int handle_rx_complete(struct nic_info *nic);
         handle_rx_complete(ctx->nic);
         
         return 1;
@@ -118,17 +122,16 @@ static int process_3c515_event(interrupt_mitigation_context_t *ctx, interrupt_ev
     
     if (status & 0x0004) {  /* TX Complete */
         *event_type = EVENT_TYPE_TX_COMPLETE;
-        
+
         /* Clear interrupt bit */
         outw(io_base + 0x0E, 0x0004);
-        
+
         /* Handle TX completion */
-        extern int handle_tx_complete(struct nic_info *nic);
         handle_tx_complete(ctx->nic);
-        
+
         return 1;
     }
-    
+
     if (status & 0x0080) {  /* Update Stats */
         *event_type = EVENT_TYPE_COUNTER_OVERFLOW;
         
@@ -136,7 +139,6 @@ static int process_3c515_event(interrupt_mitigation_context_t *ctx, interrupt_ev
         outw(io_base + 0x0E, 0x0080);
         
         /* Update statistics counters */
-        extern void update_nic_stats(struct nic_info *nic);
         update_nic_stats(ctx->nic);
         
         return 1;
@@ -159,30 +161,28 @@ static int process_3c509b_event(interrupt_mitigation_context_t *ctx, interrupt_e
     /* Process RX first (higher priority) */
     if (status & 0x0010) {  /* RX Complete */
         *event_type = EVENT_TYPE_RX_COMPLETE;
-        
+
         /* Clear interrupt bit */
         outw(io_base + 0x0E, 0x0010);
-        
+
         /* Handle packet reception */
-        extern int handle_rx_complete(struct nic_info *nic);
         handle_rx_complete(ctx->nic);
-        
+
         return 1;
     }
-    
+
     if (status & 0x0004) {  /* TX Complete */
         *event_type = EVENT_TYPE_TX_COMPLETE;
-        
+
         /* Clear interrupt bit */
         outw(io_base + 0x0E, 0x0004);
-        
+
         /* Handle TX completion */
-        extern int handle_tx_complete(struct nic_info *nic);
         handle_tx_complete(ctx->nic);
-        
+
         return 1;
     }
-    
+
     return 0;
 }
 
@@ -440,38 +440,40 @@ int set_interrupt_mitigation_enabled(interrupt_mitigation_context_t *ctx, bool e
  * Get performance metrics
  */
 int get_performance_metrics(interrupt_mitigation_context_t *ctx,
-                           float *cpu_utilization,
-                           float *avg_events_per_interrupt,
-                           float *batching_efficiency) {
+                           unsigned long *cpu_utilization_tenths,
+                           unsigned long *avg_events_per_int_tenths,
+                           unsigned long *batching_efficiency_tenths) {
     if (!ctx) {
         return -1;
     }
-    
-    if (cpu_utilization) {
-        /* Estimate based on processing time */
+
+    if (cpu_utilization_tenths) {
+        /* Result in tenths of a percent (e.g., 125 = 12.5%) */
         if (ctx->stats.total_interrupts > 0) {
-            *cpu_utilization = (float)ctx->stats.total_processing_time_us / 
-                             (float)(ctx->stats.total_interrupts * 1000);
+            *cpu_utilization_tenths = (ctx->stats.total_processing_time_us * 10) /
+                                     (ctx->stats.total_interrupts * 1000);
         } else {
-            *cpu_utilization = 0.0f;
+            *cpu_utilization_tenths = 0;
         }
     }
-    
-    if (avg_events_per_interrupt) {
+
+    if (avg_events_per_int_tenths) {
+        /* Result in tenths (e.g., 35 = 3.5 events/interrupt) */
         if (ctx->stats.total_interrupts > 0) {
-            *avg_events_per_interrupt = (float)ctx->stats.events_processed / 
-                                       (float)ctx->stats.total_interrupts;
+            *avg_events_per_int_tenths = (ctx->stats.events_processed * 10) /
+                                         ctx->stats.total_interrupts;
         } else {
-            *avg_events_per_interrupt = 0.0f;
+            *avg_events_per_int_tenths = 0;
         }
     }
-    
-    if (batching_efficiency) {
+
+    if (batching_efficiency_tenths) {
+        /* Result in tenths of a percent (e.g., 955 = 95.5%) */
         if (ctx->stats.total_interrupts > 0) {
-            *batching_efficiency = (float)ctx->stats.batched_interrupts * 100.0f / 
-                                 (float)ctx->stats.total_interrupts;
+            *batching_efficiency_tenths = (ctx->stats.batched_interrupts * 1000) /
+                                          ctx->stats.total_interrupts;
         } else {
-            *batching_efficiency = 0.0f;
+            *batching_efficiency_tenths = 0;
         }
     }
     

@@ -9,7 +9,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include "../../include/main.h"
 #include "../../include/hardware.h"

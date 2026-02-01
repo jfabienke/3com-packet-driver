@@ -6,25 +6,52 @@
  *
  * This file is part of the 3Com Packet Driver project.
  *
+ * Fixed for Watcom C compiler (C89 compliance)
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdarg.h>
-#include <time.h>
 #include <dos.h>
 #include <stdlib.h>
-#include "../include/logging.h"
+#include "logging.h"
+
+/* Watcom C compatibility - provide snprintf/vsnprintf wrappers */
+#ifdef __WATCOMC__
+#define snprintf watcom_snprintf
+#define vsnprintf watcom_vsnprintf
+
+static int watcom_snprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list args;
+    int ret;
+    va_start(args, fmt);
+    ret = vsprintf(buf, fmt, args);
+    va_end(args);
+    if (size > 0) {
+        buf[size - 1] = '\0';
+    }
+    return ret;
+}
+
+static int watcom_vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
+    int ret;
+    ret = vsprintf(buf, fmt, args);
+    if (size > 0) {
+        buf[size - 1] = '\0';
+    }
+    return ret;
+}
+#endif
 
 /* Enhanced logging configuration for Phase 3C */
 static int logging_enabled = 1;
 static int log_level = LOG_LEVEL_INFO;
-static FILE *log_file = NULL;
+static dos_file_t log_file = -1;
 static char log_buffer[LOG_BUFFER_SIZE];
 static int log_to_console = 1;
 static int log_to_file = 0;
 static int log_to_network = 0;  /* New: network logging */
-static char log_filename[128] = "3COMPD.LOG";
+static char log_filename[128];  /* Initialized at runtime to reduce _DATA segment */
 
 /* Ring buffer for efficient DOS memory usage */
 static char *ring_buffer = NULL;
@@ -61,7 +88,10 @@ int logging_init(void) {
     log_to_console = 1;
     log_to_file = 0;
     log_to_network = 0;
-    
+
+    /* Initialize default filename (moved from static init to reduce _DATA) */
+    strcpy(log_filename, "3COMPD.LOG");
+
     /* Clear log buffer */
     memset(log_buffer, 0, sizeof(log_buffer));
     
@@ -124,28 +154,28 @@ int logging_set_console(int enable) {
  */
 int logging_set_file(const char *filename) {
     /* Close existing file if open */
-    if (log_file) {
+    if (log_file >= 0) {
         log_info("Closing previous log file: %s", log_filename);
-        fclose(log_file);
-        log_file = NULL;
+        dos_fclose(log_file);
+        log_file = -1;
         log_to_file = 0;
     }
-    
+
     /* Update filename */
     if (filename) {
         strncpy(log_filename, filename, sizeof(log_filename) - 1);
         log_filename[sizeof(log_filename) - 1] = '\0';
     }
-    
+
     /* Attempt to open file for append */
-    log_file = fopen(log_filename, "a");
-    if (log_file) {
+    log_file = dos_fopen(log_filename, "a");
+    if (log_file >= 0) {
         log_to_file = 1;
         
         /* Write header to log file */
-        fprintf(log_file, "\n=== 3Com Packet Driver Log Started ===\n");
-        fflush(log_file);
-        
+        dos_fwrite("\n=== 3Com Packet Driver Log Started ===\n", 1, 40, log_file);
+        dos_fflush(log_file);
+
         log_info("File logging enabled: %s", log_filename);
         return 0;
     } else {
@@ -160,35 +190,37 @@ int logging_set_file(const char *filename) {
  * @return 0 on success, negative on error
  */
 int logging_rotate_file(void) {
-    if (!log_file || !log_to_file) {
+    long current_pos;
+    char backup_name[132];  /* sizeof(log_filename) + 4 */
+
+    if (log_file < 0 || !log_to_file) {
         return 0; /* No file logging active */
     }
-    
-    /* Get current file size */
-    long current_pos = ftell(log_file);
+
+    /* Get current file size - ftell not available with dos_io */
+    current_pos = 0; /* TODO: implement dos_ftell */
     if (current_pos < 0) {
         return -1; /* Error getting file position */
     }
-    
+
     /* Check if rotation is needed (> 1MB) */
     if (current_pos > 1048576) {
         log_info("Rotating log file (size: %ld bytes)", current_pos);
-        
+
         /* Close current file */
-        fclose(log_file);
-        
+        dos_fclose(log_file);
+
         /* Create backup filename */
-        char backup_name[sizeof(log_filename) + 4];
         snprintf(backup_name, sizeof(backup_name), "%s.old", log_filename);
-        
+
         /* Rename current file to backup */
         rename(log_filename, backup_name);
-        
+
         /* Open new file */
-        log_file = fopen(log_filename, "w");
-        if (log_file) {
-            fprintf(log_file, "=== 3Com Packet Driver Log (Rotated) ===\n");
-            fflush(log_file);
+        log_file = dos_fopen(log_filename, "w");
+        if (log_file >= 0) {
+            dos_fwrite("=== 3Com Packet Driver Log (Rotated) ===\n", 1, 42, log_file);
+            dos_fflush(log_file);
             log_info("Log file rotated successfully");
             return 0;
         } else {
@@ -197,7 +229,7 @@ int logging_rotate_file(void) {
             return LOG_ERR_FILE_OPEN;
         }
     }
-    
+
     return 0; /* No rotation needed */
 }
 
@@ -251,8 +283,8 @@ void log_at_level(int level, const char *format, ...) {
     len = snprintf(log_buffer, sizeof(log_buffer), 
                    "[%s] %s: ", time_str, level_names[level]);
     
-    if (len > 0 && len < sizeof(log_buffer)) {
-        vsnprintf(log_buffer + len, sizeof(log_buffer) - len, format, args);
+    if (len > 0 && (size_t)len < sizeof(log_buffer)) {
+        vsnprintf(log_buffer + len, sizeof(log_buffer) - (size_t)len, format, args);
     }
     
     va_end(args);
@@ -268,9 +300,10 @@ void log_at_level(int level, const char *format, ...) {
     }
     
     /* Output to file */
-    if (log_to_file && log_file) {
-        fprintf(log_file, "%s\n", log_buffer);
-        fflush(log_file);
+    if (log_to_file && log_file >= 0) {
+        dos_fwrite(log_buffer, 1, strlen(log_buffer), log_file);
+        dos_fwrite("\n", 1, 1, log_file);
+        dos_fflush(log_file);
     }
     
     /* Output to network (placeholder) */
@@ -367,17 +400,20 @@ void log_error(const char *format, ...) {
  * @param message Log message to store
  */
 void log_to_ring_buffer(const char *message) {
+    int msg_len;
+    int total_len;
+
     if (!ring_buffer || !message) {
         return;
     }
-    
-    int msg_len = strlen(message);
+
+    msg_len = strlen(message);
     if (msg_len == 0) {
         return;
     }
-    
+
     /* Add newline and null terminator space */
-    int total_len = msg_len + 2;
+    total_len = msg_len + 2;
     
     /* Check if we have enough space */
     if (total_len > ring_buffer_size) {
@@ -422,25 +458,30 @@ void log_to_ring_buffer(const char *message) {
  * @return Number of bytes read
  */
 int log_read_ring_buffer(char *buffer, int buffer_size) {
+    int bytes_read;
+    int entry_start;
+    int entry_end;
+    int entry_len;
+
     if (!ring_buffer || !buffer || buffer_size <= 0 || !ring_enabled) {
         return 0;
     }
-    
-    int bytes_read = 0;
-    
+
+    bytes_read = 0;
+
     while (ring_read_pos != ring_write_pos && bytes_read < buffer_size - 1) {
         /* Find end of current log entry */
-        int entry_start = ring_read_pos;
-        int entry_end = entry_start;
-        
+        entry_start = ring_read_pos;
+        entry_end = entry_start;
+
         /* Find the newline or null terminator */
-        while (entry_end < ring_buffer_size && 
-               ring_buffer[entry_end] != '\n' && 
+        while (entry_end < ring_buffer_size &&
+               ring_buffer[entry_end] != '\n' &&
                ring_buffer[entry_end] != '\0') {
             entry_end++;
         }
-        
-        int entry_len = entry_end - entry_start;
+
+        entry_len = entry_end - entry_start;
         
         /* Check if we have space in output buffer */
         if (bytes_read + entry_len + 1 >= buffer_size) {
@@ -504,7 +545,7 @@ void logging_get_stats(unsigned long *written, unsigned long *dropped, unsigned 
 }
 
 /* Network logging configuration */
-static char network_log_host[64] = "192.168.1.100";  /* Default log server */
+static char network_log_host[64];  /* Initialized at runtime to reduce _DATA segment */
 static int network_log_port = 514;                    /* Syslog port */
 static int network_log_protocol = 0;                  /* 0=UDP, 1=TCP */
 
@@ -513,21 +554,24 @@ static int network_log_protocol = 0;                  /* 0=UDP, 1=TCP */
  * @param message Log message
  */
 void log_to_network_target(const char *message) {
+    /* C89: All declarations must come before statements */
+    static dos_file_t network_log_file = -1;
+
+    /* External function declarations for NIC access */
+    extern int hardware_get_nic_count(void);
+    extern void* hardware_get_nic(int index);
+
     if (!message || !log_to_network) {
         return;
     }
-    
+
     /* Implement actual network transmission for remote logging */
     /* For DOS environment, we'll use a simplified packet construction approach */
-    
+
     if (!log_to_network) {
         return;  /* Network logging disabled */
     }
-    
-    /* Get active NIC for network transmission */
-    extern int hardware_get_nic_count(void);
-    extern void* hardware_get_nic(int index);
-    
+
     /* For production implementation, construct and send UDP syslog packet */
     /* This is a simplified version - real implementation would:
      * 1. Get proper NIC handle and check link status
@@ -536,16 +580,19 @@ void log_to_network_target(const char *message) {
      * 4. Handle IP address configuration
      * 5. Implement proper error handling and retries
      */
-    
-    /* For now, we also maintain file-based network logging for debugging */
-    static FILE *network_log_file = NULL;
-    if (!network_log_file) {
-        network_log_file = fopen("NETLOG.TXT", "a");
+
+    /* File-based network logging for debugging */
+    if (network_log_file < 0) {
+        network_log_file = dos_fopen("NETLOG.TXT", "a");
     }
-    
-    if (network_log_file) {
-        fprintf(network_log_file, "NET[%s:%d]: %s\n", network_log_host, network_log_port, message);
-        fflush(network_log_file);
+
+    if (network_log_file >= 0) {
+        dos_fwrite("NET[", 1, 4, network_log_file);
+        dos_fwrite(network_log_host, 1, strlen(network_log_host), network_log_file);
+        dos_fwrite("]: ", 1, 3, network_log_file);
+        dos_fwrite(message, 1, strlen(message), network_log_file);
+        dos_fwrite("\n", 1, 1, network_log_file);
+        dos_fflush(network_log_file);
     }
     
     /* In actual implementation, this would be something like:
@@ -570,13 +617,15 @@ void log_to_network_target(const char *message) {
  * @return 0 on success
  */
 int logging_set_network_target(const char *host, int port, int protocol) {
+    int i;
+
     if (!host || port <= 0 || port > 65535) {
         return LOG_ERR_INVALID_LEVEL; /* Reuse error code */
     }
-    
+
     /* Copy host (safely) */
-    int i = 0;
-    while (host[i] && i < sizeof(network_log_host) - 1) {
+    i = 0;
+    while (host[i] && (size_t)i < sizeof(network_log_host) - 1) {
         network_log_host[i] = host[i];
         i++;
     }
@@ -652,24 +701,236 @@ int logging_get_level(void) {
  * @return 0 on success
  */
 int logging_cleanup(void) {
-    if (log_file) {
+    if (log_file >= 0) {
         log_info("Closing log file");
-        fclose(log_file);
-        log_file = NULL;
+        dos_fclose(log_file);
+        log_file = -1;
     }
-    
+
     /* Cleanup ring buffer */
     if (ring_buffer) {
         free(ring_buffer);
         ring_buffer = NULL;
         ring_enabled = 0;
     }
-    
+
     /* Print final statistics */
     printf("Logging statistics: %lu entries written, %lu dropped, %lu overruns\r\n",
            log_entries_written, log_entries_dropped, log_buffer_overruns);
-    
+
     logging_enabled = 0;
     return 0;
+}
+
+/**
+ * @brief Get category name string
+ * @param category Category bitmask
+ * @return Category name string
+ */
+const char* get_category_name(int category) {
+    switch (category) {
+        case LOG_CAT_HARDWARE:    return "HARDWARE";
+        case LOG_CAT_NETWORK:     return "NETWORK";
+        case LOG_CAT_MEMORY:      return "MEMORY";
+        case LOG_CAT_INTERRUPT:   return "INTERRUPT";
+        case LOG_CAT_PACKET:      return "PACKET";
+        case LOG_CAT_CONFIG:      return "CONFIG";
+        case LOG_CAT_PERFORMANCE: return "PERF";
+        case LOG_CAT_DRIVER:      return "DRIVER";
+        default:                  return "UNKNOWN";
+    }
+}
+
+/**
+ * @brief Log message with level and category
+ * @param level Log level
+ * @param category Log category
+ * @param format Printf-style format string
+ * @param ... Arguments
+ */
+void log_at_level_with_category(int level, int category, const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || level < log_level) {
+        log_entries_dropped++;
+        return;
+    }
+
+    /* Check category filter */
+    if (!(category_filter & category)) {
+        log_entries_dropped++;
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    va_end(args);
+
+    log_at_level(level, "[%s] %s", get_category_name(category), log_buffer);
+}
+
+/**
+ * @brief Log debug message with category
+ * @param category Log category
+ * @param format Printf-style format string
+ * @param ... Arguments
+ */
+void log_debug_category(int category, const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_DEBUG < log_level) {
+        return;
+    }
+
+    if (!(category_filter & category)) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    va_end(args);
+
+    log_at_level(LOG_LEVEL_DEBUG, "[%s] %s", get_category_name(category), log_buffer);
+}
+
+/**
+ * @brief Log info message with category
+ * @param category Log category
+ * @param format Printf-style format string
+ * @param ... Arguments
+ */
+void log_info_category(int category, const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_INFO < log_level) {
+        return;
+    }
+
+    if (!(category_filter & category)) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    va_end(args);
+
+    log_at_level(LOG_LEVEL_INFO, "[%s] %s", get_category_name(category), log_buffer);
+}
+
+/**
+ * @brief Log warning message with category
+ * @param category Log category
+ * @param format Printf-style format string
+ * @param ... Arguments
+ */
+void log_warning_category(int category, const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_WARNING < log_level) {
+        return;
+    }
+
+    if (!(category_filter & category)) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    va_end(args);
+
+    log_at_level(LOG_LEVEL_WARNING, "[%s] %s", get_category_name(category), log_buffer);
+}
+
+/**
+ * @brief Log error message with category
+ * @param category Log category
+ * @param format Printf-style format string
+ * @param ... Arguments
+ */
+void log_error_category(int category, const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_ERROR < log_level) {
+        return;
+    }
+
+    if (!(category_filter & category)) {
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    va_end(args);
+
+    log_at_level(LOG_LEVEL_ERROR, "[%s] %s", get_category_name(category), log_buffer);
+}
+
+/**
+ * @brief Initialize logging with configuration
+ * @param config_log_enabled Initial logging enabled state
+ * @return 0 on success
+ */
+int logging_init_with_config(int config_log_enabled) {
+    int result;
+    result = logging_init();
+    if (result == 0) {
+        logging_enabled = config_log_enabled;
+    }
+    return result;
+}
+
+/**
+ * @brief Configure advanced logging settings
+ * @param level Log level
+ * @param categories Category filter bitmask
+ * @param console_out Enable console output
+ * @param file_out Enable file output
+ * @param network_out Enable network output
+ * @return 0 on success
+ */
+int logging_configure_advanced(int level, int categories, int console_out, int file_out, int network_out) {
+    logging_set_level(level);
+    logging_set_category_filter(categories);
+    logging_set_console(console_out);
+    if (file_out) {
+        logging_set_file(NULL);  /* Use default filename */
+    }
+    logging_set_network(network_out);
+    return 0;
+}
+
+/**
+ * @brief Apply configuration from config structure
+ * @param config_ptr Pointer to configuration (opaque)
+ * @return 0 on success
+ */
+int logging_apply_config(const void *config_ptr) {
+    /* Placeholder - actual implementation depends on config structure */
+    (void)config_ptr;
+    return 0;
+}
+
+/**
+ * @brief Get current logging configuration
+ * @param level Pointer to store current level
+ * @param categories Pointer to store category filter
+ * @param outputs Pointer to store output flags
+ */
+void logging_get_config(int *level, int *categories, int *outputs) {
+    int output_flags;
+
+    if (level) {
+        *level = log_level;
+    }
+    if (categories) {
+        *categories = category_filter;
+    }
+    if (outputs) {
+        output_flags = 0;
+        if (log_to_console) output_flags |= 0x01;
+        if (log_to_file) output_flags |= 0x02;
+        if (log_to_network) output_flags |= 0x04;
+        *outputs = output_flags;
+    }
 }
 

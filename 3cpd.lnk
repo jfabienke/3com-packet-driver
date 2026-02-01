@@ -16,6 +16,9 @@ NAME build/3cpd.exe
 # Memory model library (large model for code+data > 64KB)
 LIBRARY /Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel/lib286/dos/clibl.lib
 
+# Overlay runtime library (provides __NOVLINIT__, __NOVLLDR__)
+LIBRARY /Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel/lib286/dos/wovl.lib
+
 # Linker options
 OPTION map=build/3cpd.map
 OPTION caseexact
@@ -111,6 +114,9 @@ FILE build/hardware_rt.obj
 FILE build/3c509b_rt.obj
 FILE build/3c515_rt.obj
 # Vortex/Boomerang moved to OVL_DETECT overlay (PCI detection code, not needed at runtime)
+
+# DOS I/O (custom printf/file I/O via INT 21h - used by ROOT modules)
+FILE build/dos_io.obj
 
 # Logging - Runtime logging functions (init moved to OVL_FINAL)
 FILE build/logging_rt.obj

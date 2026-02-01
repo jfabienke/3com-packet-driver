@@ -12,7 +12,7 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include "bufcfg.h"
 #include "hardware.h"
 #include "memory.h"

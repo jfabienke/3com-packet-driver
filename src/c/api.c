@@ -9,7 +9,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include "api.h"
 #include "hardware.h"
@@ -57,7 +57,8 @@ static int extended_api_initialized = 0;
 static uint16_t driver_signature = 0x3C0D; /* "3COm" in hex - proper 3Com signature */
 
 /* GPT-5: API guard state to prevent calls during initialization */
-static volatile int api_ready = 0;  /* Set to 1 only after full activation */
+/* Phase 5: Removed static for external access from unwind.c */
+volatile int api_ready = 0;  /* Set to 1 only after full activation */
 
 /* Phase 3 Global State */
 static int load_balancing_enabled = 0;

@@ -8,19 +8,23 @@
 
 #include <dos.h>
 #include <string.h>
-#include <stdio.h>
-#include "../include/pltprob.h"
-#include "../include/vds.h"
-#include "../include/logging.h"
-#include "../include/cpudet.h"
+#include "dos_io.h"
+#include "portabl.h"
+#include "pltprob.h"
+#include "vds.h"
+#include "logging.h"
+#include "cpudet.h"
 
-/* Global early detection results */
-static platform_probe_result_t g_early_platform = {0};
-static bool g_early_probe_done = false;
+/* Global early detection results - C89 compatible initialization */
+static platform_probe_result_t g_early_platform;
+static int g_early_probe_done = 0;
 
 /* V86 mode detection (moved from main.c) */
 static bool detect_v86_mode_early(void);
 static bool detect_dpmi_services(void);
+
+/* Forward declaration for XMS detection (defined later in file) */
+bool detect_xms_services(void);
 
 /**
  * @brief Early platform probe - MUST be called before hardware init
@@ -29,20 +33,26 @@ static bool detect_dpmi_services(void);
  * It MUST run before any DMA operations or hardware initialization.
  */
 int platform_probe_early(void) {
+    bool in_v86_mode;
+    bool dpmi_present;
+    bool xms_present;
+    bool himem_only;
+    bool has_paging;
+
     LOG_INFO("=== Phase 1: Early Platform Probe ===");
-    
+
     if (g_early_probe_done) {
         LOG_INFO("Early platform probe already completed");
         return 0;
     }
-    
+
     memset(&g_early_platform, 0, sizeof(g_early_platform));
-    
+
     /* Step 1: V86 Mode Detection (moved from main.c) */
     LOG_INFO("Detecting CPU mode and memory environment...");
-    
-    bool in_v86_mode = detect_v86_mode_early();
-    bool dpmi_present = detect_dpmi_services();
+
+    in_v86_mode = detect_v86_mode_early();
+    dpmi_present = detect_dpmi_services();
     
     if (in_v86_mode) {
         LOG_WARNING("V86 mode detected - DMA requires special handling");
@@ -55,7 +65,7 @@ int platform_probe_early(void) {
     /* Step 2: VDS Detection (Primary DMA policy gate) */
     LOG_INFO("Checking for VDS (Virtual DMA Services)...");
     
-    g_early_platform.vds_available = vds_is_available();
+    g_early_platform.vds_available = vds_available();
     
     if (g_early_platform.vds_available) {
         LOG_INFO("VDS services FOUND - DMA operations will use VDS");
@@ -74,13 +84,13 @@ int platform_probe_early(void) {
         g_early_platform.qemm_detected = detect_qemm_manager();
         
         /* Check for HIMEM-only (safe for DMA) */
-        bool xms_present = detect_xms_services();
-        bool himem_only = xms_present && 
-                         !g_early_platform.vcpi_present &&
-                         !g_early_platform.windows_enhanced &&
-                         !g_early_platform.emm386_detected &&
-                         !g_early_platform.qemm_detected &&
-                         !in_v86_mode;
+        xms_present = detect_xms_services();
+        himem_only = xms_present &&
+                     !g_early_platform.vcpi_present &&
+                     !g_early_platform.windows_enhanced &&
+                     !g_early_platform.emm386_detected &&
+                     !g_early_platform.qemm_detected &&
+                     !in_v86_mode;
         
         LOG_INFO("Environment detection results:");
         LOG_INFO("  V86 mode: %s", in_v86_mode ? "YES" : "NO");
@@ -94,11 +104,11 @@ int platform_probe_early(void) {
         LOG_INFO("  HIMEM-only: %s", himem_only ? "YES" : "NO");
         
         /* Step 4: Determine DMA Policy */
-        bool has_paging = in_v86_mode || dpmi_present ||
-                         g_early_platform.vcpi_present ||
-                         g_early_platform.windows_enhanced ||
-                         g_early_platform.emm386_detected ||
-                         g_early_platform.qemm_detected;
+        has_paging = in_v86_mode || dpmi_present ||
+                     g_early_platform.vcpi_present ||
+                     g_early_platform.windows_enhanced ||
+                     g_early_platform.emm386_detected ||
+                     g_early_platform.qemm_detected;
         
         if (has_paging) {
             /* V86/paging without VDS = FORBID DMA */
@@ -144,71 +154,19 @@ int platform_probe_early(void) {
              "FORBID");
     LOG_INFO("Environment: %s", g_early_platform.environment_desc);
     
-    g_early_probe_done = true;
+    g_early_probe_done = 1;
     return 0;
 }
 
 /**
  * @brief Detect V86 mode (moved from main.c)
+ *
+ * Uses the assembly helper from cpudet.asm which properly handles
+ * CPU detection across all processor generations (8086 through Pentium+).
  */
 static bool detect_v86_mode_early(void) {
-    bool in_v86 = false;
-    
-    /* Method 1: Check EFLAGS VM bit (386+) */
-    _asm {
-        pushf
-        pop ax
-        mov bx, ax
-        or ax, 0x8000       ; Try to set bit 15
-        push ax
-        popf
-        pushf
-        pop ax
-        cmp ax, bx
-        je not_386_plus
-        
-        ; 386+ detected, check VM flag
-        .386
-        pushfd
-        pop eax
-        test eax, 0x20000   ; VM flag (bit 17)
-        jz not_v86_1
-        mov in_v86, 1
-        
-    not_v86_1:
-        .286
-    not_386_plus:
-    }
-    
-    if (in_v86) {
-        return true;
-    }
-    
-    /* Method 2: Try to execute privileged instruction */
-    _asm {
-        ; Try to read CR0 (privileged in V86)
-        push ax
-        
-        ; Set up exception handler
-        xor ax, ax
-        mov es, ax
-        
-        ; Try SMSW (Store Machine Status Word)
-        smsw ax
-        
-        ; If we get here, we're in real mode or ring 0
-        jmp done_v86_check
-        
-        ; If we fault, we're in V86 (handler would set flag)
-        
-    done_v86_check:
-        pop ax
-    }
-    
-    /* Method 3: Check for memory managers that imply V86 */
-    /* This is done in the memory manager detection functions */
-    
-    return in_v86;
+    /* Use the assembly helper which handles CPU detection properly */
+    return (asm_is_v86_mode() != 0);
 }
 
 /**

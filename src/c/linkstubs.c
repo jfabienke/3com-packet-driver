@@ -17,7 +17,7 @@
  * - Removed data owned by other C modules (pcmcia_event_flag, api_ready)
  * - Removed 3c509b_* stubs (real implementations in 3c509b.c)
  *
- * Last Updated: 2026-01-28 02:15:00 UTC
+ * Last Updated: 2026-01-28 13:28:44 CET
  *
  * Round 5: Added packet_received wrapper to forward to packet_receive_process
  */
@@ -181,15 +181,11 @@ int far stage_api_activate(struct init_context far *ctx) {
 /* ============================================================================
  * 3C515 NIC Driver Function Stubs
  * 3C509B functions removed - real implementations in 3c509b.c
+ * REMOVED (2026-01-28): _3c515_init, _3c515_cleanup, _3c515_reset,
+ *   _3c515_self_test - now in 3c515_init.c
+ * REMOVED (2026-01-28): _3c515_enable_interrupts, _3c515_disable_interrupts
+ *   - now in 3c515_rt.c
  * ============================================================================ */
-
-/* 3C515 functions (exported from 3c515.obj) */
-int _3c515_init(void *nic) { (void)nic; return 0; }
-int _3c515_cleanup(void *nic) { (void)nic; return 0; }
-int _3c515_reset(void *nic) { (void)nic; return 0; }
-int _3c515_self_test(void *nic) { (void)nic; return 0; }
-int _3c515_enable_interrupts(void *nic) { (void)nic; return 0; }
-int _3c515_disable_interrupts(void *nic) { (void)nic; return 0; }
 
 /* ============================================================================
  * ASM CPU Detection Functions - Stubs matching cpudet.h
@@ -263,11 +259,11 @@ void cache_management_invalidate_buffer(void) {}
 int is_cache_management_initialized(void) { return 0; }
 const char *get_cache_tier_description(void) { return "Unknown"; }
 
-/* Hardware functions - NOT trampolined ones */
+/* Hardware functions - NOT trampolined ones
+ * REMOVED (2026-01-28): hardware_get_link_status - now in hardware_rt.c */
 int hardware_check_rx_ready(void) { return 0; }
 int hardware_dma_read(void) { return -1; }
 int hardware_dma_write(void) { return -1; }
-int hardware_get_link_status(void) { return 0; }
 int hardware_pio_read(void) { return -1; }
 int hardware_pio_write(void) { return -1; }
 int hardware_set_loopback_mode(void) { return 0; }
@@ -346,11 +342,11 @@ int get_link_speed(void) { return 10; }
 /* Packet functions - NOW PROVIDED by pktops.c (pktops_c.obj):
  *   packet_ops_init, packet_bottom_half_init, packet_process_deferred_work,
  *   packet_process_received, packet_isr_receive, packet_receive_process
+ * REMOVED (2026-01-28): packet_get_ethertype, packet_queue_tx_completion
+ *   - now in pktops_rt.c
  * These remaining stubs are for functions not yet in pktops.c: */
 void packet_deliver_to_handler(void) {}
-uint16_t packet_get_ethertype(void) { return 0; }
 uint32_t packet_get_timestamp(void) { return 0; }
-void packet_queue_tx_completion(void) {}
 
 /* packet_received - Legacy wrapper for callers that don't have nic_index
  * NOTE: rxbatch.c now calls packet_receive_process directly with nic_index.
@@ -470,7 +466,7 @@ void restore_all_hardware_irqs(void) {}
 int packet_api_dispatcher(void) { return 0; }
 void log_vector_ownership_warning(void) {}
 void log_hardware_irq_restore_warning(void) {}
-void dos_idle_background_processing(void) {}
+/* REMOVED (2026-01-28): dos_idle_background_processing - now in dos_idle.c */
 int defensive_init(void) { return 0; }
 void defensive_shutdown(void) {}
 int safe_restore_vector(int vec) { (void)vec; return 0; }
@@ -483,13 +479,10 @@ void initialize_memory_optimization(void) {}
 /* delay functions - delay_1us is provided by hwdet.asm, only delay_1ms here */
 void delay_1ms(void) {}
 
-/* CPU detection ASM symbols - these are normally in cpudet.asm */
-int cpuid_available = 0;
-int cpu_features = 0;
-int cache_line_size = 32;
-int cpu_is_486_plus = 0;
-int is_v86_mode = 0;
-int sse2_available = 0;
+/* CPU detection ASM symbols - REMOVED (2026-01-28):
+ * cpuid_available, cpu_features, cache_line_size, cpu_is_486_plus,
+ * is_v86_mode, sse2_available - all now defined in cpudet.asm
+ * NOTE: g_cache_line_size (with g_ prefix) is kept as it's a separate variable */
 
 /* 3C509B PIO transmit */
 int el3_3c509b_pio_transmit(void *nic, const void *data, int len) {
@@ -525,14 +518,9 @@ void asm_packet_copy_fast(void *dest, const void *src, uint16_t size) { (void)de
 /* EEPROM */
 int read_mac_from_eeprom_3c509b(void *nic, uint8_t *mac) { (void)nic; (void)mac; return -1; }
 
-/* XMS pool and deferred queue - stub implementations
- * NOTE: Real implementations are in bufaloc.c (static)
- * These stubs provide linker symbols for modules that expect them
- * Using simple struct stubs to avoid header conflicts */
-typedef struct { uint32_t dummy[8]; } xms_buffer_pool_t_stub;
-typedef struct { uint32_t dummy[8]; } spsc_queue_t_stub;
-xms_buffer_pool_t_stub g_xms_pool = {0};
-spsc_queue_t_stub g_deferred_queue = {0};
+/* XMS pool and deferred queue - REMOVED (2026-01-28):
+ * g_xms_pool and its typedef - now defined in pktops_init.c
+ * g_deferred_queue and its typedef - now defined in pktops_init.c */
 
 /* Deferred work queue functions (called from tsrwrap.asm) */
 void periodic_vector_monitoring(void) {}

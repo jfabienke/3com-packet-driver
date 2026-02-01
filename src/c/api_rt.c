@@ -19,7 +19,7 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include "api.h"
 #include "hardware.h"

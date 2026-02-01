@@ -10,7 +10,8 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include <malloc.h>  /* For _fmalloc, _ffree */
+#include "dos_io.h"
 #include <string.h>
 #include "../../include/dmacap.h"
 #include "../../include/logging.h"
@@ -41,23 +42,23 @@ static struct {
  * @return 0 if cache coherent, negative if not
  */
 int test_dma_cache_coherency(dma_test_config_t *config) {
-    uint16_t far *test_buffer;
-    uint16_t segment, offset;
+    uint16_t far* test_buffer;
+    uint16_t buf_seg, buf_ofs;
     uint16_t test_value;
     int i;
-    
+
     log_info("  Testing DMA cache coherency");
-    
+
     /* Allocate test buffer in low memory (DMA-accessible) */
     test_buffer = (uint16_t far *)_fmalloc(config->test_buffer_size);
     if (!test_buffer) {
         log_error("    Failed to allocate test buffer");
         return -1;
     }
-    
+
     /* Get physical address */
-    segment = FP_SEG(test_buffer);
-    offset = FP_OFF(test_buffer);
+    buf_seg = FP_SEG(test_buffer);
+    buf_ofs = FP_OFF(test_buffer);
     
     /* Fill buffer with test pattern */
     for (i = 0; i < config->test_buffer_size / 2; i++) {
@@ -72,20 +73,24 @@ int test_dma_cache_coherency(dma_test_config_t *config) {
     
     /* Simulate DMA write by directly modifying memory */
     /* In real implementation, this would use actual DMA controller */
-    _asm {
-        push es
-        push di
-        
-        mov es, segment
-        mov di, offset
-        mov cx, 8          ; Modify first 8 words
-        mov ax, DMA_TEST_INVERTED
-        
-        cld
-        rep stosw          ; Write inverted pattern
-        
-        pop di
-        pop es
+    {
+        uint16_t inv_pattern = DMA_TEST_INVERTED;
+        uint16_t count = 8;
+        _asm {
+            push es
+            push di
+
+            mov es, buf_seg
+            mov di, buf_ofs
+            mov cx, count
+            mov ax, inv_pattern
+
+            cld
+            rep stosw
+
+            pop di
+            pop es
+        }
     }
     
     /* Check if CPU sees the DMA changes */
@@ -109,17 +114,17 @@ int test_dma_cache_coherency(dma_test_config_t *config) {
 
 /**
  * @brief Test bus snooping capability (Phase 4.5)
- * 
+ *
  * Tests whether the system supports bus snooping, which allows
  * the cache controller to monitor DMA transactions and invalidate
  * cache lines as needed.
- * 
+ *
  * @param config Test configuration
  * @return 0 if bus snooping works, negative if not
  */
-int test_bus_snooping(dma_test_config_t *config) {
-    uint8_t far *test_buffer;
-    uint8_t far *alias_buffer;
+int test_bus_snooping_early(dma_test_config_t *config) {
+    uint8_t far* test_buffer;
+    uint8_t far* alias_buffer;
     uint16_t segment;
     int i;
     
@@ -167,20 +172,25 @@ int test_bus_snooping(dma_test_config_t *config) {
 
 /**
  * @brief Get DMA test results
- * 
+ *
  * Returns the results of DMA capability testing for use in
  * determining DMA policy.
- * 
+ *
  * @return Pointer to test results structure
  */
 dma_test_results_t* get_dma_test_results(void) {
     static dma_test_results_t results;
-    
-    results.cache_coherent = g_dma_test_results.cache_coherent;
-    results.bus_snooping_works = g_dma_test_results.bus_snooping_works;
-    results.needs_cache_flush = !g_dma_test_results.cache_coherent;
-    results.tests_completed = g_dma_test_results.tested;
-    
+
+    /* Initialize all fields to safe defaults */
+    memset(&results, 0, sizeof(results));
+
+    /* Map local test results to the header structure fields */
+    results.cache_coherent = (g_dma_test_results.cache_coherent != 0);
+    results.bus_snooping = (g_dma_test_results.bus_snooping_works != 0);
+    results.cache_mode = CACHE_MODE_UNKNOWN;
+    results.needs_alignment = 1;  /* Safe default */
+    results.optimal_alignment = 16;
+
     return &results;
 }
 
@@ -204,7 +214,7 @@ int run_dma_tests(dma_test_config_t *config) {
     }
     
     /* Test bus snooping */
-    result = test_bus_snooping(config);
+    result = test_bus_snooping_early(config);
     if (result < 0) {
         log_warning("Bus snooping test failed");
     }
@@ -212,7 +222,7 @@ int run_dma_tests(dma_test_config_t *config) {
     g_dma_test_results.tested = 1;
     
     /* Determine if cache flushing is needed */
-    if (!g_dma_test_results.cache_coherent || 
+    if (!g_dma_test_results.cache_coherent ||
         !g_dma_test_results.bus_snooping_works) {
         g_dma_test_results.needs_flush = 1;
         log_warning("DMA operations will require cache management");
@@ -220,6 +230,6 @@ int run_dma_tests(dma_test_config_t *config) {
         g_dma_test_results.needs_flush = 0;
         log_info("DMA operations are cache-safe");
     }
-    
+
     return 0;
 }

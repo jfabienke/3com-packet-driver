@@ -25,7 +25,7 @@
  * This file is part of the 3Com Packet Driver project.
  */
 
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <dos.h>
 #include "pktops.h"

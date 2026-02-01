@@ -44,9 +44,9 @@ typedef struct test_results {
     uint32_t total_interrupts;
     uint32_t total_events_processed;
     uint32_t total_time_ms;
-    float avg_events_per_interrupt;
-    float cpu_utilization_percent;
-    float batching_efficiency_percent;
+    unsigned long avg_events_per_interrupt_tenths;
+    unsigned long cpu_utilization_tenths;
+    unsigned long batching_efficiency_tenths;
     
     /* System responsiveness */
     uint32_t max_interrupt_latency_us;
@@ -449,32 +449,38 @@ static void compare_performance_results(const test_results_t *legacy, const test
         return;
     }
     
-    /* Calculate improvement percentages */
-    float cpu_improvement = 0.0f;
-    float interrupt_reduction = 0.0f;
-    float batching_efficiency = batched->batching_efficiency_percent;
-    
-    if (legacy->cpu_utilization_percent > 0) {
-        cpu_improvement = ((legacy->cpu_utilization_percent - batched->cpu_utilization_percent) 
-                          / legacy->cpu_utilization_percent) * 100.0f;
+    /* Calculate improvement percentages using integer math (tenths) */
+    unsigned long cpu_improvement_tenths = 0;
+    unsigned long interrupt_reduction_tenths = 0;
+    unsigned long batching_efficiency = batched->batching_efficiency_tenths;
+
+    if (legacy->cpu_utilization_tenths > 0) {
+        cpu_improvement_tenths = ((legacy->cpu_utilization_tenths - batched->cpu_utilization_tenths)
+                                  * 1000) / legacy->cpu_utilization_tenths;
     }
-    
+
     if (legacy->total_interrupts > 0 && batched->total_interrupts > 0) {
-        interrupt_reduction = ((float)(legacy->total_interrupts - batched->total_interrupts) 
-                              / legacy->total_interrupts) * 100.0f;
+        interrupt_reduction_tenths = ((legacy->total_interrupts - batched->total_interrupts)
+                                      * 1000) / legacy->total_interrupts;
     }
-    
-    printf("  CPU Utilization Improvement: %.1f%% (%.2f%% -> %.2f%%)\n",
-           cpu_improvement, legacy->cpu_utilization_percent, batched->cpu_utilization_percent);
-    
-    printf("  Events per Interrupt: %.2fx improvement (%.2f -> %.2f)\n",
-           batched->avg_events_per_interrupt / legacy->avg_events_per_interrupt,
-           legacy->avg_events_per_interrupt, batched->avg_events_per_interrupt);
-    
-    printf("  Interrupt Batching Efficiency: %.1f%%\n", batching_efficiency);
-    
+
+    printf("  CPU Utilization Improvement: %lu.%lu%% (%lu.%02lu%% -> %lu.%02lu%%)\n",
+           cpu_improvement_tenths / 10, cpu_improvement_tenths % 10,
+           legacy->cpu_utilization_tenths / 10, legacy->cpu_utilization_tenths % 10,
+           batched->cpu_utilization_tenths / 10, batched->cpu_utilization_tenths % 10);
+
+    printf("  Events per Interrupt: %lu.%lux improvement (%lu.%lu -> %lu.%lu)\n",
+           (legacy->avg_events_per_interrupt_tenths > 0) ?
+               (batched->avg_events_per_interrupt_tenths * 10 / legacy->avg_events_per_interrupt_tenths) : 0UL,
+           (legacy->avg_events_per_interrupt_tenths > 0) ?
+               ((batched->avg_events_per_interrupt_tenths * 100 / legacy->avg_events_per_interrupt_tenths) % 10) : 0UL,
+           legacy->avg_events_per_interrupt_tenths / 10, legacy->avg_events_per_interrupt_tenths % 10,
+           batched->avg_events_per_interrupt_tenths / 10, batched->avg_events_per_interrupt_tenths % 10);
+
+    printf("  Interrupt Batching Efficiency: %lu.%lu%%\n", batching_efficiency / 10, batching_efficiency % 10);
+
     /* Validate expected performance improvement */
-    bool performance_target_met = (cpu_improvement >= 15.0f && cpu_improvement <= 35.0f);
+    bool performance_target_met = (cpu_improvement_tenths >= 150 && cpu_improvement_tenths <= 350);
     printf("  Performance Target (15-25%% CPU reduction): %s\n",
            performance_target_met ? "MET" : "NOT MET");
     
@@ -598,7 +604,7 @@ static int validate_interrupt_statistics(test_state_t *state)
     printf("Validating interrupt statistics accuracy...\n");
     
     interrupt_stats_t stats;
-    float cpu_util, avg_events, batching_eff;
+    unsigned long cpu_util, avg_events, batching_eff;
     
     /* Test 3C515 statistics */
     if (get_interrupt_stats(&state->im_ctx_3c515, &stats) == 0) {
@@ -612,10 +618,10 @@ static int validate_interrupt_statistics(test_state_t *state)
     
     /* Test performance metrics calculation */
     if (get_performance_metrics(&state->im_ctx_3c515, &cpu_util, &avg_events, &batching_eff) == 0) {
-        printf("    Performance metrics: CPU=%.2f%%, Avg Events=%.2f, Batching=%.1f%%\n",
-               cpu_util, avg_events, batching_eff);
+        printf("    Performance metrics: CPU=%lu.%lu%%, Avg Events=%lu.%lu, Batching=%lu.%lu%%\n",
+               cpu_util / 10, cpu_util % 10, avg_events / 10, avg_events % 10, batching_eff / 10, batching_eff % 10);
     }
-    
+
     /* Test 3C509B statistics */
     if (get_interrupt_stats(&state->im_ctx_3c509b, &stats) == 0) {
         printf("  3C509B Statistics:\n");
@@ -625,11 +631,11 @@ static int validate_interrupt_statistics(test_state_t *state)
         printf("    Work limit hits: %u\n", stats.work_limit_hits);
         printf("    Batched interrupts: %u\n", stats.batched_interrupts);
     }
-    
+
     /* Test performance metrics calculation */
     if (get_performance_metrics(&state->im_ctx_3c509b, &cpu_util, &avg_events, &batching_eff) == 0) {
-        printf("    Performance metrics: CPU=%.2f%%, Avg Events=%.2f, Batching=%.1f%%\n",
-               cpu_util, avg_events, batching_eff);
+        printf("    Performance metrics: CPU=%lu.%lu%%, Avg Events=%lu.%lu, Batching=%lu.%lu%%\n",
+               cpu_util / 10, cpu_util % 10, avg_events / 10, avg_events % 10, batching_eff / 10, batching_eff % 10);
     }
     
     return 0;

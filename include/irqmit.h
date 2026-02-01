@@ -46,14 +46,14 @@ extern "C" {
 
 /* Event types for statistics tracking */
 typedef enum {
-    EVENT_TYPE_RX_COMPLETE = 0,    /* Packet reception complete */
-    EVENT_TYPE_TX_COMPLETE,        /* Packet transmission complete */
-    EVENT_TYPE_RX_ERROR,           /* Reception error */
-    EVENT_TYPE_TX_ERROR,           /* Transmission error */
-    EVENT_TYPE_LINK_CHANGE,        /* Link status change */
-    EVENT_TYPE_DMA_COMPLETE,       /* DMA operation complete (3C515 only) */
-    EVENT_TYPE_COUNTER_OVERFLOW,   /* Statistics counter overflow */
-    EVENT_TYPE_MAX                 /* Number of event types */
+    EVENT_TYPE_RX_COMPLETE,        /* 0: Packet reception complete */
+    EVENT_TYPE_TX_COMPLETE,        /* 1: Packet transmission complete */
+    EVENT_TYPE_RX_ERROR,           /* 2: Reception error */
+    EVENT_TYPE_TX_ERROR,           /* 3: Transmission error */
+    EVENT_TYPE_LINK_CHANGE,        /* 4: Link status change */
+    EVENT_TYPE_DMA_COMPLETE,       /* 5: DMA operation complete (3C515 only) */
+    EVENT_TYPE_COUNTER_OVERFLOW,   /* 6: Statistics counter overflow */
+    EVENT_TYPE_MAX                 /* 7: Number of event types */
 } interrupt_event_type_t;
 
 /**
@@ -211,9 +211,9 @@ int set_interrupt_mitigation_enabled(interrupt_mitigation_context_t *ctx, bool e
  * @return 0 on success, error code on failure
  */
 int get_performance_metrics(interrupt_mitigation_context_t *ctx,
-                           float *cpu_utilization,
-                           float *avg_events_per_interrupt,
-                           float *batching_efficiency);
+                           unsigned long *cpu_utilization_tenths,
+                           unsigned long *avg_events_per_int_tenths,
+                           unsigned long *batching_efficiency_tenths);
 
 /**
  * @brief Set work limit for NIC type

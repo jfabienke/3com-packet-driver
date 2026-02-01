@@ -4,46 +4,24 @@
  *
  * 3Com Packet Driver - Support for 3C515-TX and 3C509B NICs
  *
- * This file contains runtime logging functions that remain resident
- * in memory during packet operations. Init-only code is in logging_init.c.
+ * This file contains MINIMAL runtime logging functions that remain resident
+ * in memory during packet operations. All printf/fprintf/fopen calls have
+ * been REMOVED to avoid pulling in the C library (~40KB savings).
  *
- * This file is part of the 3Com Packet Driver project.
+ * Runtime logging only stores to ring buffer. Console/file output is
+ * handled during init or by a separate diagnostic utility.
  *
+ * Init-only code is in logging_init.c (OVERLAY segment).
+ *
+ * Refactored: 2026-01-28 13:45:00 CET - Removed C library dependencies
  * Split from logging.c: 2026-01-28 (ROOT/OVERLAY segmentation)
  */
 
-#include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 #include <dos.h>
+#include "dos_io.h"
 #include "logging.h"
-
-/* Watcom C compatibility - provide snprintf/vsnprintf wrappers */
-#ifdef __WATCOMC__
-#define snprintf watcom_snprintf
-#define vsnprintf watcom_vsnprintf
-
-static int watcom_snprintf(char *buf, size_t size, const char *fmt, ...) {
-    va_list args;
-    int ret;
-    va_start(args, fmt);
-    ret = vsprintf(buf, fmt, args);
-    va_end(args);
-    if (size > 0) {
-        buf[size - 1] = '\0';
-    }
-    return ret;
-}
-
-static int watcom_vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
-    int ret;
-    ret = vsprintf(buf, fmt, args);
-    if (size > 0) {
-        buf[size - 1] = '\0';
-    }
-    return ret;
-}
-#endif
 
 /*
  * State variables - shared between logging_rt.c and logging_init.c
@@ -51,12 +29,7 @@ static int watcom_vsnprintf(char *buf, size_t size, const char *fmt, va_list arg
  */
 int logging_enabled = 1;
 int log_level = LOG_LEVEL_INFO;
-FILE *log_file = NULL;
 char log_buffer[LOG_BUFFER_SIZE];
-int log_to_console = 1;
-int log_to_file = 0;
-int log_to_network = 0;
-char log_filename[128];
 
 /* Ring buffer state */
 char *ring_buffer = NULL;
@@ -79,172 +52,157 @@ unsigned long log_buffer_overruns = 0;
 static const char *level_names[] = {
     "DEBUG",
     "INFO",
-    "WARNING",
-    "ERROR"
+    "WARN",
+    "ERR"
 };
 
-/* Network logging configuration */
-char network_log_host[64];
-int network_log_port = 514;
-int network_log_protocol = 0;
+/* ============================================================================
+ * Minimal string formatting (no C library)
+ * ============================================================================ */
 
 /**
- * @brief Get current time as string
- * @param buffer Buffer to store time string
- * @param size Buffer size
+ * @brief Simple integer to string (no C library)
  */
-static void get_time_string(char *buffer, size_t size) {
+static char* int_to_str(int val, char *buf, int base) {
+    char *p = buf;
+    char *start;
+    int neg = 0;
+
+    if (val < 0 && base == 10) {
+        neg = 1;
+        val = -val;
+    }
+
+    /* Build string in reverse */
+    do {
+        int digit = val % base;
+        *p++ = (char)(digit < 10 ? '0' + digit : 'a' + digit - 10);
+        val /= base;
+    } while (val > 0);
+
+    if (neg) *p++ = '-';
+    *p = '\0';
+
+    /* Reverse the string */
+    start = buf;
+    p--;
+    while (start < p) {
+        char tmp = *start;
+        *start++ = *p;
+        *p-- = tmp;
+    }
+
+    return buf;
+}
+
+/**
+ * @brief Minimal format - only %s, %d, %x supported
+ */
+static int minimal_vsprintf(char *buf, int bufsize, const char *fmt, va_list args) {
+    int pos = 0;
+    const char *p = fmt;
+
+    while (*p && pos < bufsize - 1) {
+        if (*p == '%' && *(p+1)) {
+            p++;
+            switch (*p) {
+                case 's': {
+                    const char *s = va_arg(args, const char*);
+                    if (!s) s = "(null)";
+                    while (*s && pos < bufsize - 1) {
+                        buf[pos++] = *s++;
+                    }
+                    break;
+                }
+                case 'd': {
+                    char numbuf[16];
+                    int_to_str(va_arg(args, int), numbuf, 10);
+                    {
+                        char *n = numbuf;
+                        while (*n && pos < bufsize - 1) {
+                            buf[pos++] = *n++;
+                        }
+                    }
+                    break;
+                }
+                case 'x':
+                case 'X': {
+                    char numbuf[16];
+                    unsigned int val = va_arg(args, unsigned int);
+                    int_to_str((int)val, numbuf, 16);
+                    {
+                        char *n = numbuf;
+                        while (*n && pos < bufsize - 1) {
+                            buf[pos++] = *n++;
+                        }
+                    }
+                    break;
+                }
+                case 'l': {
+                    /* Skip 'l' modifier, handle next char */
+                    p++;
+                    if (*p == 'u' || *p == 'd') {
+                        char numbuf[16];
+                        long val = va_arg(args, long);
+                        int_to_str((int)val, numbuf, 10);
+                        {
+                            char *n = numbuf;
+                            while (*n && pos < bufsize - 1) {
+                                buf[pos++] = *n++;
+                            }
+                        }
+                    } else if (*p == 'x' || *p == 'X') {
+                        char numbuf[16];
+                        unsigned long val = va_arg(args, unsigned long);
+                        int_to_str((int)val, numbuf, 16);
+                        {
+                            char *n = numbuf;
+                            while (*n && pos < bufsize - 1) {
+                                buf[pos++] = *n++;
+                            }
+                        }
+                    }
+                    break;
+                }
+                case '%':
+                    buf[pos++] = '%';
+                    break;
+                default:
+                    /* Unknown format, copy as-is */
+                    buf[pos++] = '%';
+                    if (pos < bufsize - 1) buf[pos++] = *p;
+                    break;
+            }
+            p++;
+        } else {
+            buf[pos++] = *p++;
+        }
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+/* ============================================================================
+ * Minimal DOS output (no C library)
+ * ============================================================================ */
+
+/**
+ * @brief Output string to DOS console using INT 21h (no C library)
+ * Only used for critical errors - NOT for normal logging
+ */
+static void dos_puts(const char *s) {
     union REGS regs;
 
-    /* Get DOS time */
-    regs.h.ah = 0x2C;
-    int86(0x21, &regs, &regs);
-
-    snprintf(buffer, size, "%02d:%02d:%02d",
-             regs.h.ch, regs.h.cl, regs.h.dh);
-}
-
-/**
- * @brief Enhanced log message function with ring buffer and filtering
- * @param level Log level
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_at_level(int level, const char *format, ...) {
-    va_list args;
-    char time_str[16];
-    int len;
-
-    if (!logging_enabled || level < log_level) {
-        log_entries_dropped++;
-        return;
-    }
-
-    if (level < LOG_LEVEL_DEBUG || level > LOG_LEVEL_ERROR) {
-        log_entries_dropped++;
-        return;
-    }
-
-    /* Get current time */
-    get_time_string(time_str, sizeof(time_str));
-
-    /* Format the message */
-    va_start(args, format);
-
-    /* Build log message with timestamp and level */
-    len = snprintf(log_buffer, sizeof(log_buffer),
-                   "[%s] %s: ", time_str, level_names[level]);
-
-    if (len > 0 && (size_t)len < sizeof(log_buffer)) {
-        vsnprintf(log_buffer + len, sizeof(log_buffer) - (size_t)len, format, args);
-    }
-
-    va_end(args);
-
-    /* Store in ring buffer first (most efficient) */
-    if (ring_enabled) {
-        log_to_ring_buffer(log_buffer);
-    }
-
-    /* Output to console */
-    if (log_to_console) {
-        printf("%s\r\n", log_buffer);
-    }
-
-    /* Output to file */
-    if (log_to_file && log_file) {
-        fprintf(log_file, "%s\n", log_buffer);
-        fflush(log_file);
-    }
-
-    /* Output to network (placeholder) */
-    if (log_to_network) {
-        log_to_network_target(log_buffer);
-    }
-
-    log_entries_written++;
-
-    /* Check if file rotation is needed (every 100 entries) */
-    if (log_to_file && (log_entries_written % 100) == 0) {
-        logging_rotate_file();
+    while (*s) {
+        regs.h.ah = 0x02;  /* DOS: Display character */
+        regs.h.dl = (unsigned char)*s++;
+        int86(0x21, &regs, &regs);
     }
 }
 
-/**
- * @brief Log debug message
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_debug(const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_DEBUG < log_level) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_DEBUG, "%s", log_buffer);
-}
-
-/**
- * @brief Log info message
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_info(const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_INFO < log_level) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_INFO, "%s", log_buffer);
-}
-
-/**
- * @brief Log warning message
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_warning(const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_WARNING < log_level) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_WARNING, "%s", log_buffer);
-}
-
-/**
- * @brief Log error message
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_error(const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_ERROR < log_level) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_ERROR, "%s", log_buffer);
-}
+/* ============================================================================
+ * Runtime logging functions
+ * ============================================================================ */
 
 /**
  * @brief Store log entry in ring buffer
@@ -254,7 +212,7 @@ void log_to_ring_buffer(const char *message) {
     int msg_len;
     int total_len;
 
-    if (!ring_buffer || !message) {
+    if (!ring_buffer || !message || !ring_enabled) {
         return;
     }
 
@@ -274,22 +232,8 @@ void log_to_ring_buffer(const char *message) {
 
     /* Handle ring buffer wraparound */
     if (ring_write_pos + total_len > ring_buffer_size) {
-        /* Wrap around to beginning */
         ring_write_pos = 0;
         ring_wrapped = 1;
-
-        /* Adjust read position if we're overwriting unread data */
-        if (ring_wrapped && ring_read_pos < total_len) {
-            ring_read_pos = total_len;
-        }
-    }
-
-    /* Check if we're overwriting unread data */
-    if (ring_wrapped &&
-        ((ring_read_pos > ring_write_pos && ring_read_pos < ring_write_pos + total_len) ||
-         (ring_read_pos <= ring_write_pos && ring_read_pos < ring_write_pos + total_len))) {
-        /* Move read position to avoid reading corrupted data */
-        ring_read_pos = (ring_write_pos + total_len) % ring_buffer_size;
     }
 
     /* Copy message to ring buffer */
@@ -303,10 +247,157 @@ void log_to_ring_buffer(const char *message) {
 }
 
 /**
+ * @brief Core logging function - ring buffer only
+ * @param level Log level
+ * @param format Format string
+ * @param args Variable arguments
+ */
+static void log_internal(int level, const char *format, va_list args) {
+    union REGS regs;
+    int pos = 0;
+
+    if (!logging_enabled || level < log_level) {
+        log_entries_dropped++;
+        return;
+    }
+
+    /* Get DOS time for timestamp */
+    regs.h.ah = 0x2C;
+    int86(0x21, &regs, &regs);
+
+    /* Build timestamp: [HH:MM:SS] LEVEL: */
+    log_buffer[pos++] = '[';
+    if (regs.h.ch < 10) log_buffer[pos++] = '0';
+    {
+        char numbuf[8];
+        int_to_str(regs.h.ch, numbuf, 10);
+        {
+            char *n = numbuf;
+            while (*n && pos < LOG_BUFFER_SIZE - 1) log_buffer[pos++] = *n++;
+        }
+    }
+    log_buffer[pos++] = ':';
+    if (regs.h.cl < 10) log_buffer[pos++] = '0';
+    {
+        char numbuf[8];
+        int_to_str(regs.h.cl, numbuf, 10);
+        {
+            char *n = numbuf;
+            while (*n && pos < LOG_BUFFER_SIZE - 1) log_buffer[pos++] = *n++;
+        }
+    }
+    log_buffer[pos++] = ':';
+    if (regs.h.dh < 10) log_buffer[pos++] = '0';
+    {
+        char numbuf[8];
+        int_to_str(regs.h.dh, numbuf, 10);
+        {
+            char *n = numbuf;
+            while (*n && pos < LOG_BUFFER_SIZE - 1) log_buffer[pos++] = *n++;
+        }
+    }
+    log_buffer[pos++] = ']';
+    log_buffer[pos++] = ' ';
+
+    /* Add level name */
+    {
+        const char *lvl = level_names[level];
+        while (*lvl && pos < LOG_BUFFER_SIZE - 3) log_buffer[pos++] = *lvl++;
+    }
+    log_buffer[pos++] = ':';
+    log_buffer[pos++] = ' ';
+    log_buffer[pos] = '\0';
+
+    /* Format the message */
+    pos += minimal_vsprintf(log_buffer + pos, LOG_BUFFER_SIZE - pos, format, args);
+
+    /* Store in ring buffer */
+    if (ring_enabled) {
+        log_to_ring_buffer(log_buffer);
+    }
+
+    log_entries_written++;
+}
+
+/**
+ * @brief Log debug message
+ */
+void log_debug(const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_DEBUG < log_level) {
+        return;
+    }
+
+    va_start(args, format);
+    log_internal(LOG_LEVEL_DEBUG, format, args);
+    va_end(args);
+}
+
+/**
+ * @brief Log info message
+ */
+void log_info(const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_INFO < log_level) {
+        return;
+    }
+
+    va_start(args, format);
+    log_internal(LOG_LEVEL_INFO, format, args);
+    va_end(args);
+}
+
+/**
+ * @brief Log warning message
+ */
+void log_warning(const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_WARNING < log_level) {
+        return;
+    }
+
+    va_start(args, format);
+    log_internal(LOG_LEVEL_WARNING, format, args);
+    va_end(args);
+}
+
+/**
+ * @brief Log error message
+ */
+void log_error(const char *format, ...) {
+    va_list args;
+
+    if (!logging_enabled || LOG_LEVEL_ERROR < log_level) {
+        return;
+    }
+
+    va_start(args, format);
+    log_internal(LOG_LEVEL_ERROR, format, args);
+    va_end(args);
+}
+
+/**
+ * @brief Log error message to DOS console (critical errors only)
+ * This bypasses the ring buffer and outputs directly to console.
+ * Use sparingly - only for fatal errors during startup.
+ */
+void log_critical(const char *format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    minimal_vsprintf(log_buffer, LOG_BUFFER_SIZE, format, args);
+    va_end(args);
+
+    dos_puts("ERR: ");
+    dos_puts(log_buffer);
+    dos_puts("\r\n");
+}
+
+/**
  * @brief Read entries from ring buffer
- * @param buffer Output buffer
- * @param buffer_size Size of output buffer
- * @return Number of bytes read
  */
 int log_read_ring_buffer(char *buffer, int buffer_size) {
     int bytes_read;
@@ -321,11 +412,9 @@ int log_read_ring_buffer(char *buffer, int buffer_size) {
     bytes_read = 0;
 
     while (ring_read_pos != ring_write_pos && bytes_read < buffer_size - 1) {
-        /* Find end of current log entry */
         entry_start = ring_read_pos;
         entry_end = entry_start;
 
-        /* Find the newline or null terminator */
         while (entry_end < ring_buffer_size &&
                ring_buffer[entry_end] != '\n' &&
                ring_buffer[entry_end] != '\0') {
@@ -334,20 +423,16 @@ int log_read_ring_buffer(char *buffer, int buffer_size) {
 
         entry_len = entry_end - entry_start;
 
-        /* Check if we have space in output buffer */
         if (bytes_read + entry_len + 1 >= buffer_size) {
-            break; /* Not enough space */
+            break;
         }
 
-        /* Copy entry to output buffer */
         memcpy(buffer + bytes_read, ring_buffer + entry_start, entry_len);
         buffer[bytes_read + entry_len] = '\n';
         bytes_read += entry_len + 1;
 
-        /* Move read position */
-        ring_read_pos = (entry_end + 2) % ring_buffer_size; /* Skip \n and \0 */
+        ring_read_pos = (entry_end + 2) % ring_buffer_size;
 
-        /* Handle wraparound */
         if (ring_read_pos >= ring_buffer_size) {
             ring_read_pos = 0;
         }
@@ -358,33 +443,7 @@ int log_read_ring_buffer(char *buffer, int buffer_size) {
 }
 
 /**
- * @brief Send log message to network target
- * @param message Log message
- */
-void log_to_network_target(const char *message) {
-    /* C89: All declarations must come before statements */
-    static FILE *network_log_file = NULL;
-
-    if (!message || !log_to_network) {
-        return;
-    }
-
-    /* File-based network logging for debugging */
-    if (!network_log_file) {
-        network_log_file = fopen("NETLOG.TXT", "a");
-    }
-
-    if (network_log_file) {
-        fprintf(network_log_file, "NET[%s:%d]: %s\n", network_log_host, network_log_port, message);
-        fflush(network_log_file);
-    }
-}
-
-/**
  * @brief Get logging statistics
- * @param written Pointer to store entries written count
- * @param dropped Pointer to store entries dropped count
- * @param overruns Pointer to store buffer overruns count
  */
 void logging_get_stats(unsigned long *written, unsigned long *dropped, unsigned long *overruns) {
     if (written) *written = log_entries_written;
@@ -394,7 +453,6 @@ void logging_get_stats(unsigned long *written, unsigned long *dropped, unsigned 
 
 /**
  * @brief Check if ring buffer is enabled
- * @return 1 if enabled, 0 if disabled
  */
 int logging_ring_buffer_enabled(void) {
     return ring_enabled;
@@ -402,7 +460,6 @@ int logging_ring_buffer_enabled(void) {
 
 /**
  * @brief Check if logging is enabled
- * @return 1 if enabled, 0 if disabled
  */
 int logging_is_enabled(void) {
     return logging_enabled;
@@ -410,7 +467,6 @@ int logging_is_enabled(void) {
 
 /**
  * @brief Get current logging level
- * @return Current log level
  */
 int logging_get_level(void) {
     return log_level;
@@ -418,156 +474,25 @@ int logging_get_level(void) {
 
 /**
  * @brief Get category name string
- * @param category Category bitmask
- * @return Category name string
  */
 const char* get_category_name(int category) {
     switch (category) {
-        case LOG_CAT_HARDWARE:    return "HARDWARE";
-        case LOG_CAT_NETWORK:     return "NETWORK";
-        case LOG_CAT_MEMORY:      return "MEMORY";
-        case LOG_CAT_INTERRUPT:   return "INTERRUPT";
-        case LOG_CAT_PACKET:      return "PACKET";
-        case LOG_CAT_CONFIG:      return "CONFIG";
+        case LOG_CAT_HARDWARE:    return "HW";
+        case LOG_CAT_NETWORK:     return "NET";
+        case LOG_CAT_MEMORY:      return "MEM";
+        case LOG_CAT_INTERRUPT:   return "IRQ";
+        case LOG_CAT_PACKET:      return "PKT";
+        case LOG_CAT_CONFIG:      return "CFG";
         case LOG_CAT_PERFORMANCE: return "PERF";
-        case LOG_CAT_DRIVER:      return "DRIVER";
-        default:                  return "UNKNOWN";
+        case LOG_CAT_DRIVER:      return "DRV";
+        default:                  return "?";
     }
-}
-
-/**
- * @brief Log message with level and category
- * @param level Log level
- * @param category Log category
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_at_level_with_category(int level, int category, const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || level < log_level) {
-        log_entries_dropped++;
-        return;
-    }
-
-    /* Check category filter */
-    if (!(category_filter & category)) {
-        log_entries_dropped++;
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(level, "[%s] %s", get_category_name(category), log_buffer);
-}
-
-/**
- * @brief Log debug message with category
- * @param category Log category
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_debug_category(int category, const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_DEBUG < log_level) {
-        return;
-    }
-
-    if (!(category_filter & category)) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_DEBUG, "[%s] %s", get_category_name(category), log_buffer);
-}
-
-/**
- * @brief Log info message with category
- * @param category Log category
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_info_category(int category, const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_INFO < log_level) {
-        return;
-    }
-
-    if (!(category_filter & category)) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_INFO, "[%s] %s", get_category_name(category), log_buffer);
-}
-
-/**
- * @brief Log warning message with category
- * @param category Log category
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_warning_category(int category, const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_WARNING < log_level) {
-        return;
-    }
-
-    if (!(category_filter & category)) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_WARNING, "[%s] %s", get_category_name(category), log_buffer);
-}
-
-/**
- * @brief Log error message with category
- * @param category Log category
- * @param format Printf-style format string
- * @param ... Arguments
- */
-void log_error_category(int category, const char *format, ...) {
-    va_list args;
-
-    if (!logging_enabled || LOG_LEVEL_ERROR < log_level) {
-        return;
-    }
-
-    if (!(category_filter & category)) {
-        return;
-    }
-
-    va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
-    va_end(args);
-
-    log_at_level(LOG_LEVEL_ERROR, "[%s] %s", get_category_name(category), log_buffer);
 }
 
 /**
  * @brief Get current logging configuration
- * @param level Pointer to store current level
- * @param categories Pointer to store category filter
- * @param outputs Pointer to store output flags
  */
 void logging_get_config(int *level, int *categories, int *outputs) {
-    int output_flags;
-
     if (level) {
         *level = log_level;
     }
@@ -575,10 +500,49 @@ void logging_get_config(int *level, int *categories, int *outputs) {
         *categories = category_filter;
     }
     if (outputs) {
-        output_flags = 0;
-        if (log_to_console) output_flags |= 0x01;
-        if (log_to_file) output_flags |= 0x02;
-        if (log_to_network) output_flags |= 0x04;
-        *outputs = output_flags;
+        /* Ring buffer is the only runtime output */
+        *outputs = ring_enabled ? 0x01 : 0x00;
     }
 }
+
+/* ============================================================================
+ * Legacy symbol stubs - referenced by other modules but not used at runtime.
+ * These provide linker-visible definitions without pulling in C library code.
+ * ============================================================================ */
+
+/* Legacy output destination flags */
+int log_to_console = 0;
+int log_to_file = 0;
+int log_to_network = 0;
+
+/* Legacy file logging state */
+char log_filename[1] = {0};
+dos_file_t log_file = -1;
+
+/* Legacy network logging state */
+char network_log_host[1] = {0};
+int network_log_port = 0;
+int network_log_protocol = 0;
+
+/* Legacy logging function stubs */
+void log_at_level(int level, const char *format, ...) {
+    (void)level;
+    (void)format;
+}
+
+void log_warning_category(int cat, const char *fmt, ...) {
+    (void)cat;
+    (void)fmt;
+}
+
+void log_error_category(int cat, const char *fmt, ...) {
+    (void)cat;
+    (void)fmt;
+}
+
+void log_debug_category(int cat, const char *fmt, ...) {
+    (void)cat;
+    (void)fmt;
+}
+
+/* End of logging_rt.c */

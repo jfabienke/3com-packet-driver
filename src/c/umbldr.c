@@ -12,12 +12,59 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <string.h>
 #include <stdlib.h>
 #include "../../include/common.h"
 #include "../../include/memory.h"
 #include "../../include/logging.h"
+
+/* C89 MIN macro - not defined in headers */
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
+/* UMB allocation information structure */
+typedef struct {
+    bool umb_available;
+    uint8_t memory_manager_type;
+    uint16_t allocated_segment;
+    uint16_t allocated_size;
+    bool using_conventional_fallback;
+    uint32_t conventional_memory_saved;
+    char memory_manager_name[32];
+} umb_allocation_info_t;
+
+/* TSR memory layout structure */
+typedef struct {
+    uint16_t resident_code_size;
+    uint16_t resident_data_size;
+    uint16_t resident_stack_size;
+    uint16_t psp_size;
+    uint32_t total_resident_bytes;
+    uint16_t resident_paragraphs;
+    uint16_t init_code_size;
+    uint16_t init_data_size;
+    uint32_t total_init_bytes;
+    uint16_t init_paragraphs;
+    uint16_t conventional_memory_used;
+    uint16_t umb_memory_used;
+    bool memory_optimization_achieved;
+    uint32_t discarded_init_bytes;
+} tsr_memory_layout_t;
+
+/* UMB memory report structure */
+typedef struct {
+    bool umb_support_available;
+    bool memory_manager_detected;
+    bool allocation_attempted;
+    bool allocation_successful;
+    bool using_umb;
+    uint16_t allocated_segment;
+    uint16_t allocated_paragraphs;
+    uint32_t conventional_memory_saved;
+    char memory_manager_name[32];
+} umb_memory_report_t;
 
 /* UMB and memory manager constants */
 #define DOS_VERSION_MIN_UMB     0x0500  /* DOS 5.0 minimum for UMB */
@@ -66,14 +113,15 @@ static const char* memory_manager_names[] = {
  */
 static bool check_dos_version_for_umb(void) {
     union REGS regs;
-    
+    uint16_t dos_version;
+
     regs.h.ah = 0x30;  /* Get DOS version */
     int86(0x21, &regs, &regs);
-    
-    uint16_t dos_version = (regs.h.al << 8) | regs.h.ah;
-    
+
+    dos_version = (regs.h.al << 8) | regs.h.ah;
+
     log_debug("DOS version: %d.%d (0x%04X)", regs.h.al, regs.h.ah, dos_version);
-    
+
     return (dos_version >= DOS_VERSION_MIN_UMB);
 }
 
@@ -245,11 +293,13 @@ static bool free_dos_memory(uint16_t segment) {
  * @return 0 on success, negative on error
  */
 int umb_loader_init(void) {
+    uint8_t umb_link_state;
+
     if (g_umb_state.initialized) {
         log_debug("UMB loader already initialized");
         return 0;
     }
-    
+
     log_info("Initializing UMB loader subsystem");
     
     /* Clear state structure */
@@ -281,7 +331,7 @@ int umb_loader_init(void) {
     }
     
     /* Check UMB availability */
-    uint8_t umb_link_state = get_umb_link_state();
+    umb_link_state = get_umb_link_state();
     if (umb_link_state == 0xFF) {
         log_info("UMB functions not available");
         g_umb_state.initialized = true;

@@ -9,27 +9,28 @@
  */
 
 #include <dos.h>
-#include <stdio.h>
+#include "dos_io.h"
 #include <stdlib.h>
 #include <string.h>
-#include "../include/main.h"
-#include "../include/common.h"
-#include "../include/init.h"
-#include "../include/config.h"
-#include "../include/hardware.h"
-#include "../include/api.h"
-#include "../include/diag.h"
-#include "../include/logging.h"
-#include "../include/memory.h"
-#include "../include/cpudet.h"
-#include "../include/entval.h"
-#include "../include/pltprob.h"
-#include "../include/dmacap.h"
-#include "../include/chipdet.h"
-#include "../include/bmtest.h"
-#include "../include/vds.h"
-#include "../include/unwind.h"
-#include "../include/pktops.h"
+#include "main.h"
+#include "common.h"
+#include "init.h"
+#include "config.h"
+#include "hardware.h"
+#include "api.h"
+#include "diag.h"
+#include "logging.h"
+#include "memory.h"
+#include "cpudet.h"
+#include "entval.h"
+#include "pltprob.h"
+#include "dmacap.h"
+#include "chipdet.h"
+#include "bmtest.h"
+#include "vds.h"
+#include "unwind.h"
+#include "pktops.h"
+#include "ovl_data.h"
 
 /* Global driver state */
 static driver_state_t driver_state = {0};
@@ -38,8 +39,8 @@ static int driver_initialized = 0;
 /* CPU information structure - initialized by ASM detection */
 cpu_info_t g_cpu_info = {0};
 
-/* Vendor name strings */
-static const char* vendor_names[] = {
+/* Vendor name strings - overlay-local (INIT_EARLY) */
+static OVL_EARLY_CONST char* vendor_names[] = {
     "Intel",          /* VENDOR_INTEL */
     "AMD",            /* VENDOR_AMD */
     "Cyrix",          /* VENDOR_CYRIX */
@@ -63,8 +64,8 @@ extern int asm_is_v86_mode(void);        /* Check if running in V86 mode */
 extern int is_mca_system(void);          /* Check for MCA bus */
 extern int is_eisa_system(void);         /* Check for EISA bus */
 
-/* Error messages */
-static const char *error_messages[] = {
+/* Error messages - overlay-local (INIT_EARLY) */
+static OVL_EARLY_CONST char *error_messages[] = {
     "Success",
     "Initialization failed",
     "No NICs detected", 
@@ -143,17 +144,17 @@ int initialize_cpu_detection(void) {
         if (g_cpu_info.has_cyrix_ext) {
             log_info("Cyrix CPU with DIR0 extensions detected");
         }
-        if (g_cpu_info.cpu_type == CPU_TYPE_CPUID_CAPABLE) {
+        if (g_cpu_info.cpu_type == CPU_DET_CPUID_CAPABLE) {
             log_warning("Cyrix 6x86 may report as 486 for compatibility");
         }
     }
 
-    if (g_cpu_info.cpu_vendor == VENDOR_AMD && g_cpu_info.cpu_type == CPU_TYPE_80486) {
+    if (g_cpu_info.cpu_vendor == VENDOR_AMD && g_cpu_info.cpu_type == CPU_DET_80486) {
         log_info("AMD 486 detected - no CPUID support on Am486 series");
     }
 
     /* Log Intel 486 specific information */
-    if (g_cpu_info.cpu_vendor == VENDOR_INTEL && g_cpu_info.cpu_type == CPU_TYPE_80486) {
+    if (g_cpu_info.cpu_vendor == VENDOR_INTEL && g_cpu_info.cpu_type == CPU_DET_80486) {
         if (g_cpu_info.features & CPU_FEATURE_CPUID) {
             log_info("Intel 486 with CPUID detected (DX4 or SL Enhanced)");
         } else {
@@ -165,7 +166,7 @@ int initialize_cpu_detection(void) {
         log_info("FPU detected");
     }
 
-    if (g_cpu_info.cpu_type >= CPU_TYPE_80386) {
+    if (g_cpu_info.cpu_type >= CPU_DET_80386) {
         log_info("32-bit operations enabled (386+ CPU)");
     }
 
@@ -192,11 +193,25 @@ int initialize_cpu_detection(void) {
  * @return 0 on success, negative on error
  */
 int driver_init(const char *config_params) {
+    /* C89: All declarations at start of function */
     int result = 0;
-    dma_test_config_t dma_test_cfg = {0};
-    dma_capabilities_t *dma_caps;
+    dma_test_config_t dma_test_cfg;
+    dma_capabilities_t *dma_caps = NULL;
     nic_info_t *primary_nic = NULL;
-    
+    chipset_detection_result_t chipset_result;
+    bus_type_t bus_type;
+
+    /* External function declarations (C89: must be at start of block) */
+    extern int interrupt_mitigation_global_init(void);
+    extern int tx_lazy_global_init(void);
+    extern void nic_irq_bind_and_install(const nic_info_t *nic);
+    extern int pcmcia_init(void);
+
+    /* Initialize structs */
+    memset(&dma_test_cfg, 0, sizeof(dma_test_cfg));
+    bus_type = BUS_ISA;  /* Default */
+    (void)dma_caps;      /* Suppress unused warning for now */
+
     log_info("Initializing 3Com packet driver");
     
     /* Note: Phases 0-2 already completed in main() before this */
@@ -220,7 +235,7 @@ int driver_init(const char *config_params) {
     log_info("Phase 4: Chipset and bus detection");
     
     /* 4.1: Detect chipset */
-    chipset_detection_result_t chipset_result = detect_system_chipset();
+    chipset_result = detect_system_chipset();
     if (chipset_result.chipset.found) {
         log_info("  Chipset: %s (vendor:%04X device:%04X)", 
                  chipset_result.chipset.name,
@@ -231,7 +246,7 @@ int driver_init(const char *config_params) {
     }
     
     /* 4.2: Detect bus type */
-    bus_type_t bus_type = BUS_ISA;  /* Default */
+    /* bus_type already initialized to BUS_ISA at function start */
     if (is_mca_system()) {
         bus_type = BUS_MCA;
         log_info("  Bus type: MicroChannel (MCA)");
@@ -246,14 +261,8 @@ int driver_init(const char *config_params) {
     }
     
     /* 4.3: Bus master testing (conditional) */
-    if (g_cpu_info.cpu_type == CPU_TYPE_80286 || !chipset_result.chipset.found) {
+    if (g_cpu_info.cpu_type == CPU_DET_80286 || !chipset_result.chipset.found) {
         log_info("  Running bus master capability test (286 or unknown chipset)");
-        busmaster_test_results_t bm_results = {0};
-        busmaster_test_config_t bm_config = {
-            .test_mode = BM_TEST_MODE_QUICK,
-            .timeout_ms = 200
-        };
-        
         /* Note: busmaster_test_init would need a NIC context, skip for now */
         /* This would be refined in Phase 4.5 with actual NIC */
     }
@@ -303,7 +312,7 @@ int driver_init(const char *config_params) {
             log_info("  Cache coherency test passed");
         }
         
-        result = test_bus_snooping(&dma_test_cfg);
+        result = test_bus_snooping_early(&dma_test_cfg);
         if (result < 0) {
             log_warning("  Bus snooping test failed - using bounce buffers");
             if (g_dma_policy != DMA_POLICY_FORBID) {
@@ -347,9 +356,6 @@ int driver_init(const char *config_params) {
     MARK_PHASE_COMPLETE(UNWIND_PHASE_HARDWARE);
     
     /* Initialize interrupt mitigation and batching systems */
-    extern int interrupt_mitigation_global_init(void);
-    extern int tx_lazy_global_init(void);
-    
     log_info("Initializing interrupt mitigation and batching");
     interrupt_mitigation_global_init();
     tx_lazy_global_init();
@@ -411,7 +417,6 @@ int driver_init(const char *config_params) {
 
     /* PHASE 11.5: Bind NIC IRQ to ISR and install vector (PIC stays masked) */
     if (primary_nic) {
-        extern void nic_irq_bind_and_install(const nic_info_t *nic);
         log_info("Phase 11.5: Binding IRQ %u @ I/O 0x%04X to ISR (NIC %u)",
                  primary_nic->irq, primary_nic->io_base, primary_nic->index);
         nic_irq_bind_and_install(primary_nic);
@@ -503,16 +508,10 @@ int driver_cleanup(void) {
     }
     
     /* Cleanup hardware */
-    result = hardware_cleanup();
-    if (result < 0) {
-        log_error("Hardware cleanup failed: %s", get_error_message(result));
-    }
-    
+    hardware_cleanup();
+
     /* Cleanup memory */
-    result = memory_cleanup();
-    if (result < 0) {
-        log_error("Memory cleanup failed: %s", get_error_message(result));
-    }
+    memory_cleanup();
     
     driver_initialized = 0;
     log_info("Driver cleanup completed");
@@ -628,14 +627,14 @@ int main(int argc, char *argv[]) {
      */
     if (g_cpu_info.cpu_type < CPU_TYPE_80286) {
         /* 8086/8088: Skip V86/VDS detection - doesn't apply */
+        static platform_probe_result_t platform_8086;
         printf("Phase 2: Skipped (8086 mode - direct DMA policy)\n");
-        /* Set up a minimal platform result for 8086 */
-        static platform_probe_result_t platform_8086 = {
-            .recommended_policy = DMA_POLICY_DIRECT,
-            .pio_fallback_ok = 1,
-            .safe_for_busmaster = 0,  /* No bus mastering on 8086 */
-            .environment_desc = "8086 Real Mode"
-        };
+        /* Set up a minimal platform result for 8086 - C89 compatible init */
+        memset(&platform_8086, 0, sizeof(platform_8086));
+        platform_8086.recommended_policy = DMA_POLICY_DIRECT;
+        platform_8086.pio_fallback_ok = 1;
+        platform_8086.safe_for_busmaster = 0;  /* No bus mastering on 8086 */
+        strcpy(platform_8086.environment_desc, "8086 Real Mode");
         platform = &platform_8086;
     } else {
         result = platform_probe_early();
