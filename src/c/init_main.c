@@ -9,7 +9,8 @@
  *
  * This file lives in the ROOT segment and is never overlaid.
  *
- * Last Updated: 2026-01-26 14:45:00 UTC
+ * Last Updated: 2026-02-01 12:05:57 CET
+ * Phase 7: Added JIT copy-down build stage after hardware detection
  */
 
 #include "dos_io.h"
@@ -18,6 +19,8 @@
 #include "common.h"
 #include "init_context.h"
 #include "logging.h"
+#include "mod_select.h"
+#include "jit_build.h"
 
 /* ============================================================================
  * Global Init Context (ROOT Segment)
@@ -287,6 +290,119 @@ int run_init_stages(int argc, char far * far *argv) {
     g_init_ctx.stages_complete |= STAGE_9_HARDWARE_DETECT;
 
     LOG_INFO("INIT_DETECT complete (stages 5-9)");
+
+    /* ========== JIT Copy-Down Build ========== */
+    /* After hardware detection, select modules and build JIT TSR image.
+     * The JIT engine: (1) selects modules, (2) copies hot sections
+     * contiguously, (3) applies SMC patches, (4) resolves relocations,
+     * (5) serializes the prefetch queue. The resulting image is the
+     * pure-ASM TSR that stage_tsr_relocate will install. */
+    {
+        int jit_result;
+        jit_layout_t jit_layout;
+        jit_hw_values_t jit_hw;
+
+        /* Step 1: Select modules based on detected hardware */
+        LOG_DEBUG("JIT: Selecting modules based on detected hardware");
+        jit_result = select_all_modules(&g_init_ctx);
+        if (jit_result != 0) {
+            init_context_set_error(&g_init_ctx, 9, jit_result,
+                                   "JIT module selection failed");
+            LOG_ERROR("JIT module selection failed: %d", jit_result);
+            return jit_result;
+        }
+        LOG_INFO("JIT: Selected %d modules, %lu bytes hot",
+                 get_module_selection()->count,
+                 get_module_selection()->total_hot_size);
+
+        /* Step 2: Build TSR image (copy-down hot sections) */
+        LOG_DEBUG("JIT: Building TSR image");
+        jit_result = jit_build_image(&jit_layout);
+        if (jit_result != 0) {
+            init_context_set_error(&g_init_ctx, 9, jit_result,
+                                   "JIT image build failed");
+            LOG_ERROR("JIT image build failed: %d", jit_result);
+            return jit_result;
+        }
+        LOG_INFO("JIT: Built %u byte image from %u modules",
+                 jit_layout.image_size, jit_layout.entry_count);
+
+        /* Step 3: Populate hardware values from init context */
+        memset(&jit_hw, 0, sizeof(jit_hw));
+        jit_hw.io_base    = g_init_ctx.io1_base;
+        jit_hw.irq_number = g_init_ctx.irq1;
+        jit_hw.dma_channel = 0xFF;  /* Default: no DMA channel */
+        jit_hw.nic_type   = (g_init_ctx.num_nics > 0)
+                            ? g_init_ctx.nics[0].type : 0;
+        jit_hw.cpu_type   = (uint16_t)g_init_ctx.cpu_type;
+        jit_hw.flags      = 0;
+
+        /* Copy MAC address from first detected NIC */
+        if (g_init_ctx.num_nics > 0) {
+            memcpy(jit_hw.mac_addr, g_init_ctx.nics[0].mac, 6);
+        }
+
+        /* Set DMA channel if ISA DMA is available and selected */
+        if (is_module_selected(MOD_DMA_ISA)) {
+            jit_hw.dma_channel = 1;  /* Standard ISA DMA channel */
+        }
+
+        /* Set runtime flags from chipset/DMA detection */
+        if (g_init_ctx.chipset.flags & CHIPSET_FLAG_DMA_SAFE) {
+            jit_hw.flags |= 0x0001;  /* Bus-master capable */
+        }
+        if (g_init_ctx.vds_available) {
+            jit_hw.flags |= 0x0002;  /* VDS available */
+        }
+        if (g_init_ctx.chipset.flags & CHIPSET_FLAG_CACHE_WB) {
+            jit_hw.flags |= 0x0004;  /* Write-back cache */
+        }
+
+        /* Cache line size: 32 for 486+, 0 for older */
+        if (g_init_ctx.cpu_type >= CPU_DET_80486) {
+            jit_hw.cache_line_size = 32;
+        }
+        if (g_init_ctx.cpu_features & CPU_FEATURE_CLFLUSH) {
+            jit_hw.cache_line_size = 64;  /* Pentium+ typically 64 */
+        }
+
+        /* Step 4: Apply SMC patches (bake hardware values) */
+        LOG_DEBUG("JIT: Applying SMC patches (IO=0x%04X IRQ=%u CPU=%u)",
+                  jit_hw.io_base, jit_hw.irq_number, jit_hw.cpu_type);
+        jit_result = jit_apply_patches(&jit_layout, &jit_hw);
+        if (jit_result < 0) {
+            init_context_set_error(&g_init_ctx, 9, jit_result,
+                                   "JIT SMC patching failed");
+            LOG_ERROR("JIT SMC patching failed: %d", jit_result);
+            return jit_result;
+        }
+        LOG_INFO("JIT: Applied %d SMC patches", jit_result);
+
+        /* Step 5: Apply inter-module relocations */
+        LOG_DEBUG("JIT: Applying relocations");
+        jit_result = jit_apply_relocations(&jit_layout);
+        if (jit_result < 0) {
+            init_context_set_error(&g_init_ctx, 9, jit_result,
+                                   "JIT relocation failed");
+            LOG_ERROR("JIT relocation failed: %d", jit_result);
+            return jit_result;
+        }
+        LOG_INFO("JIT: Applied %d relocations", jit_result);
+
+        /* Step 6: Serialize prefetch queue */
+        jit_serialize_prefetch(&jit_layout);
+        LOG_DEBUG("JIT: Prefetch serialized");
+
+        /* Store image info in init context for stage_tsr_relocate */
+        g_init_ctx.resident_end = (void far *)
+            (jit_layout.image_base + jit_layout.image_size);
+        g_init_ctx.resident_paragraphs =
+            ((uint32_t)jit_layout.image_size + 15) >> 4;
+
+        LOG_INFO("JIT: TSR image ready at %Fp, %u bytes (%lu paragraphs)",
+                 jit_layout.image_base, jit_layout.image_size,
+                 g_init_ctx.resident_paragraphs);
+    }
 
     /* ========== INIT_FINAL Overlay (Stages 10-14) ========== */
     /* Overlay manager automatically swaps to this section */
