@@ -109,34 +109,35 @@ OPT_32BIT           EQU 2       ; 386+ optimizations (32-bit registers)
 ; 2. Software cache touch (shr cx, 5) requires 386+ CPU
 ; Neither code path will execute on 8086/8088 systems.
 
+; ############################################################################
+; MODULE SEGMENT
+; ############################################################################
+segment MODULE class=MODULE align=16
+
+; ============================================================================
+; 64-byte Module Header
+; ============================================================================
+global _mod_nicirq_header
+_mod_nicirq_header:
+    db  'PKTDRV', 0             ; +00  7 bytes: module signature
+    db  1                       ; +07  1 byte:  major version
+    db  0                       ; +08  1 byte:  minor version
+    db  0                       ; +09  1 byte:  cpu_req (0 = 8086)
+    db  0                       ; +0A  1 byte:  nic_type (0 = generic)
+    db  1                       ; +0B  1 byte:  cap_flags (1 = MOD_CAP_CORE)
+    dw  hot_end - hot_start     ; +0C  2 bytes: hot code size
+    dw  patch_table             ; +0E  2 bytes: offset to patch table
+    dw  patch_table_end - patch_table  ; +10  2 bytes: patch table size
+    dw  hot_start               ; +12  2 bytes: offset to hot_start
+    dw  hot_end                 ; +14  2 bytes: offset to hot_end
+    times 64 - ($ - _mod_nicirq_header) db 0  ; Pad to 64 bytes
+
 segment _TEXT class=CODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Module Header (64 bytes)
+;; HOT PATH START
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        align 16
-module_header:
-nic_irq_module_header:                  ; Export for C code
-        global  nic_irq_module_header   ; Make visible to patch_apply.c
-        db      'PKTDRV',0              ; 7+1 bytes: Signature
-        db      1, 0                    ; 2 bytes: Version 1.0
-        dw      hot_section_start       ; 2 bytes: Hot start
-        dw      hot_section_end         ; 2 bytes: Hot end
-        dw      cold_section_start      ; 2 bytes: Cold start
-        dw      cold_section_end        ; 2 bytes: Cold end
-        dw      patch_table             ; 2 bytes: Patch table
-        dw      patch_count             ; 2 bytes: Number of patches
-        dw      module_size             ; 2 bytes: Total size
-        dw      2*1024                  ; 2 bytes: Required memory (2KB)
-        db      2                       ; 1 byte: Min CPU (286)
-        db      0                       ; 1 byte: NIC type (any)
-        times 37 db 0                   ; 37 bytes: Reserved
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; HOT SECTION - Resident interrupt handlers
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-        align 16
-hot_section_start:
+hot_start:
 
         ; Public exports
         global  nic_irq_handler
@@ -1742,7 +1743,7 @@ dispatch_done:
         pop     ax
         ret
 
-hot_section_end:
+hot_end:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; COLD SECTION - Initialization (discarded)
@@ -1877,6 +1878,7 @@ patch_table:
         db      0E8h, 00h, 00h, 90h, 90h  ; Pentium: CALL invalidate_proc
 
 patch_count     equ     9
+patch_table_end:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; IRQ Handler Initialization
@@ -2330,7 +2332,7 @@ dma_desc_addr       dw      0
 dma_desc_len        dw      0
 
         ; Module size
-module_size         equ     cold_section_end - module_header
+module_size         equ     cold_section_end - hot_start
 
         ; External function (needed for 3C515)
         extern  free_tx_buffer

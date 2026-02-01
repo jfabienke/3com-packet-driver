@@ -185,7 +185,12 @@ static bool dma_exceeds_16m_fast(uint32_t phys_addr, size_t len) {
 }
 
 /**
- * @brief Check if buffer needs bounce for ISA DMA
+ * @brief Check if buffer needs bounce for Intel 8237A slave DMA
+ * Note: This check is for 8237A slave-mode DMA ONLY. Bus-master controllers
+ * (3C515, PCI NICs, AHA-1542) have their own address generation logic and
+ * handle 64KB boundary crossings internally. None of the supported 3Com NICs
+ * use the 8237A, so this function is currently unused but retained for
+ * completeness if 8237A slave DMA support is ever added.
  */
 static bool dma_needs_bounce_isa(uint32_t phys_addr, size_t len) {
     return dma_crosses_64k_fast(phys_addr, len) || dma_exceeds_16m_fast(phys_addr, len);

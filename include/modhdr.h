@@ -99,6 +99,7 @@ typedef enum {
 #define MOD_CAP_XMS             0x0080  /* Requires XMS memory */
 #define MOD_CAP_DESC_RING       0x0100  /* Requires DMA descriptor rings */
 #define MOD_CAP_SNOOP           0x0200  /* Requires PCI cache snoop */
+#define MOD_CAP_CORE            0x8000  /* Core module (always selected) */
 
 /* NIC type identifiers for module selection */
 #define MOD_NIC_ANY             0x00
@@ -111,7 +112,7 @@ typedef enum {
 
 /* Module IDs for selection */
 typedef enum {
-    /* Core (always included) */
+    /* Core JIT modules (always included) */
     MOD_ISR = 0,
     MOD_IRQ,
     MOD_PKTBUF,
@@ -139,9 +140,35 @@ typedef enum {
     MOD_COPY_286,
     MOD_COPY_386,
     MOD_COPY_PENT,
+    /* Core ASM modules (always included, Stage 2 TSR) */
+    MOD_CORE_PKTAPI,
+    MOD_CORE_NICIRQ,
+    MOD_CORE_HWSMC,
+    MOD_CORE_PCMISR,
+    MOD_CORE_FLOWRT,
+    MOD_CORE_DIRPIO,
+    MOD_CORE_PKTOPS,
+    MOD_CORE_PKTCOPY,
+    MOD_CORE_TSRCOM,
+    MOD_CORE_TSRWRAP,
+    MOD_CORE_PCI_IO,
+    MOD_CORE_PCIISR,
+    MOD_CORE_LINKASM,
+    MOD_CORE_HWPKT,
+    MOD_CORE_HWCFG,
+    MOD_CORE_HWCOORD,
+    MOD_CORE_HWINIT,
+    MOD_CORE_HWEEP,
+    MOD_CORE_HWDMA,
+    MOD_CORE_CACHEOPS,
+    MOD_CORE_TSR_CRT,
     /* Sentinel */
     MOD_COUNT
 } module_id_t;
+
+/* First and last core module IDs (for iteration) */
+#define MOD_CORE_FIRST  MOD_CORE_PKTAPI
+#define MOD_CORE_LAST   MOD_CORE_TSR_CRT
 
 /* JIT patch types (extends existing patch_type_t) */
 #define PATCH_TYPE_IMM16        0x06    /* 16-bit immediate (IRQ, DMA ch) */

@@ -72,6 +72,29 @@ extern current_cpu_opt
 %%done:
 %endmacro
 
+; ############################################################################
+; MODULE SEGMENT
+; ############################################################################
+segment MODULE class=MODULE align=16
+
+; ============================================================================
+; 64-byte Module Header
+; ============================================================================
+global _mod_tsrcom_header
+_mod_tsrcom_header:
+    db  'PKTDRV', 0             ; +00  7 bytes: module signature
+    db  1                       ; +07  1 byte:  major version
+    db  0                       ; +08  1 byte:  minor version
+    db  0                       ; +09  1 byte:  cpu_req (0 = 8086)
+    db  0                       ; +0A  1 byte:  nic_type (0 = generic)
+    db  1                       ; +0B  1 byte:  cap_flags (1 = MOD_CAP_CORE)
+    dw  hot_end - hot_start     ; +0C  2 bytes: hot code size
+    dw  patch_table             ; +0E  2 bytes: offset to patch table
+    dw  patch_table_end - patch_table  ; +10  2 bytes: patch table size
+    dw  hot_start               ; +12  2 bytes: offset to hot_start
+    dw  hot_end                 ; +14  2 bytes: offset to hot_end
+    times 64 - ($ - _mod_tsrcom_header) db 0  ; Pad to 64 bytes
+
 segment _DATA class=DATA
 
 ; TSR identification and status
@@ -145,6 +168,11 @@ recovery_count      dw 0
 last_error_code     db 0
 
 segment _TEXT class=CODE
+
+; ============================================================================
+; HOT PATH START
+; ============================================================================
+hot_start:
 
 ;=============================================================================
 ; INITIALIZATION ROUTINES
@@ -1211,6 +1239,17 @@ cleanup_umb_allocation:
     pop bx
     pop ax
     ret
+
+; ============================================================================
+; HOT PATH END
+; ============================================================================
+hot_end:
+
+; ============================================================================
+; PATCH TABLE
+; ============================================================================
+patch_table:
+patch_table_end:
 
 ; External references that will be provided by main driver
 extern packet_api_entry                 ; Main packet API entry point

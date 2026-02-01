@@ -38,6 +38,29 @@ FLOW_NOT_FOUND      EQU 1       ; Flow not found
 FLOW_TABLE_FULL     EQU 2       ; Flow table is full
 FLOW_INVALID        EQU 3       ; Invalid flow parameters
 
+; ############################################################################
+; MODULE SEGMENT
+; ############################################################################
+segment MODULE class=MODULE align=16
+
+; ============================================================================
+; 64-byte Module Header
+; ============================================================================
+global _mod_flowrt_header
+_mod_flowrt_header:
+    db  'PKTDRV', 0             ; +00  7 bytes: module signature
+    db  1                       ; +07  1 byte:  major version
+    db  0                       ; +08  1 byte:  minor version
+    db  0                       ; +09  1 byte:  cpu_req (0 = 8086)
+    db  0                       ; +0A  1 byte:  nic_type (0 = generic)
+    db  1                       ; +0B  1 byte:  cap_flags (1 = MOD_CAP_CORE)
+    dw  hot_end - hot_start     ; +0C  2 bytes: hot code size
+    dw  patch_table             ; +0E  2 bytes: offset to patch table
+    dw  patch_table_end - patch_table  ; +10  2 bytes: patch table size
+    dw  hot_start               ; +12  2 bytes: offset to hot_start
+    dw  hot_end                 ; +14  2 bytes: offset to hot_end
+    times 64 - ($ - _mod_flowrt_header) db 0  ; Pad to 64 bytes
+
 ; Data segment
 segment _DATA class=DATA
 
@@ -61,6 +84,11 @@ last_aging_time     dd 0        ; Last time aging was performed
 
 ; Code segment
 segment _TEXT class=CODE
+
+; ============================================================================
+; HOT PATH START
+; ============================================================================
+hot_start:
 
 ; Public function exports
 global flow_routing_init
@@ -978,9 +1006,18 @@ get_system_ticks:
         pop     bp
         ret
 
+; ============================================================================
+; HOT PATH END
+; ============================================================================
+hot_end:
+
 ;-----------------------------------------------------------------------------
 ; SMC Patch Table for flow routing module
 ;-----------------------------------------------------------------------------
+; ============================================================================
+; PATCH TABLE (JIT module format)
+; ============================================================================
+patch_table:
 ; This table defines the patch points that will be modified during init
 ; based on detected CPU capabilities (486+ gets BSWAP optimization)
 
@@ -1027,3 +1064,4 @@ flow_routing_patch_table:
         db      0E8h, 00h, 00h, 90h, 90h ; Pentium: CALL swap_ip_bswap
 
 flow_routing_patch_count equ 4
+patch_table_end:

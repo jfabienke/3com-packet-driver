@@ -86,7 +86,9 @@ int dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result
         result->needs_bounce = true;
     }
     
-    /* Check 64KB boundary crossing - GPT-5 Enhanced */
+    /* Track 64KB boundary crossing (informational only for bus-master NICs).
+     * The 64KB boundary is a hard constraint only for Intel 8237A slave DMA.
+     * Bus-master controllers (3C515, PCI NICs) handle crossings internally. */
     result->crosses_64k = dma_crosses_64k_fast(result->phys_addr, len);
     if (result->crosses_64k) {
         LOG_DEBUG("DMA: Buffer crosses 64KB boundary (0x%08lX + %zu)", result->phys_addr, len);
@@ -100,8 +102,8 @@ int dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result
         g_boundary_stats.boundary_16m_violations++;
     }
     
-    /* GPT-5 A+ Critical: ISA bus masters (3C515-TX) can only address 24-bit (16MB) */
-    /* This is a HARD constraint - ISA DMA cannot physically access > 0x00FFFFFF */
+    /* ISA bus address lines are 24-bit: bus masters can only address 0-16MB */
+    /* This is a HARD constraint of the ISA bus, not the DMA controller */
     if (result->phys_addr > ISA_DMA_MAX_ADDR || result->end_addr > ISA_DMA_MAX_ADDR) {
         LOG_WARNING("DMA: ISA 24-bit limit exceeded - phys_addr=0x%08lX end=0x%08lX", 
                    result->phys_addr, result->end_addr);
@@ -131,23 +133,20 @@ int dma_check_buffer_safety(void *buffer, size_t len, dma_check_result_t *result
         bool physical_safe = verify_physical_contiguity(buffer, len, result);
         bool direct_dma_safe = is_safe_for_direct_dma(buffer, len);
 
-        /* GPT-5 A: Force bounce for 64KB crossing on 3C515-TX ISA bus master */
-        /* The 3C515-TX cannot handle DMA transfers that cross 64KB boundaries */
-        bool force_bounce_3c515 = result->crosses_64k;  /* Always bounce on 64KB crossing for ISA DMA */
-    
-    /* Determine if bounce buffer is needed - GPT-5 Enhanced */
-    result->needs_bounce = force_bounce_3c515 ||     /* GPT-5 A: 3C515 64KB boundary constraint */
-                          result->crosses_16m || 
+    /* Determine if bounce buffer is needed.
+     * Note: 64KB boundary crossings do NOT require bounce buffers for bus-master
+     * controllers (3C515, PCI NICs). The 64KB boundary constraint is specific to
+     * the Intel 8237A DMA controller's 16-bit address counter wrapping. Bus-master
+     * controllers generate their own addresses with full-width counters and handle
+     * boundary crossings internally (similar to the Adaptec AHA-1542).
+     * The 3C509B uses PIO (no DMA at all), so it's also unaffected. */
+    result->needs_bounce = result->crosses_16m ||
                           result->exceeds_4gb ||
-                          result->exceeds_isa_24bit ||  /* GPT-5 A+: ISA 24-bit hard limit */
-                          !result->in_conventional ||  /* GPT-5: Only conventional memory for ISA DMA */
+                          result->exceeds_isa_24bit ||  /* ISA 24-bit hard limit */
+                          !result->in_conventional ||  /* Only conventional memory for ISA DMA */
                           result->alignment_error ||
-                          !physical_safe ||            /* GPT-5: Physical contiguity required */
-                          !direct_dma_safe;            /* GPT-5: Conservative safety policy */
-    
-    if (force_bounce_3c515) {
-        LOG_DEBUG("DMA: Forcing bounce for 3C515-TX 64KB boundary crossing");
-    }
+                          !physical_safe ||            /* Physical contiguity required */
+                          !direct_dma_safe;            /* Conservative safety policy */
     
     /* GPT-5 Critical: Attempt page locking if using direct DMA */
     if (!result->needs_bounce && !result->in_conventional) {
@@ -996,7 +995,6 @@ int is_safe_for_direct_dma(void *buffer, size_t len) {
     /* C89: All declarations at start of function */
     uint32_t linear_addr;
     dma_check_result_t check_result;
-    uint32_t start_phys;
 
     if (!buffer || len == 0) {
         return false;
@@ -1032,12 +1030,10 @@ int is_safe_for_direct_dma(void *buffer, size_t len) {
         return false;
     }
 
-    /* Check 5: Must not cross 64KB boundaries for ISA DMA */
-    start_phys = translate_linear_to_physical(linear_addr);
-    if (start_phys != 0xFFFFFFFFUL && dma_crosses_64k_fast(start_phys, len)) {
-        LOG_DEBUG("DMA: Buffer crosses 64KB boundary - bounce required");
-        return false;
-    }
+    /* Note: 64KB boundary crossings are NOT checked here. The 64KB constraint
+     * applies only to the Intel 8237A slave DMA controller, which none of the
+     * supported NICs use. The 3C509B uses PIO, and the 3C515/PCI NICs use
+     * bus-master DMA with their own address generation logic. */
 
     LOG_DEBUG("DMA: Buffer verified safe for direct DMA");
     return true;

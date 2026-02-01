@@ -8,10 +8,12 @@
  *
  * 3Com Packet Driver - JIT Copy-Down Engine
  *
- * Last Updated: 2026-02-01 12:05:57 CET
+ * Last Updated: 2026-02-01 18:20:35 CET
+ * Phase 8: Extended for two-stage loader (core modules + image header)
  */
 
 #include "jit_build.h"
+#include "jit_image.h"
 #include "logging.h"
 #include <string.h>
 #include <dos.h>
@@ -61,13 +63,14 @@ int jit_build_image(jit_layout_t *layout)
         return -3;
     }
 
-    if (sel->count > 16) {
+    if (sel->count > MOD_SELECT_MAX) {
         LOG_ERROR("jit_build_image: Too many modules selected (%u)", sel->count);
         return -4;
     }
 
-    /* Pass 1: Calculate total hot section size and validate headers */
-    total_size = 0;
+    /* Pass 1: Calculate total hot section size and validate headers.
+     * Reserve space for JIT image header at offset 0. */
+    total_size = sizeof(jit_image_header_t);
     for (i = 0; i < sel->count; i++) {
         reg = mod_registry_get(sel->selected[i]);
         if (reg == NULL) {
@@ -124,8 +127,9 @@ int jit_build_image(jit_layout_t *layout)
     /* Zero-fill the image buffer */
     _fmemset(layout->image_base, 0, total_size);
 
-    /* Pass 2: Copy hot sections contiguously into image buffer */
-    dst_offset = 0;
+    /* Pass 2: Copy hot sections contiguously into image buffer.
+     * Start after the image header. */
+    dst_offset = sizeof(jit_image_header_t);
     for (i = 0; i < sel->count; i++) {
         reg = mod_registry_get(sel->selected[i]);
         hdr = (const module_header_t far *)reg->header_ptr;
@@ -152,6 +156,50 @@ int jit_build_image(jit_layout_t *layout)
                   reg->name, hot_size, dst_offset);
 
         dst_offset += hot_size;
+    }
+
+    /* Write JIT image header at offset 0 */
+    {
+        jit_image_header_t far *img_hdr;
+        jit_layout_entry_t *isr_entry;
+        jit_layout_entry_t *idle_entry;
+        jit_layout_entry_t *irq_entry;
+        jit_layout_entry_t *uninstall_entry;
+
+        img_hdr = (jit_image_header_t far *)layout->image_base;
+        img_hdr->magic       = JIT_IMAGE_MAGIC;
+        img_hdr->version     = JIT_IMAGE_VERSION;
+        img_hdr->image_size  = layout->image_size;
+        img_hdr->int_number  = 0x60;  /* Default packet driver INT */
+        img_hdr->irq_number  = 0xFF;  /* Set by caller after patching */
+
+        /* Locate key entry points from layout */
+        isr_entry = jit_get_layout_entry(layout, MOD_ISR);
+        if (isr_entry) {
+            img_hdr->pktapi_offset = isr_entry->dst_offset;
+        }
+
+        /* Core modules provide idle and IRQ entry points */
+        idle_entry = jit_get_layout_entry(layout, MOD_CORE_TSRWRAP);
+        if (idle_entry) {
+            img_hdr->idle_offset = idle_entry->dst_offset;
+        }
+
+        irq_entry = jit_get_layout_entry(layout, MOD_IRQ);
+        if (irq_entry) {
+            img_hdr->irq_offset = irq_entry->dst_offset;
+        }
+
+        uninstall_entry = jit_get_layout_entry(layout, MOD_CORE_TSRCOM);
+        if (uninstall_entry) {
+            img_hdr->uninstall_offset = uninstall_entry->dst_offset;
+        }
+
+        /* Data/BSS and stack offsets are set to end of image */
+        img_hdr->data_offset  = layout->image_size;
+        img_hdr->data_size    = 0;
+        img_hdr->stack_offset = layout->image_size;
+        img_hdr->stack_size   = 512;
     }
 
     LOG_DEBUG("jit_build_image: Image built successfully, %u modules, %u bytes",

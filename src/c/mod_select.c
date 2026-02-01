@@ -7,7 +7,8 @@
  *
  * This file lives in an overlay section and is discarded after init.
  *
- * Last Updated: 2026-02-01 11:02:20 CET
+ * Last Updated: 2026-02-01 18:20:35 CET
+ * Phase 8: Extended with 21 core ASM module entries for two-stage loader
  */
 
 #include "mod_select.h"
@@ -45,6 +46,29 @@ extern module_header_t far mod_copy_286_header;
 extern module_header_t far mod_copy_386_header;
 extern module_header_t far mod_copy_pent_header;
 
+/* Core ASM module headers (Phase 8: two-stage loader) */
+extern module_header_t far mod_pktapi_header;
+extern module_header_t far mod_nicirq_header;
+extern module_header_t far mod_hwsmc_header;
+extern module_header_t far mod_pcmisr_header;
+extern module_header_t far mod_flowrt_header;
+extern module_header_t far mod_dirpio_header;
+extern module_header_t far mod_pktops_header;
+extern module_header_t far mod_pktcopy_header;
+extern module_header_t far mod_tsrcom_header;
+extern module_header_t far mod_tsrwrap_header;
+extern module_header_t far mod_pci_io_header;
+extern module_header_t far mod_pciisr_header;
+extern module_header_t far mod_linkasm_header;
+extern module_header_t far mod_hwpkt_header;
+extern module_header_t far mod_hwcfg_header;
+extern module_header_t far mod_hwcoord_header;
+extern module_header_t far mod_hwinit_header;
+extern module_header_t far mod_hweep_header;
+extern module_header_t far mod_hwdma_header;
+extern module_header_t far mod_cacheops_header;
+extern module_header_t far mod_tsr_crt_header;
+
 /* Static registry of all available modules */
 static mod_registry_entry_t g_registry[MOD_COUNT] = {
     /* Core modules */
@@ -75,6 +99,28 @@ static mod_registry_entry_t g_registry[MOD_COUNT] = {
     { MOD_COPY_286,       "mod_copy_286",       0,                    1, MOD_NIC_ANY,       NULL, 0 },
     { MOD_COPY_386,       "mod_copy_386",       0,                    2, MOD_NIC_ANY,       NULL, 0 },
     { MOD_COPY_PENT,      "mod_copy_pent",      0,                    4, MOD_NIC_ANY,       NULL, 0 },
+    /* Core ASM modules (Phase 8: always selected for two-stage loader) */
+    { MOD_CORE_PKTAPI,    "core_pktapi",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_NICIRQ,    "core_nicirq",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWSMC,     "core_hwsmc",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_PCMISR,    "core_pcmisr",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_FLOWRT,    "core_flowrt",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_DIRPIO,    "core_dirpio",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_PKTOPS,    "core_pktops",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_PKTCOPY,   "core_pktcopy",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_TSRCOM,    "core_tsrcom",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_TSRWRAP,   "core_tsrwrap",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_PCI_IO,    "core_pci_io",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_PCIISR,    "core_pciisr",        MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_LINKASM,   "core_linkasm",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWPKT,     "core_hwpkt",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWCFG,     "core_hwcfg",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWCOORD,   "core_hwcoord",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWINIT,    "core_hwinit",        MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWEEP,     "core_hweep",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_HWDMA,     "core_hwdma",         MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_CACHEOPS,  "core_cacheops",      MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_CORE_TSR_CRT,   "core_tsr_crt",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
 };
 
 /* Current selection state */
@@ -110,6 +156,29 @@ int mod_registry_init(void) {
     g_registry[MOD_COPY_286].header_ptr      = (void far *)&mod_copy_286_header;
     g_registry[MOD_COPY_386].header_ptr      = (void far *)&mod_copy_386_header;
     g_registry[MOD_COPY_PENT].header_ptr     = (void far *)&mod_copy_pent_header;
+
+    /* Core ASM module headers */
+    g_registry[MOD_CORE_PKTAPI].header_ptr   = (void far *)&mod_pktapi_header;
+    g_registry[MOD_CORE_NICIRQ].header_ptr   = (void far *)&mod_nicirq_header;
+    g_registry[MOD_CORE_HWSMC].header_ptr    = (void far *)&mod_hwsmc_header;
+    g_registry[MOD_CORE_PCMISR].header_ptr   = (void far *)&mod_pcmisr_header;
+    g_registry[MOD_CORE_FLOWRT].header_ptr   = (void far *)&mod_flowrt_header;
+    g_registry[MOD_CORE_DIRPIO].header_ptr   = (void far *)&mod_dirpio_header;
+    g_registry[MOD_CORE_PKTOPS].header_ptr   = (void far *)&mod_pktops_header;
+    g_registry[MOD_CORE_PKTCOPY].header_ptr  = (void far *)&mod_pktcopy_header;
+    g_registry[MOD_CORE_TSRCOM].header_ptr   = (void far *)&mod_tsrcom_header;
+    g_registry[MOD_CORE_TSRWRAP].header_ptr  = (void far *)&mod_tsrwrap_header;
+    g_registry[MOD_CORE_PCI_IO].header_ptr   = (void far *)&mod_pci_io_header;
+    g_registry[MOD_CORE_PCIISR].header_ptr   = (void far *)&mod_pciisr_header;
+    g_registry[MOD_CORE_LINKASM].header_ptr  = (void far *)&mod_linkasm_header;
+    g_registry[MOD_CORE_HWPKT].header_ptr    = (void far *)&mod_hwpkt_header;
+    g_registry[MOD_CORE_HWCFG].header_ptr    = (void far *)&mod_hwcfg_header;
+    g_registry[MOD_CORE_HWCOORD].header_ptr  = (void far *)&mod_hwcoord_header;
+    g_registry[MOD_CORE_HWINIT].header_ptr   = (void far *)&mod_hwinit_header;
+    g_registry[MOD_CORE_HWEEP].header_ptr    = (void far *)&mod_hweep_header;
+    g_registry[MOD_CORE_HWDMA].header_ptr    = (void far *)&mod_hwdma_header;
+    g_registry[MOD_CORE_CACHEOPS].header_ptr = (void far *)&mod_cacheops_header;
+    g_registry[MOD_CORE_TSR_CRT].header_ptr  = (void far *)&mod_tsr_crt_header;
 
     /* Read hot_size from each module header */
     {
@@ -172,10 +241,19 @@ const mod_registry_entry_t *mod_registry_get(module_id_t id) {
  * ============================================================================ */
 
 int select_core_modules(void) {
+    int i;
+
+    /* Original JIT core modules */
     select_module(MOD_ISR);
     select_module(MOD_IRQ);
     select_module(MOD_PKTBUF);
     select_module(MOD_DATA);
+
+    /* Core ASM modules (always selected for two-stage loader) */
+    for (i = MOD_CORE_FIRST; i <= MOD_CORE_LAST; i++) {
+        select_module((module_id_t)i);
+    }
+
     return 0;
 }
 

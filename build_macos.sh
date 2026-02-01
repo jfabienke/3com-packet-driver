@@ -3,7 +3,8 @@
 # build_macos.sh - Build 3Com Packet Driver on macOS with Open Watcom + NASM
 #
 # Part of 3Com DOS Packet Driver Project
-# Last Updated: 2026-02-01 16:00:00 CET
+# Last Updated: 2026-02-01 18:20:35 CET
+# Phase 8: Two-stage loader (3CPDINIT.EXE) - eliminate CRT from resident TSR
 # Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
 # Phase 6: Replaced 15 *_rt.c files with consolidated rt_stubs.c
 #
@@ -12,6 +13,7 @@
 #   ./build_macos.sh release      Build release version
 #   ./build_macos.sh debug        Build debug version
 #   ./build_macos.sh production   Build production (size-optimized)
+#   ./build_macos.sh stage1       Build two-stage loader (3CPDINIT.EXE)
 #   ./build_macos.sh clean        Remove build artifacts
 #   ./build_macos.sh info         Show build configuration
 #
@@ -79,6 +81,10 @@ CFLAGS_DEBUG="$CFLAGS_COMMON -0 -d2 -dINIT_DIAG"
 # -ot: Optimize for time
 CFLAGS_RELEASE="$CFLAGS_COMMON -os -ot -d0"
 
+# Stage 1 flags: large model with far data threshold 0 (-zt=0)
+# Forces all data items to far, reducing DGROUP pressure
+CFLAGS_STAGE1="$CFLAGS_COMMON -zt=0 -os -ot -d0"
+
 # Production flags (maximum size optimization)
 CFLAGS_PRODUCTION="$CFLAGS_COMMON -os -d0 -oe=100 -ol+ -ox -DPRODUCTION -DNO_LOGGING -DNO_STATS -DNDEBUG"
 
@@ -127,6 +133,12 @@ MODULE_ASM_OBJS=(
     mod_pio mod_dma_isa mod_dma_busmaster mod_dma_descring mod_dma_bounce
     mod_cache_none mod_cache_wbinvd mod_cache_clflush mod_cache_snoop
     mod_copy_8086 mod_copy_286 mod_copy_386 mod_copy_pent
+    tsr_crt
+)
+
+# Stage 1 Entry Point C Object (Phase 8 - two-stage loader)
+STAGE1_C_OBJS=(
+    stage1_main
 )
 
 # JIT Engine C Objects (Phase 7 - OVERLAY, discarded after init)
@@ -159,7 +171,7 @@ COLD_C_OBJS=(
 DEBUG_C_OBJS=(diag logging stats)
 
 # Loader C files
-LOADER_C_OBJS=(cpudet patch_apply init_stubs)
+LOADER_C_OBJS=(cpu_detect patch_apply init_stubs)
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -390,6 +402,152 @@ build_driver() {
     echo -e "${GREEN}========================================${NC}"
 }
 
+build_stage1() {
+    local mode="STAGE1"
+    local cflags="$CFLAGS_STAGE1"
+    local aflags="$AFLAGS_RELEASE"
+
+    echo -e "${YELLOW}Building 3Com Packet Driver Stage 1 Loader ($mode)...${NC}"
+    echo ""
+
+    mkdir -p "$BUILDDIR"
+    mkdir -p "$BUILDDIR/loader"
+
+    local failed=0
+
+    # --- Compile Stage 1 entry point ---
+    echo -e "${BLUE}Compiling Stage 1 entry point...${NC}"
+    for name in "${STAGE1_C_OBJS[@]}"; do
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_COLD"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile HOT ASM (same as release - these become JIT module templates) ---
+    echo -e "${BLUE}Compiling hot assembly (core module templates)...${NC}"
+    for name in "${HOT_ASM_OBJS[@]}"; do
+        if [ -f "$ASMDIR/$name.asm" ]; then
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile HOT C (ROOT segment) ---
+    echo -e "${BLUE}Compiling hot C (init context, APIs)...${NC}"
+    for name in "${HOT_C_OBJS[@]}"; do
+        local src_name="$name"
+        # Handle naming collision: pktops.c -> pktops_c.obj (pktops.asm -> pktops.obj)
+        if [ "$name" = "pktops_c" ]; then
+            src_name="pktops"
+        fi
+        if [ -f "$CDIR/$src_name.c" ]; then
+            if ! compile_c "$CDIR/$src_name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_ROOT"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile JIT Module ASM (including tsr_crt) ---
+    echo -e "${BLUE}Compiling JIT module assembly...${NC}"
+    for name in "${MODULE_ASM_OBJS[@]}"; do
+        if [ -f "$ASMDIR/$name.asm" ]; then
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile JIT Engine C ---
+    echo -e "${BLUE}Compiling JIT engine C...${NC}"
+    for name in "${JIT_C_OBJS[@]}"; do
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_COLD"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile COLD ASM ---
+    echo -e "${BLUE}Compiling cold assembly (init-only)...${NC}"
+    for name in "${COLD_ASM_OBJS[@]}"; do
+        if [ -f "$ASMDIR/$name.asm" ]; then
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile COLD C ---
+    echo -e "${BLUE}Compiling cold C (init stages)...${NC}"
+    for name in "${COLD_C_OBJS[@]}"; do
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_COLD"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile LOADER C ---
+    echo -e "${BLUE}Compiling loader C...${NC}"
+    for name in "${LOADER_C_OBJS[@]}"; do
+        local loader_src=""
+        if [ -f "$LOADERDIR/$name.c" ]; then
+            loader_src="$LOADERDIR/$name.c"
+        elif [ -f "$CDIR/$name.c" ]; then
+            loader_src="$CDIR/$name.c"
+        fi
+        if [ -n "$loader_src" ]; then
+            if ! compile_c "$loader_src" "$BUILDDIR/loader/$name.obj" "$cflags $CFLAGS_COLD"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Compile DEBUG C ---
+    echo -e "${BLUE}Compiling debug modules...${NC}"
+    for name in "${DEBUG_C_OBJS[@]}"; do
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags"; then
+                failed=1
+            fi
+        fi
+    done
+
+    # --- Check for failures ---
+    if [ $failed -eq 1 ]; then
+        echo ""
+        echo -e "${RED}Build failed due to compilation errors${NC}"
+        return 1
+    fi
+
+    # --- Link Stage 1 ---
+    echo ""
+    echo -e "${BLUE}Linking Stage 1 loader (3cpdinit.lnk)...${NC}"
+    echo -n "  [LINK] 3cpdinit.exe... "
+
+    if $LINK @3cpdinit.lnk 2>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        $LINK @3cpdinit.lnk 2>&1 | tail -60
+        return 1
+    fi
+
+    # --- Report ---
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}Build complete: $BUILDDIR/3cpdinit.exe${NC}"
+    if [ -f "$BUILDDIR/3cpdinit.exe" ]; then
+        local size=$(stat -f%z "$BUILDDIR/3cpdinit.exe" 2>/dev/null || stat -c%s "$BUILDDIR/3cpdinit.exe" 2>/dev/null)
+        echo "Stage 1 binary: $size bytes ($(expr $size / 1024) KB)"
+    fi
+    echo "Map file: $BUILDDIR/3cpdinit.map"
+    echo -e "${GREEN}========================================${NC}"
+}
+
 do_clean() {
     echo -e "${YELLOW}Cleaning build artifacts...${NC}"
     rm -rf "$BUILDDIR"
@@ -410,6 +568,7 @@ show_info() {
     echo "  ./build_macos.sh release     - Release build (default)"
     echo "  ./build_macos.sh debug       - Debug build with symbols"
     echo "  ./build_macos.sh production  - Size-optimized production build"
+    echo "  ./build_macos.sh stage1     - Two-stage loader (3CPDINIT.EXE)"
     echo "  ./build_macos.sh clean       - Remove build artifacts"
     echo "  ./build_macos.sh info        - Show this information"
     echo ""
@@ -436,7 +595,11 @@ case "${1:-release}" in
         ;;
     production)
         check_tools
-        build_driver "PRODUCTION" "$CFLAGS_PRODUCTION" "$AFLAGS_RELEASE" "0"
+        build_driver "PRODUCTION" "$CFLAGS_PRODUCTION" "$AFLAGS_RELEASE" "1"
+        ;;
+    stage1)
+        check_tools
+        build_stage1
         ;;
     clean)
         do_clean
@@ -445,7 +608,7 @@ case "${1:-release}" in
         show_info
         ;;
     *)
-        echo "Usage: $0 [release|debug|production|clean|info]"
+        echo "Usage: $0 [release|debug|production|stage1|clean|info]"
         exit 1
         ;;
 esac

@@ -15,7 +15,7 @@
 #include "init_context.h"
 
 /* Maximum modules that can be selected for a single TSR build */
-#define MOD_SELECT_MAX      16
+#define MOD_SELECT_MAX      48
 
 /* Module registry entry - links module ID to its compiled object */
 typedef struct {

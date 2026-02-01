@@ -116,7 +116,7 @@ BEGIN
     FILE build/main.obj
     FILE build/init.obj
     FILE build/entval.obj
-    FILE build/loader_cpudet.obj
+    FILE build/loader/cpu_detect.obj
     FILE build/cpudet.obj
 
     # OVL_PLATFORM: Stages 2-3
@@ -124,14 +124,14 @@ BEGIN
     # Detects chipset, DMA capabilities, and sets up logging
     SECTION
     FILE build/pltprob.obj
-    FILE build/loader_init_stubs.obj
+    FILE build/loader/init_stubs.obj
 
     # OVL_CONFIG: Stages 4-5
     # Configuration parsing, chipset detection
     # Parses command line, config files, and identifies chipset features
     SECTION
     FILE build/config.obj
-    FILE build/loader_patch_apply.obj
+    FILE build/loader/patch_apply.obj
     FILE build/chipdet.obj
     FILE build/flowctl.obj
 
@@ -247,6 +247,9 @@ FILE build/mod_copy_8086.obj
 FILE build/mod_copy_286.obj
 FILE build/mod_copy_386.obj
 FILE build/mod_copy_pent.obj
+
+# CRT replacement module (Phase 8 - two-stage loader support)
+FILE build/tsr_crt.obj
 
 # Stub implementations for undefined symbols (LAST - so real implementations take precedence)
 FILE build/linkstubs.obj

@@ -5,12 +5,26 @@
  * All I/O goes through DOS INT 21h system calls. No C library stdio
  * functions are used, saving ~40KB from the ROOT segment.
  *
- * Updated: 2026-01-29 23:25:08 CET
+ * Updated: 2026-02-01 18:20:35 CET
  */
 
 #include "dos_io.h"
 #include <dos.h>
+
+/*
+ * USE_TSR_CRT: When defined, use the pure-ASM CRT replacements from
+ * tsr_crt.asm instead of Watcom's string.h functions. This allows
+ * dos_io.c to be compiled for the two-stage loader's resident image
+ * without pulling in the Watcom CRT.
+ */
+#ifdef USE_TSR_CRT
+extern size_t   tsr_strlen(const char *s);
+extern void far *tsr_fmemcpy(void far *dst, const void far *src, size_t n);
+#define strlen   tsr_strlen
+#define _fmemcpy tsr_fmemcpy
+#else
 #include <string.h>
+#endif
 
 /* Internal formatting buffer for printf/fprintf output */
 static char _io_buf[512];

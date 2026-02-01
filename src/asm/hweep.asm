@@ -43,10 +43,31 @@ global read_3c515_eeprom
 global log_hardware_error
 
 ;=============================================================================
+; JIT MODULE HEADER
+;=============================================================================
+segment MODULE class=MODULE align=16
+
+global _mod_hweep_header
+_mod_hweep_header:
+    db  'PKTDRV', 0             ; +00  7 bytes: module signature
+    db  1                       ; +07  1 byte:  major version
+    db  0                       ; +08  1 byte:  minor version
+    db  0                       ; +09  1 byte:  cpu_req
+    db  0                       ; +0A  1 byte:  nic_type (0 = generic)
+    db  1                       ; +0B  1 byte:  cap_flags (1 = MOD_CAP_CORE)
+    dw  hot_end - hot_start     ; +0C  2 bytes: hot code size
+    dw  patch_table             ; +0E  2 bytes: offset to patch table
+    dw  patch_table_end - patch_table  ; +10  2 bytes: patch table size
+    dw  hot_start               ; +12  2 bytes: offset to hot_start
+    dw  hot_end                 ; +14  2 bytes: offset to hot_end
+    times 64 - ($ - _mod_hweep_header) db 0  ; Pad to 64 bytes
+
+;=============================================================================
 ; CODE SECTION - HOT (stays resident for runtime MAC queries)
 ;=============================================================================
 
 section .text
+hot_start:
 
 ;-----------------------------------------------------------------------------
 ; hardware_get_address - Get MAC address from hardware
@@ -487,6 +508,11 @@ log_hardware_error:
         pop     ax
         ret
 ;; end log_hardware_error
+
+hot_end:
+
+patch_table:
+patch_table_end:
 
 ;=============================================================================
 ; END OF MODULE

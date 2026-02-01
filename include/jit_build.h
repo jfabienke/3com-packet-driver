@@ -34,7 +34,7 @@ typedef struct {
     uint8_t far    *image_base;     /* Far pointer to TSR image buffer */
     uint16_t        image_size;     /* Total image size */
     uint16_t        entry_count;    /* Number of modules in layout */
-    jit_layout_entry_t entries[16]; /* Module layout entries */
+    jit_layout_entry_t entries[48]; /* Module layout entries */
 } jit_layout_t;
 
 /* Hardware values to bake into the TSR via SMC */
