@@ -70,9 +70,7 @@ segment _DATA class=DATA
 global _str_unknown
 _str_unknown:   db "Unknown", 0
 
-; rxbatch: copy break threshold (uint16, init 256)
-global _g_copy_break_threshold
-_g_copy_break_threshold:  dw 256
+; g_copy_break_threshold moved to rtcfg.asm
 
 ; logging: log file handle (int, init -1 = no file)
 global _log_file
@@ -205,11 +203,7 @@ _g_mitigation_contexts: resb 840    ; interrupt_mitigation_context_t[8]
 global _g_mitigation_initialized
 _g_mitigation_initialized: resb 1   ; bool
 
-global _g_mitigation_batch
-_g_mitigation_batch:    resb 1      ; uint8_t (redefined by another module)
-
-global _g_mitigation_timeout
-_g_mitigation_timeout:  resb 1      ; uint8_t (redefined by another module)
+; g_mitigation_batch, g_mitigation_timeout moved to rtcfg.asm
 
 ; --- rxbatch_rt ---
 global _g_rx_state

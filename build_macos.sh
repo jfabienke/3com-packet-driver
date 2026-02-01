@@ -3,7 +3,7 @@
 # build_macos.sh - Build 3Com Packet Driver on macOS with Open Watcom + NASM
 #
 # Part of 3Com DOS Packet Driver Project
-# Last Updated: 2026-02-01 14:50:00 CET
+# Last Updated: 2026-02-01 16:00:00 CET
 # Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
 # Phase 6: Replaced 15 *_rt.c files with consolidated rt_stubs.c
 #
@@ -107,14 +107,14 @@ HOT_ASM_OBJS=(
     pktapi nicirq hwsmc pcmisr flowrt dirpio
     pktops pktcopy tsrcom tsrwrap pci_io pciisr
     linkasm hwpkt hwcfg hwcoord hwinit hweep hwdma cacheops
-    rt_stubs
+    rt_stubs dos_idle irq_bind rtcfg
 )
 
 # HOT SECTION - C (resident after init, ROOT segment)
 # Phase 6: 15 individual *_rt files consolidated into rt_stubs
 HOT_C_OBJS=(
     api routing pci_shim pcimux dmamap dmabnd
-    hwchksm dos_idle irq_bind rtcfg irqmit rxbatch txlazy
+    hwchksm irqmit rxbatch txlazy
     init_main xms_core pktops_c linkstubs
     dos_io
 )

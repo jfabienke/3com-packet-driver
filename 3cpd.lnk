@@ -1,6 +1,6 @@
 # 3cpd.lnk - Watcom Linker Directives for Overlay System
 # 3Com Packet Driver - 16-bit DOS Memory Optimization
-# Last Updated: 2026-02-01 12:45:00 CET
+# Last Updated: 2026-02-01 16:00:00 CET
 # Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
 # Phase 6: Replaced 15 *_rt.obj with consolidated rt_stubs.obj
 #
@@ -59,7 +59,7 @@ FILE build/tsrwrap.obj
 FILE build/pci_io.obj
 FILE build/hwsmc.obj
 
-# Resident C modules
+# Resident ASM modules (ported from C for size reduction)
 FILE build/dos_idle.obj
 FILE build/irq_bind.obj
 FILE build/rtcfg.obj
@@ -159,6 +159,7 @@ BEGIN
     # Vortex/Boomerang PCI NIC detection (moved from ROOT)
     FILE build/3cvortex.obj
     FILE build/3cboom.obj
+    FILE build/pcipwr.obj
 
     # OVL_NIC_INIT: Stage 9
     # NIC driver initialization functions (split from runtime)
@@ -168,6 +169,7 @@ BEGIN
     FILE build/3c509b_init.obj
     FILE build/3c515_init.obj
     FILE build/nic_init.obj
+    FILE build/pcirst.obj
 
     # OVL_FINAL: Stages 10-14
     # DMA buffer init, TSR relocate, API install, IRQ enable, API activate
@@ -199,6 +201,7 @@ BEGIN
     FILE build/quiesce.obj
     FILE build/safestub.obj
     FILE build/smcpat.obj
+    FILE build/smcpat_c.obj
     FILE build/routing.obj
     FILE build/statrt.obj
     FILE build/arp.obj
