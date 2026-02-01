@@ -1,0 +1,104 @@
+# 3cpd-noovl.lnk - Watcom Linker Directives (Non-Overlay)
+# 3Com Packet Driver - 16-bit DOS with FAR_DATA outside DGROUP
+# Last Updated: 2026-01-27 16:00:00 UTC
+
+SYSTEM dos
+NAME build/3cpd.exe
+
+# Memory model library (large model)
+LIBRARY /Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel/lib286/dos/clibl.lib
+
+# Linker options
+OPTION map=build/3cpd.map
+OPTION caseexact
+OPTION stack=1024
+
+# Put FAR_DATA class segments OUTSIDE DGROUP
+SEGMENT class FAR_DATA
+
+# All object files (in link order)
+FILE build/tsrldr.obj
+FILE build/pktapi.obj
+FILE build/main_asm.obj
+FILE build/nicirq.obj
+FILE build/hwsmc.obj
+FILE build/pcmisr.obj
+FILE build/flowrt.obj
+FILE build/dirpio.obj
+FILE build/pktops.obj
+FILE build/pktcopy.obj
+FILE build/tsrcom.obj
+FILE build/tsrwrap.obj
+FILE build/pci_io.obj
+FILE build/pciisr.obj
+FILE build/api.obj
+FILE build/routing.obj
+FILE build/pci_shim.obj
+FILE build/pcimux.obj
+FILE build/dmamap.obj
+FILE build/dmabnd.obj
+FILE build/hwchksm.obj
+FILE build/dos_idle.obj
+FILE build/irq_bind.obj
+FILE build/rtcfg.obj
+FILE build/irqmit.obj
+FILE build/rxbatch.obj
+FILE build/txlazy.obj
+FILE build/init_main.obj
+FILE build/xms_core.obj
+FILE build/cpudet.obj
+FILE build/pnp.obj
+FILE build/promisc.obj
+FILE build/smcpat.obj
+FILE build/safestub.obj
+FILE build/quiesce.obj
+FILE build/main.obj
+FILE build/init.obj
+FILE build/config.obj
+FILE build/pcmmgr.obj
+FILE build/pcmsnap.obj
+FILE build/flowctl.obj
+FILE build/pcmpebe.obj
+FILE build/pcmssbe.obj
+FILE build/memory.obj
+FILE build/xmsdet.obj
+FILE build/umbldr.obj
+FILE build/eeprom.obj
+FILE build/bufaloc.obj
+FILE build/bufauto.obj
+FILE build/statrt.obj
+FILE build/arp.obj
+FILE build/nic_init.obj
+FILE build/hardware.obj
+FILE build/hwstubs.obj
+FILE build/3c515.obj
+FILE build/3c509b.obj
+FILE build/entval.obj
+FILE build/pltprob.obj
+FILE build/dmacap.obj
+FILE build/tsrmgr.obj
+FILE build/dmatest.obj
+FILE build/dmasafe.obj
+FILE build/vds_core.obj
+FILE build/vdssafe.obj
+FILE build/vdsmgr.obj
+FILE build/extapi.obj
+FILE build/unwind.obj
+FILE build/chipdet.obj
+FILE build/bmtest.obj
+FILE build/loader_cpudet.obj
+FILE build/loader_patch_apply.obj
+FILE build/loader_init_stubs.obj
+FILE build/pci_bios.obj
+FILE build/3cpcidet.obj
+FILE build/3cvortex.obj
+FILE build/3cboom.obj
+FILE build/pciintg.obj
+FILE build/pcishme.obj
+FILE build/smcserl.obj
+FILE build/cachemgt.obj
+FILE build/dmapol.obj
+FILE build/vds.obj
+FILE build/diag.obj
+FILE build/logging.obj
+FILE build/stats.obj
