@@ -3,7 +3,9 @@
 # build_macos.sh - Build 3Com Packet Driver on macOS with Open Watcom + NASM
 #
 # Part of 3Com DOS Packet Driver Project
-# Last Updated: 2026-01-23 18:33:40 CET
+# Last Updated: 2026-02-01 12:45:00 CET
+# Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
+# Phase 6: Replaced 15 *_rt.c files with consolidated rt_stubs.c
 #
 # Usage:
 #   ./build_macos.sh              Build release (default)
@@ -27,8 +29,9 @@ LINK="$WATCOM/armo64/wlink"
 export INCLUDE="$WATCOM/h"
 export LIB="$WATCOM/lib286/dos:$WATCOM/lib286"
 
-# Watcom Assembler (MASM-compatible)
-ASM="$WATCOM/armo64/wasm"
+# NASM Assembler (unified toolchain - better local label support)
+ASM="nasm"
+ASM_FLAGS="-f obj"
 
 # Directories
 SRCDIR="src"
@@ -54,15 +57,22 @@ NC='\033[0m'
 
 # Common flags for all builds
 # -zq: Quiet mode
-# -ms: Small memory model
+# -ml: Large memory model (code+data > 64KB, required for overlay system)
 # -s: No stack checking
 # -zp1: Pack structures on 1-byte boundary
+# -of: Overlay-safe function prologue/epilogue
+# -zc: Put string literals in code segment (reduces CONST segment)
 # -zdf: DS != DGROUP (for TSR)
-# -zu: SS != DGROUP (for TSR)
-CFLAGS_COMMON="-zq -ms -s -zp1 -zdf -zu -I$INCDIR"
+CFLAGS_COMMON="-zq -ml -s -zp1 -of -zc -zdf -i=$INCDIR/ -i=$WATCOM/h/ -wcd=201"
+
+# ROOT segment flag (always-resident modules)
+CFLAGS_ROOT="-dROOT_SEGMENT"
+
+# COLD section flag (overlay, discarded after init)
+CFLAGS_COLD="-dCOLD_SECTION"
 
 # Debug flags
-CFLAGS_DEBUG="$CFLAGS_COMMON -0 -d2"
+CFLAGS_DEBUG="$CFLAGS_COMMON -0 -d2 -dINIT_DIAG"
 
 # Release flags
 # -os: Optimize for space
@@ -72,16 +82,15 @@ CFLAGS_RELEASE="$CFLAGS_COMMON -os -ot -d0"
 # Production flags (maximum size optimization)
 CFLAGS_PRODUCTION="$CFLAGS_COMMON -os -d0 -oe=100 -ol+ -ox -DPRODUCTION -DNO_LOGGING -DNO_STATS -DNDEBUG"
 
-# WASM flags (Watcom Assembler - MASM compatible)
-# -zq: Quiet mode
+# NASM flags
+# -f obj: Output OMF object format (compatible with Watcom linker)
 # -I: Include path
-# Note: Don't specify memory model/CPU - let each file define its own
-AFLAGS_COMMON="-zq -I$INCDIR"
-AFLAGS_DEBUG="$AFLAGS_COMMON -d1"
+AFLAGS_COMMON="-f obj -I$INCDIR/"
+AFLAGS_DEBUG="$AFLAGS_COMMON -g"
 AFLAGS_RELEASE="$AFLAGS_COMMON"
 
-# All assembly files now use WASM/MASM syntax (unified toolchain)
-# NASM support removed - all files converted to WASM format
+# All assembly files use NASM syntax (unified toolchain)
+# NASM provides better local label support (.label scoped per function)
 
 # Linker flags
 LFLAGS_COMMON="system dos option caseexact, quiet, stack=1024"
@@ -90,24 +99,44 @@ LFLAGS_COMMON="system dos option caseexact, quiet, stack=1024"
 # OBJECT FILE LISTS
 # =============================================================================
 
+# Loader (contains both hot and cold)
+LOADER_OBJ="tsrldr"
+
 # HOT SECTION - Assembly (resident after init)
 HOT_ASM_OBJS=(
     pktapi nicirq hwsmc pcmisr flowrt dirpio
     pktops pktcopy tsrcom tsrwrap pci_io pciisr
+    linkasm hwpkt hwcfg hwcoord hwinit hweep hwdma cacheops
 )
 
-# Loader (contains both hot and cold)
-LOADER_OBJ="tsrldr"
-
-# HOT SECTION - C (resident after init)
+# HOT SECTION - C (resident after init, ROOT segment)
+# Phase 6: 15 individual *_rt files consolidated into rt_stubs
 HOT_C_OBJS=(
     api routing pci_shim pcimux dmamap dmabnd
     hwchksm dos_idle irq_bind rtcfg irqmit rxbatch txlazy
+    init_main xms_core pktops_c linkstubs
+    rt_stubs dos_io
+)
+
+# JIT Module ASM Objects (Phase 7 - linked into EXE, hot sections copied at init)
+MODULE_ASM_OBJS=(
+    mod_isr mod_irq mod_pktbuf mod_data
+    mod_3c509b_rt mod_3c515_rt mod_vortex_rt mod_boom_rt
+    mod_cyclone_rt mod_tornado_rt
+    mod_pio mod_dma_isa mod_dma_busmaster mod_dma_descring mod_dma_bounce
+    mod_cache_none mod_cache_wbinvd mod_cache_clflush mod_cache_snoop
+    mod_copy_8086 mod_copy_286 mod_copy_386 mod_copy_pent
+)
+
+# JIT Engine C Objects (Phase 7 - OVERLAY, discarded after init)
+JIT_C_OBJS=(
+    mod_select jit_build jit_patch jit_reloc
 )
 
 # COLD SECTION - Assembly (discarded after init)
 COLD_ASM_OBJS=(
     cpudet pnp promisc smcpat safestub quiesce
+    hwdet hwbus
 )
 
 # COLD SECTION - C (discarded after init)
@@ -117,15 +146,18 @@ COLD_C_OBJS=(
     nic_init hardware hwstubs 3c515 3c509b entval pltprob
     dmacap tsrmgr dmatest dmasafe vds_core vdssafe vdsmgr
     extapi unwind chipdet bmtest pci_bios 3cpcidet 3cvortex
-    3cboom pciintg pcishme smc_safety_patches smcserl cachemgt
-    dmapol vds
+    3cboom pciintg pcishme smcserl cachemgt dmapol vds
+    hardware_init 3c509b_init 3c515_init
+    api_init dmabnd_init dmamap_init pci_shim_init pcimux_init
+    hwchksm_init irqmit_init rxbatch_init txlazy_init
+    xms_core_init pktops_init logging_init
 )
 
 # Debug-only objects
 DEBUG_C_OBJS=(diag logging stats)
 
 # Loader C files
-LOADER_C_OBJS=(cpudet patch_apply)
+LOADER_C_OBJS=(cpudet patch_apply init_stubs)
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -145,8 +177,9 @@ check_tools() {
         missing=1
     fi
 
-    if [ ! -x "$ASM" ]; then
-        echo -e "${RED}Error: WASM assembler not found at $ASM${NC}"
+    if ! command -v "$ASM" &> /dev/null; then
+        echo -e "${RED}Error: NASM assembler not found${NC}"
+        echo "Install with: brew install nasm"
         missing=1
     fi
 
@@ -157,7 +190,7 @@ check_tools() {
     echo -e "${GREEN}Build tools verified:${NC}"
     echo "  CC:   $CC"
     echo "  LINK: $LINK"
-    echo "  ASM:  $ASM"
+    echo "  ASM:  $ASM ($(nasm -v 2>&1 | head -1))"
 }
 
 compile_c() {
@@ -184,14 +217,14 @@ compile_asm() {
     local flags="$3"
     local name=$(basename "$src" .asm)
 
-    # All files use WASM (unified MASM-compatible toolchain)
-    echo -n "  [WASM] $name.asm... "
-    if $ASM $flags "$src" -fo="$obj" 2>/dev/null; then
+    # All files use NASM (unified toolchain with local label support)
+    echo -n "  [NASM] $name.asm... "
+    if $ASM $flags "$src" -o "$obj" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}"
         return 0
     else
         echo -e "${RED}FAILED${NC}"
-        $ASM $flags "$src" -fo="$obj" 2>&1 | head -20
+        $ASM $flags "$src" -o "$obj" 2>&1 | head -20
         return 1
     fi
 }
@@ -236,11 +269,33 @@ build_driver() {
         fi
     done
 
-    # --- Compile HOT C ---
+    # --- Compile HOT C (ROOT segment) ---
     echo -e "${BLUE}Compiling hot C (resident)...${NC}"
     for name in "${HOT_C_OBJS[@]}"; do
         if [ -f "$CDIR/$name.c" ]; then
-            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags"; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_ROOT"; then
+                failed=1
+            fi
+            all_objs="$all_objs $BUILDDIR/$name.obj"
+        fi
+    done
+
+    # --- Compile JIT Module ASM (Phase 7) ---
+    echo -e "${BLUE}Compiling JIT module assembly...${NC}"
+    for name in "${MODULE_ASM_OBJS[@]}"; do
+        if [ -f "$ASMDIR/$name.asm" ]; then
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+                failed=1
+            fi
+            all_objs="$all_objs $BUILDDIR/$name.obj"
+        fi
+    done
+
+    # --- Compile JIT Engine C (Phase 7 - OVERLAY) ---
+    echo -e "${BLUE}Compiling JIT engine C (overlay)...${NC}"
+    for name in "${JIT_C_OBJS[@]}"; do
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_COLD"; then
                 failed=1
             fi
             all_objs="$all_objs $BUILDDIR/$name.obj"
@@ -262,7 +317,7 @@ build_driver() {
     echo -e "${BLUE}Compiling cold C (init-only)...${NC}"
     for name in "${COLD_C_OBJS[@]}"; do
         if [ -f "$CDIR/$name.c" ]; then
-            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags"; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_COLD"; then
                 failed=1
             fi
             all_objs="$all_objs $BUILDDIR/$name.obj"
@@ -272,8 +327,14 @@ build_driver() {
     # --- Compile LOADER C ---
     echo -e "${BLUE}Compiling loader C...${NC}"
     for name in "${LOADER_C_OBJS[@]}"; do
+        local loader_src=""
         if [ -f "$LOADERDIR/$name.c" ]; then
-            if ! compile_c "$LOADERDIR/$name.c" "$BUILDDIR/loader/$name.obj" "$cflags -DCOLD_SECTION"; then
+            loader_src="$LOADERDIR/$name.c"
+        elif [ -f "$CDIR/$name.c" ]; then
+            loader_src="$CDIR/$name.c"
+        fi
+        if [ -n "$loader_src" ]; then
+            if ! compile_c "$loader_src" "$BUILDDIR/loader/$name.obj" "$cflags $CFLAGS_COLD"; then
                 failed=1
             fi
             all_objs="$all_objs $BUILDDIR/loader/$name.obj"
@@ -302,30 +363,16 @@ build_driver() {
 
     # --- Link ---
     echo ""
-    echo -e "${BLUE}Linking...${NC}"
+    echo -e "${BLUE}Linking (overlay system via 3cpd.lnk)...${NC}"
     echo -n "  [LINK] 3cpd.exe... "
 
-    # Build file list for wlink
-    local file_list=$(echo $all_objs | tr ' ' ',')
-
-    if $LINK $LFLAGS_COMMON \
-        option map="$BUILDDIR/3cpd.map" \
-        libpath "$WATCOM/lib286/dos" \
-        libpath "$WATCOM/lib286" \
-        library clibs.lib \
-        name "$TARGET" \
-        file { $all_objs } 2>/dev/null; then
+    # Use the overlay linker directive file which defines ROOT + OVERLAY sections
+    if $LINK @3cpd.lnk 2>/dev/null; then
         echo -e "${GREEN}OK${NC}"
     else
         echo -e "${RED}FAILED${NC}"
         # Re-run to show errors
-        $LINK $LFLAGS_COMMON \
-            option map="$BUILDDIR/3cpd.map" \
-            libpath "$WATCOM/lib286/dos" \
-            libpath "$WATCOM/lib286" \
-            library clibs.lib \
-            name "$TARGET" \
-            file { $all_objs }
+        $LINK @3cpd.lnk 2>&1 | tail -60
         return 1
     fi
 

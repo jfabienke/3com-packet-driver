@@ -1,7 +1,8 @@
 # 3cpd.lnk - Watcom Linker Directives for Overlay System
 # 3Com Packet Driver - 16-bit DOS Memory Optimization
-# Last Updated: 2026-01-28 11:20:00 UTC
-# Phase 6: Expanded 6-overlay structure with split NIC drivers
+# Last Updated: 2026-02-01 12:45:00 CET
+# Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
+# Phase 6: Replaced 15 *_rt.obj with consolidated rt_stubs.obj
 #
 # This file defines the Watcom overlay system structure:
 # - ROOT SEGMENT: Always resident (ISR-safe code, ~60-80 KB)
@@ -22,7 +23,7 @@ LIBRARY /Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel/lib
 # Linker options
 OPTION map=build/3cpd.map
 OPTION caseexact
-OPTION stack=1024
+OPTION stack=512
 
 # Enable overlay system - Watcom dynamic overlay manager
 OPTION DYNAMIC
@@ -36,8 +37,7 @@ OPTION AREA=64K
 # TSR Loader (entry point)
 FILE build/tsrldr.obj
 
-# Core Packet API (INT 60h handler) - Split: init moved to OVL_FINAL
-FILE build/api_rt.obj
+# Core Packet API (INT 60h handler)
 FILE build/pktapi.obj
 
 # Interrupt Handlers (must be resident for ISR)
@@ -51,10 +51,6 @@ FILE build/pktcopy.obj
 FILE build/flowrt.obj
 FILE build/dirpio.obj
 
-# DMA Runtime (used during packet operations) - Split: init moved to OVL_FINAL
-FILE build/dmamap_rt.obj
-FILE build/dmabnd_rt.obj
-
 # TSR Support
 FILE build/tsrcom.obj
 FILE build/tsrwrap.obj
@@ -63,22 +59,13 @@ FILE build/tsrwrap.obj
 FILE build/pci_io.obj
 FILE build/hwsmc.obj
 
-# Resident C modules - Split: init portions moved to OVL_FINAL
-FILE build/pci_shim_rt.obj
-FILE build/pcimux_rt.obj
-FILE build/hwchksm_rt.obj
+# Resident C modules
 FILE build/dos_idle.obj
 FILE build/irq_bind.obj
 FILE build/rtcfg.obj
-FILE build/irqmit_rt.obj
-FILE build/rxbatch_rt.obj
-FILE build/txlazy_rt.obj
 
 # Init Orchestrator (ROOT - calls overlay stages)
 FILE build/init_main.obj
-
-# XMS Core runtime (init moved to OVL_FINAL)
-FILE build/xms_core_rt.obj
 
 # ASM stub symbols for linking (bridges ASM/C symbol naming)
 FILE build/linkasm.obj
@@ -100,26 +87,11 @@ FILE build/hweep.obj
 # Hardware DMA operations (dma_stall_engines, dma_unstall_engines)
 FILE build/hwdma.obj
 
-# C packet operations - RUNTIME ONLY (packet_receive_process, packet_isr_receive)
-# Called by pktops.asm for high-level packet processing
-# Split: init functions moved to OVL_FINAL overlay
-FILE build/pktops_rt.obj
-
-# ============================================================================
-# NIC DRIVERS - RUNTIME ONLY (vtables stored in nic->ops, called at runtime)
-# Split drivers: *_rt.obj contains only runtime functions (send/receive/interrupt)
-# Init functions moved to OVL_NIC_INIT overlay section
-# ============================================================================
-FILE build/hardware_rt.obj
-FILE build/3c509b_rt.obj
-FILE build/3c515_rt.obj
-# Vortex/Boomerang moved to OVL_DETECT overlay (PCI detection code, not needed at runtime)
-
 # DOS I/O (custom printf/file I/O via INT 21h - used by ROOT modules)
 FILE build/dos_io.obj
 
-# Logging - Runtime logging functions (init moved to OVL_FINAL)
-FILE build/logging_rt.obj
+# Phase 6: Consolidated runtime stubs (replaces 15 individual *_rt.obj files)
+FILE build/rt_stubs.obj
 
 # ============================================================================
 # OVERLAY AREA - 6 Init Stages (Expanded structure for reduced ROOT size)
@@ -200,8 +172,13 @@ BEGIN
     # OVL_FINAL: Stages 10-14
     # DMA buffer init, TSR relocate, API install, IRQ enable, API activate
     # Final setup and optional features (diagnostics, routing, promiscuous mode)
-    # Also contains init portions of split modules
+    # Also contains init portions of split modules and JIT engine
     SECTION
+    # Phase 7: JIT copy-down engine (overlay, discarded after init)
+    FILE build/mod_select.obj
+    FILE build/jit_build.obj
+    FILE build/jit_patch.obj
+    FILE build/jit_reloc.obj
     FILE build/pktops_init.obj
     FILE build/dmamap_init.obj
     FILE build/api_init.obj
@@ -238,6 +215,35 @@ BEGIN
     FILE build/smcserl.obj
     FILE build/cachemgt.obj
 END
+
+# ============================================================================
+# JIT MODULE OBJECTS - Templates for copy-down (ROOT, contain module headers)
+# These are linked into the EXE but their hot sections are copied into the
+# JIT-built TSR image at init time. Only needed modules are copied.
+# ============================================================================
+FILE build/mod_isr.obj
+FILE build/mod_irq.obj
+FILE build/mod_pktbuf.obj
+FILE build/mod_data.obj
+FILE build/mod_3c509b_rt.obj
+FILE build/mod_3c515_rt.obj
+FILE build/mod_vortex_rt.obj
+FILE build/mod_boom_rt.obj
+FILE build/mod_cyclone_rt.obj
+FILE build/mod_tornado_rt.obj
+FILE build/mod_pio.obj
+FILE build/mod_dma_isa.obj
+FILE build/mod_dma_busmaster.obj
+FILE build/mod_dma_descring.obj
+FILE build/mod_dma_bounce.obj
+FILE build/mod_cache_none.obj
+FILE build/mod_cache_wbinvd.obj
+FILE build/mod_cache_clflush.obj
+FILE build/mod_cache_snoop.obj
+FILE build/mod_copy_8086.obj
+FILE build/mod_copy_286.obj
+FILE build/mod_copy_386.obj
+FILE build/mod_copy_pent.obj
 
 # Stub implementations for undefined symbols (LAST - so real implementations take precedence)
 FILE build/linkstubs.obj

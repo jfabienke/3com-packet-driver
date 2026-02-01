@@ -2,8 +2,9 @@
 # Use: wmake -f Makefile.wat [target]
 # Requires Open Watcom C/C++ and NASM
 #
-# Last Updated: 2026-01-28 07:15 UTC
-# Phase 6: Split NIC drivers (*_rt.c/*_init.c) for expanded 6-overlay structure
+# Last Updated: 2026-02-01 12:45:00 CET
+# Phase 7: JIT copy-down + SMC pure-ASM TSR architecture
+# Phase 6: Replaced 15 *_rt.c files with consolidated rt_stubs.c
 #
 # OVERLAY SYSTEM: This build now uses Watcom's static overlay system to
 # reduce TSR memory footprint. The 3cpd.lnk linker directive file defines
@@ -121,7 +122,7 @@ LOADER_OBJ = $(BUILDDIR)/tsrldr.obj
 #       pktops_c.obj provides C functions called by pktops.asm
 # init_main.obj: Overlay orchestrator (must be resident to call overlay stages)
 # xms_core.obj: XMS memory manager (must be resident for buffer access)
-# Split driver *_rt.obj: Runtime functions (ROOT segment, always resident)
+# Phase 6: Consolidated rt_stubs.obj replaces 15 individual *_rt.obj files
 HOT_C_OBJS = $(BUILDDIR)/api.obj &
              $(BUILDDIR)/routing.obj &
              $(BUILDDIR)/pci_shim.obj &
@@ -139,22 +140,41 @@ HOT_C_OBJS = $(BUILDDIR)/api.obj &
              $(BUILDDIR)/xms_core.obj &
              $(BUILDDIR)/pktops_c.obj &
              $(BUILDDIR)/linkstubs.obj &
-             $(BUILDDIR)/hardware_rt.obj &
-             $(BUILDDIR)/3c509b_rt.obj &
-             $(BUILDDIR)/3c515_rt.obj &
-             $(BUILDDIR)/api_rt.obj &
-             $(BUILDDIR)/dmabnd_rt.obj &
-             $(BUILDDIR)/dmamap_rt.obj &
-             $(BUILDDIR)/pci_shim_rt.obj &
-             $(BUILDDIR)/pcimux_rt.obj &
-             $(BUILDDIR)/hwchksm_rt.obj &
-             $(BUILDDIR)/irqmit_rt.obj &
-             $(BUILDDIR)/rxbatch_rt.obj &
-             $(BUILDDIR)/txlazy_rt.obj &
-             $(BUILDDIR)/xms_core_rt.obj &
-             $(BUILDDIR)/pktops_rt.obj &
-             $(BUILDDIR)/logging_rt.obj &
+             $(BUILDDIR)/rt_stubs.obj &
              $(BUILDDIR)/dos_io.obj
+
+# --- MODULE SECTION - JIT Module Assembly Objects (Phase 7) ---
+# These are the pure-ASM runtime modules for the JIT copy-down TSR builder.
+# Each module has a 64-byte header and hot/cold sections.
+MODULE_ASM_OBJS = $(BUILDDIR)/mod_isr.obj &
+                  $(BUILDDIR)/mod_irq.obj &
+                  $(BUILDDIR)/mod_pktbuf.obj &
+                  $(BUILDDIR)/mod_data.obj &
+                  $(BUILDDIR)/mod_3c509b_rt.obj &
+                  $(BUILDDIR)/mod_3c515_rt.obj &
+                  $(BUILDDIR)/mod_vortex_rt.obj &
+                  $(BUILDDIR)/mod_boom_rt.obj &
+                  $(BUILDDIR)/mod_cyclone_rt.obj &
+                  $(BUILDDIR)/mod_tornado_rt.obj &
+                  $(BUILDDIR)/mod_pio.obj &
+                  $(BUILDDIR)/mod_dma_isa.obj &
+                  $(BUILDDIR)/mod_dma_busmaster.obj &
+                  $(BUILDDIR)/mod_dma_descring.obj &
+                  $(BUILDDIR)/mod_dma_bounce.obj &
+                  $(BUILDDIR)/mod_cache_none.obj &
+                  $(BUILDDIR)/mod_cache_wbinvd.obj &
+                  $(BUILDDIR)/mod_cache_clflush.obj &
+                  $(BUILDDIR)/mod_cache_snoop.obj &
+                  $(BUILDDIR)/mod_copy_8086.obj &
+                  $(BUILDDIR)/mod_copy_286.obj &
+                  $(BUILDDIR)/mod_copy_386.obj &
+                  $(BUILDDIR)/mod_copy_pent.obj
+
+# --- JIT Engine C Objects (Phase 7 - OVERLAY, discarded after init) ---
+JIT_C_OBJS = $(BUILDDIR)/mod_select.obj &
+             $(BUILDDIR)/jit_build.obj &
+             $(BUILDDIR)/jit_patch.obj &
+             $(BUILDDIR)/jit_reloc.obj
 
 # --- COLD SECTION - Initialization Assembly Objects ---
 COLD_ASM_OBJS = $(BUILDDIR)/cpudet.obj &
@@ -238,10 +258,10 @@ DEBUG_C_OBJS = $(BUILDDIR)/diag.obj &
 # --- Conditional inclusion ---
 !ifdef PRODUCTION
 COLD_C_OBJS = $(COLD_C_OBJS_BASE)
-ALL_OBJS = $(LOADER_OBJ) $(HOT_ASM_OBJS) $(HOT_C_OBJS) $(COLD_ASM_OBJS) $(COLD_C_OBJS)
+ALL_OBJS = $(LOADER_OBJ) $(HOT_ASM_OBJS) $(HOT_C_OBJS) $(MODULE_ASM_OBJS) $(JIT_C_OBJS) $(COLD_ASM_OBJS) $(COLD_C_OBJS)
 !else
 COLD_C_OBJS = $(COLD_C_OBJS_BASE) $(DEBUG_C_OBJS)
-ALL_OBJS = $(LOADER_OBJ) $(HOT_ASM_OBJS) $(HOT_C_OBJS) $(COLD_ASM_OBJS) $(COLD_C_OBJS)
+ALL_OBJS = $(LOADER_OBJ) $(HOT_ASM_OBJS) $(HOT_C_OBJS) $(MODULE_ASM_OBJS) $(JIT_C_OBJS) $(COLD_ASM_OBJS) $(COLD_C_OBJS)
 !endif
 
 # --- Suffix Rules ---
@@ -418,11 +438,11 @@ $(BUILDDIR)/hardware.obj: $(CDIR)/hardware.c
     @echo Compiling: $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-# Split driver objects - Phase 6 expanded overlay structure
-# *_rt.obj: Runtime functions (ROOT segment - always resident)
+# Split driver objects - Phase 6: *_rt.c consolidated into rt_stubs.c
+# rt_stubs.obj: Consolidated runtime stubs (ROOT segment - always resident)
 # *_init.obj: Init functions (OVL_NIC_INIT overlay - discarded after init)
 
-$(BUILDDIR)/hardware_rt.obj: $(CDIR)/hardware_rt.c
+$(BUILDDIR)/rt_stubs.obj: $(CDIR)/rt_stubs.c
     @echo 'Compiling ROOT:' $[@
     $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
 
@@ -430,17 +450,9 @@ $(BUILDDIR)/hardware_init.obj: $(CDIR)/hardware_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-$(BUILDDIR)/3c509b_rt.obj: $(CDIR)/3c509b_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
 $(BUILDDIR)/3c509b_init.obj: $(CDIR)/3c509b_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
-
-$(BUILDDIR)/3c515_rt.obj: $(CDIR)/3c515_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
 
 $(BUILDDIR)/3c515_init.obj: $(CDIR)/3c515_init.c
     @echo 'Compiling OVERLAY:' $[@
@@ -836,111 +848,175 @@ $(BUILDDIR)/pktops_c.obj: $(CDIR)/pktops.c
     @echo 'Compiling HOT:' $[@
     $(CC) $(CFLAGS) $[@ -fo=$@
 
-# Split packet operations - Phase 6 expanded overlay structure
-$(BUILDDIR)/pktops_rt.obj: $(CDIR)/pktops_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split packet operations - Phase 6: pktops_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/pktops_init.obj: $(CDIR)/pktops_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split DMA mapping - Phase 6 expanded overlay structure
-$(BUILDDIR)/dmamap_rt.obj: $(CDIR)/dmamap_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split DMA mapping - Phase 6: dmamap_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/dmamap_init.obj: $(CDIR)/dmamap_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split api - Phase 6 expanded overlay structure
-$(BUILDDIR)/api_rt.obj: $(CDIR)/api_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split api - Phase 6: api_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/api_init.obj: $(CDIR)/api_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split DMA binding - Phase 6 expanded overlay structure
-$(BUILDDIR)/dmabnd_rt.obj: $(CDIR)/dmabnd_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split DMA binding - Phase 6: dmabnd_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/dmabnd_init.obj: $(CDIR)/dmabnd_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split PCI shim - Phase 6 expanded overlay structure
-$(BUILDDIR)/pci_shim_rt.obj: $(CDIR)/pci_shim_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split PCI shim - Phase 6: pci_shim_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/pci_shim_init.obj: $(CDIR)/pci_shim_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split PCI mux - Phase 6 expanded overlay structure
-$(BUILDDIR)/pcimux_rt.obj: $(CDIR)/pcimux_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split PCI mux - Phase 6: pcimux_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/pcimux_init.obj: $(CDIR)/pcimux_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split hardware checksum - Phase 6 expanded overlay structure
-$(BUILDDIR)/hwchksm_rt.obj: $(CDIR)/hwchksm_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split hardware checksum - Phase 6: hwchksm_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/hwchksm_init.obj: $(CDIR)/hwchksm_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split IRQ mitigation - Phase 6 expanded overlay structure
-$(BUILDDIR)/irqmit_rt.obj: $(CDIR)/irqmit_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split IRQ mitigation - Phase 6: irqmit_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/irqmit_init.obj: $(CDIR)/irqmit_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split RX batching - Phase 6 expanded overlay structure
-$(BUILDDIR)/rxbatch_rt.obj: $(CDIR)/rxbatch_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split RX batching - Phase 6: rxbatch_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/rxbatch_init.obj: $(CDIR)/rxbatch_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split TX lazy - Phase 6 expanded overlay structure
-$(BUILDDIR)/txlazy_rt.obj: $(CDIR)/txlazy_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split TX lazy - Phase 6: txlazy_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/txlazy_init.obj: $(CDIR)/txlazy_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split XMS core - Phase 6 expanded overlay structure
-$(BUILDDIR)/xms_core_rt.obj: $(CDIR)/xms_core_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split XMS core - Phase 6: xms_core_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/xms_core_init.obj: $(CDIR)/xms_core_init.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 
-# Split logging - Phase 6 expanded overlay structure
-$(BUILDDIR)/logging_rt.obj: $(CDIR)/logging_rt.c
-    @echo 'Compiling ROOT:' $[@
-    $(CC) $(CFLAGS) -dROOT_SEGMENT $[@ -fo=$@
-
+# Split logging - Phase 6: logging_rt.c removed (in rt_stubs.c)
 $(BUILDDIR)/logging_init.obj: $(CDIR)/logging_init.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+# --- Phase 7: JIT Module Assembly Rules ---
+
+$(BUILDDIR)/mod_isr.obj: $(ASMDIR)/mod_isr.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_irq.obj: $(ASMDIR)/mod_irq.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_pktbuf.obj: $(ASMDIR)/mod_pktbuf.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_data.obj: $(ASMDIR)/mod_data.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_3c509b_rt.obj: $(ASMDIR)/mod_3c509b_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_3c515_rt.obj: $(ASMDIR)/mod_3c515_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_vortex_rt.obj: $(ASMDIR)/mod_vortex_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_boom_rt.obj: $(ASMDIR)/mod_boom_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_cyclone_rt.obj: $(ASMDIR)/mod_cyclone_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_tornado_rt.obj: $(ASMDIR)/mod_tornado_rt.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_pio.obj: $(ASMDIR)/mod_pio.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_dma_isa.obj: $(ASMDIR)/mod_dma_isa.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_dma_busmaster.obj: $(ASMDIR)/mod_dma_busmaster.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_dma_descring.obj: $(ASMDIR)/mod_dma_descring.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_dma_bounce.obj: $(ASMDIR)/mod_dma_bounce.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_cache_none.obj: $(ASMDIR)/mod_cache_none.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_cache_wbinvd.obj: $(ASMDIR)/mod_cache_wbinvd.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_cache_clflush.obj: $(ASMDIR)/mod_cache_clflush.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_cache_snoop.obj: $(ASMDIR)/mod_cache_snoop.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_copy_8086.obj: $(ASMDIR)/mod_copy_8086.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_copy_286.obj: $(ASMDIR)/mod_copy_286.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_copy_386.obj: $(ASMDIR)/mod_copy_386.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+$(BUILDDIR)/mod_copy_pent.obj: $(ASMDIR)/mod_copy_pent.asm
+    @echo 'Assembling MODULE:' $[@
+    $(ASM) $(AFLAGS) $[@ -o $@
+
+# --- Phase 7: JIT Engine C Compilation Rules ---
+
+$(BUILDDIR)/mod_select.obj: $(CDIR)/mod_select.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+$(BUILDDIR)/jit_build.obj: $(CDIR)/jit_build.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+$(BUILDDIR)/jit_patch.obj: $(CDIR)/jit_patch.c
+    @echo 'Compiling OVERLAY:' $[@
+    $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
+
+$(BUILDDIR)/jit_reloc.obj: $(CDIR)/jit_reloc.c
     @echo 'Compiling OVERLAY:' $[@
     $(CC) $(CFLAGS) -dCOLD_SECTION $[@ -fo=$@
 

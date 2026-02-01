@@ -17,7 +17,8 @@
  * - Removed data owned by other C modules (pcmcia_event_flag, api_ready)
  * - Removed 3c509b_* stubs (real implementations in 3c509b.c)
  *
- * Last Updated: 2026-01-28 13:28:44 CET
+ * Last Updated: 2026-02-01 12:45:00 CET
+ * Phase 6: Removed references to deleted *_rt.c files (now in rt_stubs.c)
  *
  * Round 5: Added packet_received wrapper to forward to packet_receive_process
  */
@@ -183,8 +184,7 @@ int far stage_api_activate(struct init_context far *ctx) {
  * 3C509B functions removed - real implementations in 3c509b.c
  * REMOVED (2026-01-28): _3c515_init, _3c515_cleanup, _3c515_reset,
  *   _3c515_self_test - now in 3c515_init.c
- * REMOVED (2026-01-28): _3c515_enable_interrupts, _3c515_disable_interrupts
- *   - now in 3c515_rt.c
+ * REMOVED (2026-02-01): All *_rt.c runtime functions now in rt_stubs.c
  * ============================================================================ */
 
 /* ============================================================================
@@ -260,7 +260,7 @@ int is_cache_management_initialized(void) { return 0; }
 const char *get_cache_tier_description(void) { return "Unknown"; }
 
 /* Hardware functions - NOT trampolined ones
- * REMOVED (2026-01-28): hardware_get_link_status - now in hardware_rt.c */
+ * REMOVED (2026-01-28): hardware_get_link_status - now in rt_stubs.c */
 int hardware_check_rx_ready(void) { return 0; }
 int hardware_dma_read(void) { return -1; }
 int hardware_dma_write(void) { return -1; }
@@ -343,7 +343,7 @@ int get_link_speed(void) { return 10; }
  *   packet_ops_init, packet_bottom_half_init, packet_process_deferred_work,
  *   packet_process_received, packet_isr_receive, packet_receive_process
  * REMOVED (2026-01-28): packet_get_ethertype, packet_queue_tx_completion
- *   - now in pktops_rt.c
+ *   - now in rt_stubs.c (was pktops_rt.c)
  * These remaining stubs are for functions not yet in pktops.c: */
 void packet_deliver_to_handler(void) {}
 uint32_t packet_get_timestamp(void) { return 0; }
@@ -351,7 +351,8 @@ uint32_t packet_get_timestamp(void) { return 0; }
 /* packet_received - Legacy wrapper for callers that don't have nic_index
  * NOTE: rxbatch.c now calls packet_receive_process directly with nic_index.
  * This wrapper is kept for any other callers that use the old interface.
- * Hard-codes nic_index=0 (primary NIC). */
+ * Hard-codes nic_index=0 (primary NIC).
+ * packet_receive_process is now defined in rt_stubs.c */
 extern int packet_receive_process(uint8_t *raw_data, uint16_t length, uint8_t nic_index);
 
 int packet_received(void far *buf, uint16_t len) {
