@@ -247,6 +247,19 @@ FILE build/mod_copy_8086.obj
 FILE build/mod_copy_286.obj
 FILE build/mod_copy_386.obj
 FILE build/mod_copy_pent.obj
+# Phase 9: Runtime C-to-ASM ported module templates
+FILE build/mod_pcimux_rt.obj
+FILE build/mod_xms_rt.obj
+FILE build/mod_txlazy_rt.obj
+FILE build/mod_hwchksm_rt.obj
+FILE build/mod_irqmit_rt.obj
+FILE build/mod_rxbatch_rt.obj
+FILE build/mod_dmabnd_rt.obj
+FILE build/mod_dmamap_rt.obj
+FILE build/mod_pcishim_rt.obj
+FILE build/mod_routing_rt.obj
+FILE build/mod_api_rt.obj
+FILE build/mod_pktops_rt.obj
 
 # CRT replacement module (Phase 8 - two-stage loader support)
 FILE build/tsr_crt.obj

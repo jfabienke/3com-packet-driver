@@ -69,6 +69,20 @@ extern module_header_t far mod_hwdma_header;
 extern module_header_t far mod_cacheops_header;
 extern module_header_t far mod_tsr_crt_header;
 
+/* Phase 9: Runtime C-to-ASM ported module headers */
+extern module_header_t far mod_pcimux_rt_header;
+extern module_header_t far mod_xms_rt_header;
+extern module_header_t far mod_txlazy_rt_header;
+extern module_header_t far mod_hwchksm_rt_header;
+extern module_header_t far mod_irqmit_rt_header;
+extern module_header_t far mod_rxbatch_rt_header;
+extern module_header_t far mod_dmabnd_rt_header;
+extern module_header_t far mod_dmamap_rt_header;
+extern module_header_t far mod_pcishim_rt_header;
+extern module_header_t far mod_routing_rt_header;
+extern module_header_t far mod_api_rt_header;
+extern module_header_t far mod_pktops_rt_header;
+
 /* Static registry of all available modules */
 static mod_registry_entry_t g_registry[MOD_COUNT] = {
     /* Core modules */
@@ -121,6 +135,19 @@ static mod_registry_entry_t g_registry[MOD_COUNT] = {
     { MOD_CORE_HWDMA,     "core_hwdma",         MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
     { MOD_CORE_CACHEOPS,  "core_cacheops",      MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
     { MOD_CORE_TSR_CRT,   "core_tsr_crt",       MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    /* Phase 9: Runtime C-to-ASM ported modules (always selected) */
+    { MOD_RT_PCIMUX,      "rt_pcimux",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_XMS,          "rt_xms",             MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_TXLAZY,       "rt_txlazy",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_HWCHKSM,      "rt_hwchksm",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_IRQMIT,       "rt_irqmit",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_RXBATCH,      "rt_rxbatch",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_DMABND,       "rt_dmabnd",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_DMAMAP,       "rt_dmamap",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_PCISHIM,      "rt_pcishim",         MOD_CAP_CORE,         2, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_ROUTING,      "rt_routing",         MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_API,           "rt_api",             MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
+    { MOD_RT_PKTOPS,       "rt_pktops",          MOD_CAP_CORE,         0, MOD_NIC_ANY,       NULL, 0 },
 };
 
 /* Current selection state */
@@ -179,6 +206,20 @@ int mod_registry_init(void) {
     g_registry[MOD_CORE_HWDMA].header_ptr    = (void far *)&mod_hwdma_header;
     g_registry[MOD_CORE_CACHEOPS].header_ptr = (void far *)&mod_cacheops_header;
     g_registry[MOD_CORE_TSR_CRT].header_ptr  = (void far *)&mod_tsr_crt_header;
+
+    /* Phase 9: Runtime C-to-ASM ported module headers */
+    g_registry[MOD_RT_PCIMUX].header_ptr     = (void far *)&mod_pcimux_rt_header;
+    g_registry[MOD_RT_XMS].header_ptr        = (void far *)&mod_xms_rt_header;
+    g_registry[MOD_RT_TXLAZY].header_ptr     = (void far *)&mod_txlazy_rt_header;
+    g_registry[MOD_RT_HWCHKSM].header_ptr    = (void far *)&mod_hwchksm_rt_header;
+    g_registry[MOD_RT_IRQMIT].header_ptr     = (void far *)&mod_irqmit_rt_header;
+    g_registry[MOD_RT_RXBATCH].header_ptr    = (void far *)&mod_rxbatch_rt_header;
+    g_registry[MOD_RT_DMABND].header_ptr     = (void far *)&mod_dmabnd_rt_header;
+    g_registry[MOD_RT_DMAMAP].header_ptr     = (void far *)&mod_dmamap_rt_header;
+    g_registry[MOD_RT_PCISHIM].header_ptr    = (void far *)&mod_pcishim_rt_header;
+    g_registry[MOD_RT_ROUTING].header_ptr    = (void far *)&mod_routing_rt_header;
+    g_registry[MOD_RT_API].header_ptr        = (void far *)&mod_api_rt_header;
+    g_registry[MOD_RT_PKTOPS].header_ptr     = (void far *)&mod_pktops_rt_header;
 
     /* Read hot_size from each module header */
     {

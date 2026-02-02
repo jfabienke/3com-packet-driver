@@ -162,13 +162,26 @@ typedef enum {
     MOD_CORE_HWDMA,
     MOD_CORE_CACHEOPS,
     MOD_CORE_TSR_CRT,
+    /* Runtime C-to-ASM ported modules (Phase 9) */
+    MOD_RT_PCIMUX,
+    MOD_RT_XMS,
+    MOD_RT_TXLAZY,
+    MOD_RT_HWCHKSM,
+    MOD_RT_IRQMIT,
+    MOD_RT_RXBATCH,
+    MOD_RT_DMABND,
+    MOD_RT_DMAMAP,
+    MOD_RT_PCISHIM,
+    MOD_RT_ROUTING,
+    MOD_RT_API,
+    MOD_RT_PKTOPS,
     /* Sentinel */
     MOD_COUNT
 } module_id_t;
 
 /* First and last core module IDs (for iteration) */
 #define MOD_CORE_FIRST  MOD_CORE_PKTAPI
-#define MOD_CORE_LAST   MOD_CORE_TSR_CRT
+#define MOD_CORE_LAST   MOD_RT_PKTOPS
 
 /* JIT patch types (extends existing patch_type_t) */
 #define PATCH_TYPE_IMM16        0x06    /* 16-bit immediate (IRQ, DMA ch) */

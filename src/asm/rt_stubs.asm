@@ -437,6 +437,7 @@ STUB_RET10 _3c515_get_link_speed_
 ; SECTION: api_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_API_IMPLEMENTED
 STUB_RETM1 pd_access_type_
 STUB_RET0  pd_get_driver_info_
 STUB_RETM1 pd_handle_access_type_
@@ -471,11 +472,13 @@ STUB_RET1  api_check_bandwidth_limit_
 STUB_RET0  api_handle_nic_failure_
 STUB_RET0  api_coordinate_recovery_with_routing_
 STUB_RET0  api_update_nic_utilization_
+%endif
 
 ; =============================================================================
 ; SECTION: dmabnd_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_DMABND_IMPLEMENTED
 ; dma_check_buffer_safety: memset result to 0 (37 bytes), return 0
 ; Params: buffer=DX:AX, len=BX, result=stack (far ptr)
 global dma_check_buffer_safety_
@@ -523,11 +526,13 @@ dma_get_boundary_stats_:
     retf
 
 STUB_RET1  is_safe_for_direct_dma_
+%endif
 
 ; =============================================================================
 ; SECTION: dmamap_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_DMAMAP_IMPLEMENTED
 STUB_NULL  dma_map_tx_
 STUB_NULL  dma_map_tx_flags_
 STUB_VOID  dma_unmap_tx_
@@ -547,11 +552,13 @@ STUB_RET0  dma_mapping_sync_for_device_
 STUB_RET0  dma_mapping_sync_for_cpu_
 STUB_RET0  dma_mapping_is_fast_path_enabled_
 STUB_NULL  dma_mapping_get_cache_hit_rate_  ; uint32_t return 0
+%endif
 
 ; =============================================================================
 ; SECTION: pci_shim_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_PCISHIM_IMPLEMENTED
 ; pci_shim_get_stats: write 0 to two uint32_t out-pointers
 ; Params: calls=DX:AX, fallbacks=CX:BX
 global pci_shim_get_stats_
@@ -578,11 +585,13 @@ pci_shim_get_stats_:
     mov word [es:bx+2], 0
 .done:
     retf
+%endif
 
 ; =============================================================================
 ; SECTION: pcimux_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_PCIMUX_IMPLEMENTED
 STUB_RET0  multiplex_is_shim_enabled_
 STUB_VOID  multiplex_set_shim_enabled_
 
@@ -598,11 +607,13 @@ multiplex_get_stats_:
     mov word [es:bx+2], 0
 .done:
     retf
+%endif
 
 ; =============================================================================
 ; SECTION: hwchksm_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_HWCHKSM_IMPLEMENTED
 STUB_RET0  hw_checksum_tx_calculate_
 STUB_RET0  hw_checksum_rx_validate_
 STUB_RET0  sw_checksum_internet_
@@ -639,11 +650,13 @@ hw_checksum_mode_to_string_:
     mov ax, _str_unknown
     mov dx, seg _str_unknown
     retf
+%endif
 
 ; =============================================================================
 ; SECTION: irqmit_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_IRQMIT_IMPLEMENTED
 STUB_RET0  is_interrupt_mitigation_enabled_ ; returns bool (false)
 
 ; get_mitigation_context: bounds check, return &g_mitigation_contexts[index*105]
@@ -663,11 +676,13 @@ get_mitigation_context_:
     retf
 
 STUB_VOID  interrupt_mitigation_apply_runtime_
+%endif
 
 ; =============================================================================
 ; SECTION: rxbatch_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_RXBATCH_IMPLEMENTED
 ; rx_alloc_64k_safe: write 0 to phys_out, return NULL far ptr
 ; Params: len=AX, phys_out=DX:BX (far ptr)
 global rx_alloc_64k_safe_
@@ -687,20 +702,24 @@ rx_alloc_64k_safe_:
 STUB_RET0  rx_batch_refill_
 STUB_RET0  rx_batch_process_
 STUB_VOID  rx_batch_get_stats_
+%endif
 
 ; =============================================================================
 ; SECTION: txlazy_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_TXLAZY_IMPLEMENTED
 STUB_RET1  tx_lazy_should_interrupt_
 STUB_RET0  tx_lazy_post_boomerang_
 STUB_RET0  tx_lazy_post_vortex_
 STUB_RET0  tx_lazy_reclaim_batch_
+%endif
 
 ; =============================================================================
 ; SECTION: xms_core_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_XMS_IMPLEMENTED
 STUB_RETM1 xms_lock_
 STUB_RETM1 xms_unlock_
 STUB_RETM1 xms_copy_
@@ -745,14 +764,17 @@ xms_unavailable_reason_:
     mov ax, _g_xms_unavail_reason
     mov dx, seg _g_xms_unavail_reason
     retf
+%endif
 
 ; =============================================================================
 ; SECTION: pktops_rt stubs
 ; =============================================================================
 
+%ifndef MOD_RT_PKTOPS_IMPLEMENTED
 STUB_RET0  packet_get_ethertype_
 STUB_RET0  packet_queue_tx_completion_
 STUB_RETM1 packet_test_internal_loopback_
+%endif
 
 ; =============================================================================
 ; SECTION: logging_rt stubs
@@ -852,6 +874,7 @@ logging_get_config_:
 ; SECTION: pktops_rt packet operation stubs
 ; =============================================================================
 
+%ifndef MOD_RT_PKTOPS_IMPLEMENTED
 STUB_RETM1 packet_send_enhanced_
 STUB_RETM1 packet_receive_from_nic_
 STUB_RET0  packet_receive_process_
@@ -860,15 +883,20 @@ STUB_RET0  packet_isr_receive_
 STUB_RETM1 packet_build_ethernet_frame_
 STUB_RETM1 packet_parse_ethernet_header_
 STUB_RETM1 packet_send_with_retry_
+%endif
 
 ; =============================================================================
 ; SECTION: ISR handler stubs (interrupt convention)
 ; =============================================================================
 
+%ifndef MOD_RT_PCIMUX_IMPLEMENTED
 global multiplex_handler_
 multiplex_handler_:
     iret
+%endif
 
+%ifndef MOD_RT_PCISHIM_IMPLEMENTED
 global pci_shim_handler_
 pci_shim_handler_:
     iret
+%endif

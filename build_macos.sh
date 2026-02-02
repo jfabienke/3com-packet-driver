@@ -134,6 +134,10 @@ MODULE_ASM_OBJS=(
     mod_cache_none mod_cache_wbinvd mod_cache_clflush mod_cache_snoop
     mod_copy_8086 mod_copy_286 mod_copy_386 mod_copy_pent
     tsr_crt
+    # Phase 9: Runtime C-to-ASM ported modules
+    mod_pcimux_rt mod_xms_rt mod_txlazy_rt mod_hwchksm_rt
+    mod_irqmit_rt mod_rxbatch_rt mod_dmabnd_rt mod_dmamap_rt
+    mod_pcishim_rt mod_routing_rt mod_api_rt mod_pktops_rt
 )
 
 # Stage 1 Entry Point C Object (Phase 8 - two-stage loader)
