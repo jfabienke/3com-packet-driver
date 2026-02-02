@@ -120,7 +120,7 @@ static OVL_EARLY_CONST config_t default_config = {
  * This is the actual runtime configuration used throughout the driver.
  * Initialized to defaults in config_init().
  */
-config_t g_config;
+config_t __far g_config;
 
 /* Configuration parameter names and handlers */
 typedef struct {

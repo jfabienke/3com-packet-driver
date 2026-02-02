@@ -33,6 +33,14 @@ header:
 hot_start:
 
 ;------------------------------------------------------------------------------
+; multiplex_handler_ - Stub for C linkage (no leading underscore)
+;------------------------------------------------------------------------------
+global multiplex_handler_
+multiplex_handler_:
+    xor ax, ax
+    retf
+
+;------------------------------------------------------------------------------
 ; multiplex_handler_ - INT 2Fh ISR handler
 ;
 ; Entry: AX = function (AH=0xB1 for our multiplex ID)

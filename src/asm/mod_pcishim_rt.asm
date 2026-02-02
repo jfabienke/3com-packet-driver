@@ -33,6 +33,22 @@ header:
 hot_start:
 
 ;------------------------------------------------------------------------------
+; pci_shim_get_stats_ - Stub for C linkage (no leading underscore)
+;------------------------------------------------------------------------------
+global pci_shim_get_stats_
+pci_shim_get_stats_:
+    xor ax, ax
+    retf
+
+;------------------------------------------------------------------------------
+; pci_shim_handler_ - Stub for C linkage (no leading underscore)
+;------------------------------------------------------------------------------
+global pci_shim_handler_
+pci_shim_handler_:
+    xor ax, ax
+    retf
+
+;------------------------------------------------------------------------------
 ; pci_shim_handler_ - INT 1Ah ISR handler
 ;
 ; Entry: AH = BIOS function (0xB1 for PCI BIOS)

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last Updated: 2026-01-23 16:55 UTC
+> Last Updated: 2026-02-01 10:31 UTC
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -32,9 +32,77 @@ wmake -f Makefile.wat clean        # Clean build directory
 wmake -f Makefile.wat info         # Show available targets
 ```
 
+### macOS ARM64 Build (Cross-compilation with Open Watcom v2)
+
+The project is cross-compiled on macOS ARM64 using **native Mach-O ARM64 Open Watcom v2 binaries**.
+
+#### Native macOS ARM64 Toolchain
+
+The Open Watcom v2 toolchain has been compiled natively for Apple Silicon. The binaries live in:
+
+```
+/Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel/armo64/
+```
+
+Key tools (all Mach-O 64-bit arm64 executables):
+| Tool | Purpose |
+|------|---------|
+| `wcc` | C compiler (16-bit target) |
+| `wcc386` | C compiler (32-bit target) |
+| `wlink` | Linker |
+| `wmake` | Make utility |
+| `wasm` | Watcom assembler (MASM syntax) |
+| `wlib` | Library manager |
+| `wdis` | Disassembler |
+| `dmpobj` | Object file dumper |
+| `wcl` | Compiler/linker wrapper |
+
+These binaries depend only on system libc (`/usr/lib/libSystem.B.dylib`) — no emulation or virtualization needed.
+
+#### Build via Shell Script (Recommended)
+
+```bash
+./build_macos.sh              # Release build (default)
+./build_macos.sh debug        # Debug build with symbols
+./build_macos.sh production   # Size-optimized production
+./build_macos.sh clean        # Clean artifacts
+./build_macos.sh info         # Show configuration
+```
+
+#### Build via wmake
+
+```bash
+# Set up environment
+export WATCOM=/Users/johnfabienke/Development/macos-open-watcom/open-watcom-v2/rel
+export PATH="$WATCOM/armo64:$PATH"
+
+# Build
+wmake -f Makefile.wat clean
+wmake -f Makefile.wat
+
+# Verify map file (release mode - stricter DGROUP limits)
+python3 tools/verify_map.py build/3cpd.map --release
+
+# Verify map file (debug mode - allows red zone)
+python3 tools/verify_map.py build/3cpd.map --debug
+```
+
+#### Assembly
+
+The project uses a dual assembler approach:
+- **NASM** (`/opt/homebrew/bin/nasm`) — for NASM-syntax `.asm` files (installed via Homebrew)
+- **WASM** (`$WATCOM/armo64/wasm`) — for MASM-syntax `.asm` files
+
+Both output OMF object format compatible with `wlink`.
+
+#### Libraries
+
+- DOS 16-bit runtime libraries: `$WATCOM/lib286/dos/` (clibl.lib, wovl.lib, etc.)
+- Watcom C headers: `$WATCOM/h/`
+
 ### Requirements
-- Open Watcom C/C++ 1.9 or later
-- NASM (Netwide Assembler)
+- Open Watcom C/C++ v2 (macOS ARM64 native binaries in `armo64/`)
+- NASM (Netwide Assembler) — `brew install nasm`
 - GNU Make (for cross-compilation) OR wmake (for native builds)
 
 ## Architecture

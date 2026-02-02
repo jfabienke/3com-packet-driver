@@ -280,6 +280,14 @@ _xms_routing_available_:
     retf
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; xms_unavailable_reason_ - Stub for C linkage (no leading underscore)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+global xms_unavailable_reason_
+xms_unavailable_reason_:
+    xor ax, ax
+    retf
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; xms_unavailable_reason_ - Get pointer to XMS unavailable reason string
 ;;
 ;; Watcom far call convention:

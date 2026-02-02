@@ -71,7 +71,8 @@ CFLAGS_COMMON="-zq -ml -s -zp1 -of -zc -zdf -i=$INCDIR/ -i=$WATCOM/h/ -wcd=201"
 CFLAGS_ROOT="-dROOT_SEGMENT"
 
 # COLD section flag (overlay, discarded after init)
-CFLAGS_COLD="-dCOLD_SECTION"
+# -zt=0: Force all data items to far (FAR_DATA), keeping them out of DGROUP
+CFLAGS_COLD="-dCOLD_SECTION -zt=0"
 
 # Debug flags
 CFLAGS_DEBUG="$CFLAGS_COMMON -0 -d2 -dINIT_DIAG"
@@ -117,11 +118,10 @@ HOT_ASM_OBJS=(
 )
 
 # HOT SECTION - C (resident after init, ROOT segment)
-# Phase 6: 15 individual *_rt files consolidated into rt_stubs
+# Phase 9: 12 HOT C modules replaced by ASM JIT templates (mod_*_rt.asm)
+# Removed: api routing pci_shim pcimux dmamap dmabnd hwchksm irqmit rxbatch txlazy xms_core pktops_c
 HOT_C_OBJS=(
-    api routing pci_shim pcimux dmamap dmabnd
-    hwchksm irqmit rxbatch txlazy
-    init_main xms_core pktops_c linkstubs
+    init_main linkstubs
     dos_io
 )
 
@@ -169,6 +169,7 @@ COLD_C_OBJS=(
     hwchksm_init irqmit_init rxbatch_init txlazy_init
     xms_core_init pktops_init logging_init
     pcirst smcpat_c
+    routing
 )
 
 # Debug-only objects
@@ -278,9 +279,22 @@ build_driver() {
 
     # --- Compile HOT ASM ---
     echo -e "${BLUE}Compiling hot assembly (resident)...${NC}"
+    # Phase 9: rt_stubs.asm needs -DMOD_RT_*_IMPLEMENTED flags to suppress stubs
+    # replaced by real ASM JIT modules
+    RT_STUB_DEFINES="-DMOD_RT_PCIMUX_IMPLEMENTED -DMOD_RT_XMS_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_TXLAZY_IMPLEMENTED -DMOD_RT_HWCHKSM_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_IRQMIT_IMPLEMENTED -DMOD_RT_RXBATCH_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_DMABND_IMPLEMENTED -DMOD_RT_DMAMAP_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_PCISHIM_IMPLEMENTED -DMOD_RT_ROUTING_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_API_IMPLEMENTED -DMOD_RT_PKTOPS_IMPLEMENTED"
+
     for name in "${HOT_ASM_OBJS[@]}"; do
         if [ -f "$ASMDIR/$name.asm" ]; then
-            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+            local extra_flags=""
+            if [ "$name" = "rt_stubs" ]; then
+                extra_flags="$RT_STUB_DEFINES"
+            fi
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags $extra_flags"; then
                 failed=1
             fi
             all_objs="$all_objs $BUILDDIR/$name.obj"
@@ -431,9 +445,20 @@ build_stage1() {
 
     # --- Compile HOT ASM (same as release - these become JIT module templates) ---
     echo -e "${BLUE}Compiling hot assembly (core module templates)...${NC}"
+    RT_STUB_DEFINES="-DMOD_RT_PCIMUX_IMPLEMENTED -DMOD_RT_XMS_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_TXLAZY_IMPLEMENTED -DMOD_RT_HWCHKSM_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_IRQMIT_IMPLEMENTED -DMOD_RT_RXBATCH_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_DMABND_IMPLEMENTED -DMOD_RT_DMAMAP_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_PCISHIM_IMPLEMENTED -DMOD_RT_ROUTING_IMPLEMENTED"
+    RT_STUB_DEFINES="$RT_STUB_DEFINES -DMOD_RT_API_IMPLEMENTED -DMOD_RT_PKTOPS_IMPLEMENTED"
+
     for name in "${HOT_ASM_OBJS[@]}"; do
         if [ -f "$ASMDIR/$name.asm" ]; then
-            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags"; then
+            local extra_flags=""
+            if [ "$name" = "rt_stubs" ]; then
+                extra_flags="$RT_STUB_DEFINES"
+            fi
+            if ! compile_asm "$ASMDIR/$name.asm" "$BUILDDIR/$name.obj" "$aflags $extra_flags"; then
                 failed=1
             fi
         fi
@@ -442,13 +467,8 @@ build_stage1() {
     # --- Compile HOT C (ROOT segment) ---
     echo -e "${BLUE}Compiling hot C (init context, APIs)...${NC}"
     for name in "${HOT_C_OBJS[@]}"; do
-        local src_name="$name"
-        # Handle naming collision: pktops.c -> pktops_c.obj (pktops.asm -> pktops.obj)
-        if [ "$name" = "pktops_c" ]; then
-            src_name="pktops"
-        fi
-        if [ -f "$CDIR/$src_name.c" ]; then
-            if ! compile_c "$CDIR/$src_name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_ROOT"; then
+        if [ -f "$CDIR/$name.c" ]; then
+            if ! compile_c "$CDIR/$name.c" "$BUILDDIR/$name.obj" "$cflags $CFLAGS_ROOT"; then
                 failed=1
             fi
         fi

@@ -126,20 +126,10 @@ BEGIN
     FILE build/nic_init.obj
     FILE build/pcirst.obj
 
-    # OVL_HOT_C: HOT C modules (init-time only in Stage 1)
+    # OVL_HOT_C: Most modules replaced by ASM JIT templates (Phase 9)
+    # Keep routing.c for init/cleanup functions and global data used by diag.c
     SECTION
-    FILE build/api.obj
     FILE build/routing.obj
-    FILE build/pci_shim.obj
-    FILE build/pcimux.obj
-    FILE build/dmamap.obj
-    FILE build/dmabnd.obj
-    FILE build/hwchksm.obj
-    FILE build/irqmit.obj
-    FILE build/rxbatch.obj
-    FILE build/txlazy.obj
-    FILE build/xms_core.obj
-    FILE build/pktops_c.obj
 
     # OVL_FINAL: DMA buffers, TSR build, API install + JIT engine
     SECTION

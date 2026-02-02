@@ -444,6 +444,22 @@ hw_checksum_mode_to_string_:
     mov ax, str_software
     retf
 
+;------------------------------------------------------------------------------
+; hw_checksum_print_stats_ - Print checksum statistics (stub)
+;------------------------------------------------------------------------------
+global hw_checksum_print_stats_
+hw_checksum_print_stats_:
+    xor ax, ax
+    retf
+
+;------------------------------------------------------------------------------
+; hw_checksum_validate_ip_ - Validate IP checksum (stub)
+;------------------------------------------------------------------------------
+global hw_checksum_validate_ip_
+hw_checksum_validate_ip_:
+    xor ax, ax
+    retf
+
 ;==============================================================================
 ; MODULE END MARKER
 ;==============================================================================

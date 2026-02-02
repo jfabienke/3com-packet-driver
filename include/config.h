@@ -215,7 +215,7 @@ int generate_busmaster_test_report(const busmaster_test_results_t *results,
                                  char *buffer, size_t buffer_size);
 
 /* Global configuration */
-extern config_t g_config;
+extern config_t __far g_config;
 extern bool g_config_loaded;
 
 /* Enhanced function prototypes */
