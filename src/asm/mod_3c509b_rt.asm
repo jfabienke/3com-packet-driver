@@ -98,6 +98,178 @@ header:
 hot_start:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; C-CALLABLE WRAPPER EXPORTS
+;;
+;; These wrappers convert from Watcom large model calling convention:
+;;   DX:AX = far pointer (first param)
+;;   BX    = integer param (second param)
+;;   CX    = integer param (third param)
+;; To internal register-based calling:
+;;   DS:SI = buffer pointer
+;;   CX    = length
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; _3c509b_send_packet_ - C-callable wrapper for send_packet
+;; Input:  DX:AX = buffer far pointer, BX = length
+;; Return: AX = 0 on success, -1 on error
+global _3c509b_send_packet_
+_3c509b_send_packet_:
+    push    ds
+    push    si
+    mov     ds, dx              ; DS = buffer segment
+    mov     si, ax              ; SI = buffer offset
+    mov     cx, bx              ; CX = length
+    call    send_packet
+    pop     si
+    pop     ds
+    jc      .error
+    xor     ax, ax              ; return 0 = success
+    retf
+.error:
+    mov     ax, -1              ; return -1 = error
+    retf
+
+;; _3c509b_receive_packet_ - C-callable wrapper for recv_packet
+;; Input:  DX:AX = buffer far pointer, BX = buffer size
+;; Return: AX = bytes received, or -1 on error/no packet
+global _3c509b_receive_packet_
+_3c509b_receive_packet_:
+    push    es
+    push    di
+    mov     es, dx              ; ES = buffer segment
+    mov     di, ax              ; DI = buffer offset
+    mov     cx, bx              ; CX = buffer size
+    call    recv_packet
+    pop     di
+    pop     es
+    jc      .no_packet
+    mov     ax, cx              ; return bytes received
+    retf
+.no_packet:
+    mov     ax, -1              ; return -1 = no packet
+    retf
+
+;; _3c509b_handle_interrupt_ - C-callable wrapper for handle_interrupt
+;; Input:  none
+;; Return: void (flags preserved in CF for chained ISR)
+global _3c509b_handle_interrupt_
+_3c509b_handle_interrupt_:
+    call    handle_interrupt
+    retf
+
+;; _3c509b_check_interrupt_ - Check if interrupt is from this NIC
+;; Input:  none
+;; Return: AX = 1 if ours, 0 if not
+global _3c509b_check_interrupt_
+_3c509b_check_interrupt_:
+    call    handle_interrupt
+    jc      .not_ours
+    mov     ax, 1
+    retf
+.not_ours:
+    xor     ax, ax
+    retf
+
+;; _3c509b_enable_interrupts_ - Enable NIC interrupts
+;; Input:  none
+;; Return: AX = 0
+global _3c509b_enable_interrupts_
+_3c509b_enable_interrupts_:
+    ;; Set IntMask to enable desired interrupts
+    PATCH_POINT pp_enable_int
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, 0A01Fh          ; SetIntrMask | (TxComplete|RxComplete|IntLatch)
+    out     dx, ax
+    xor     ax, ax
+    retf
+
+;; _3c509b_disable_interrupts_ - Disable NIC interrupts
+;; Input:  none
+;; Return: AX = 0
+global _3c509b_disable_interrupts_
+_3c509b_disable_interrupts_:
+    PATCH_POINT pp_disable_int
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, 0A000h          ; SetIntrMask | 0 (disable all)
+    out     dx, ax
+    xor     ax, ax
+    retf
+
+;; _3c509b_get_link_status_ - Get link status
+;; Return: AX = 1 if link up, 0 if down
+global _3c509b_get_link_status_
+_3c509b_get_link_status_:
+    ;; 3C509B doesn't have explicit link status; assume link up if detected
+    mov     ax, 1
+    retf
+
+;; _3c509b_get_link_speed_ - Get link speed
+;; Return: AX = 10 (10 Mbps)
+global _3c509b_get_link_speed_
+_3c509b_get_link_speed_:
+    mov     ax, 10              ; 3C509B is 10 Mbps only
+    retf
+
+;; Stub wrappers for functions not yet implemented (return 0)
+global _3c509b_read_reg_
+global _3c509b_write_reg_
+global _3c509b_select_window_
+global _3c509b_wait_for_cmd_busy_
+global _3c509b_write_command_
+global _3c509b_process_single_event_
+global _3c509b_check_interrupt_batched_
+global _3c509b_handle_interrupt_batched_
+global _3c509b_set_promiscuous_
+global _3c509b_set_multicast_
+global _3c509b_receive_packet_buffered_
+global _3c509b_send_packet_direct_pio_
+global _3c509b_pio_prepare_rx_buffer_
+global _3c509b_pio_complete_rx_buffer_
+global _3c509b_pio_prepare_tx_buffer_
+global _3c509b_receive_packet_cache_safe_
+
+_3c509b_read_reg_:
+_3c509b_wait_for_cmd_busy_:
+_3c509b_process_single_event_:
+_3c509b_check_interrupt_batched_:
+_3c509b_set_promiscuous_:
+_3c509b_set_multicast_:
+_3c509b_receive_packet_buffered_:
+_3c509b_pio_prepare_rx_buffer_:
+_3c509b_pio_complete_rx_buffer_:
+_3c509b_pio_prepare_tx_buffer_:
+_3c509b_receive_packet_cache_safe_:
+    xor     ax, ax
+    retf
+
+_3c509b_write_reg_:
+_3c509b_select_window_:
+_3c509b_write_command_:
+_3c509b_handle_interrupt_batched_:
+    retf
+
+_3c509b_send_packet_direct_pio_:
+    ;; Direct PIO send - same as regular send for 3C509B
+    push    ds
+    push    si
+    mov     ds, dx
+    mov     si, ax
+    mov     cx, bx
+    call    send_packet
+    pop     si
+    pop     ds
+    jc      .pio_error
+    xor     ax, ax
+    retf
+.pio_error:
+    mov     ax, -1
+    retf
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; INTERNAL FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; send_packet - Transmit a frame through the 3C509B TX FIFO
 ;;
 ;; Input:  DS:SI = pointer to packet data
@@ -355,4 +527,7 @@ patch_table:
     PATCH_TABLE_ENTRY pp_isr_iobase4, PATCH_TYPE_IO   ; TX status
     PATCH_TABLE_ENTRY pp_isr_iobase5, PATCH_TYPE_IO   ; command (ack err)
     PATCH_TABLE_ENTRY pp_isr_iobase6, PATCH_TYPE_IO   ; command (ack latch)
+    ;; interrupt enable/disable patches
+    PATCH_TABLE_ENTRY pp_enable_int,  PATCH_TYPE_IO   ; command (enable)
+    PATCH_TABLE_ENTRY pp_disable_int, PATCH_TYPE_IO   ; command (disable)
 PATCH_COUNT equ ($ - patch_table) / 4

@@ -395,52 +395,25 @@ STUB_RET0  hardware_is_nic_present_
 STUB_RET0  hardware_is_nic_active_
 
 ; =============================================================================
-; SECTION: 3c509b_rt stubs
+; SECTION: 3c509b_rt stubs - NOW IMPLEMENTED IN mod_3c509b_rt.asm
 ; =============================================================================
+; The following stubs are now replaced by real implementations:
+; _3c509b_send_packet_, _3c509b_receive_packet_, _3c509b_handle_interrupt_,
+; _3c509b_check_interrupt_, _3c509b_enable_interrupts_, _3c509b_disable_interrupts_,
+; _3c509b_get_link_status_, _3c509b_get_link_speed_, etc.
 
-STUB_RET0  _3c509b_read_reg_
-STUB_VOID  _3c509b_write_reg_
-STUB_VOID  _3c509b_select_window_
-STUB_RET0  _3c509b_wait_for_cmd_busy_
-STUB_VOID  _3c509b_write_command_
-STUB_RETM1 _3c509b_send_packet_
-STUB_RETM1 _3c509b_receive_packet_
-STUB_RETM1 _3c509b_receive_packet_buffered_
-STUB_RET0  _3c509b_check_interrupt_
-STUB_VOID  _3c509b_handle_interrupt_
-STUB_RET0  _3c509b_process_single_event_
-STUB_RET0  _3c509b_check_interrupt_batched_
-STUB_VOID  _3c509b_handle_interrupt_batched_
-STUB_RET0  _3c509b_enable_interrupts_
-STUB_RET0  _3c509b_disable_interrupts_
-STUB_RET0  _3c509b_get_link_status_
-STUB_RET10 _3c509b_get_link_speed_
-STUB_RET0  _3c509b_set_promiscuous_
-STUB_RET0  _3c509b_set_multicast_
+; Only keep stubs for functions not yet implemented in the ASM module:
 STUB_RETM1 send_packet_direct_pio_
 STUB_RETM1 send_packet_direct_pio_with_header_
-STUB_RETM1 _3c509b_send_packet_direct_pio_
-STUB_RETM1 _3c509b_pio_prepare_rx_buffer_
-STUB_RETM1 _3c509b_pio_complete_rx_buffer_
-STUB_RETM1 _3c509b_pio_prepare_tx_buffer_
-STUB_RETM1 _3c509b_receive_packet_cache_safe_
 
 ; =============================================================================
-; SECTION: 3c515_rt stubs
+; SECTION: 3c515_rt stubs - NOW IMPLEMENTED IN mod_3c515_rt.asm
 ; =============================================================================
-
-STUB_RET0  _3c515_dma_prepare_buffers_
-STUB_VOID  _3c515_dma_complete_buffers_
-STUB_RETM1 _3c515_send_packet_
-STUB_RETM1 _3c515_receive_packet_
-STUB_VOID  _3c515_handle_interrupt_
-STUB_RET0  _3c515_check_interrupt_
-STUB_RET0  _3c515_process_single_event_
-STUB_VOID  _3c515_handle_interrupt_batched_
-STUB_RET0  _3c515_enable_interrupts_
-STUB_RET0  _3c515_disable_interrupts_
-STUB_RET0  _3c515_get_link_status_
-STUB_RET10 _3c515_get_link_speed_
+; The following stubs are now replaced by real implementations:
+; _3c515_send_packet_, _3c515_receive_packet_, _3c515_handle_interrupt_,
+; _3c515_check_interrupt_, _3c515_enable_interrupts_, _3c515_disable_interrupts_,
+; _3c515_get_link_status_, _3c515_get_link_speed_, _3c515_dma_prepare_buffers_,
+; _3c515_dma_complete_buffers_, _3c515_process_single_event_, _3c515_handle_interrupt_batched_
 
 ; =============================================================================
 ; SECTION: api_rt stubs

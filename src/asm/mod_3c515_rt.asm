@@ -109,6 +109,174 @@ header:
 hot_start:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; C-CALLABLE WRAPPER EXPORTS
+;;
+;; These wrappers convert from Watcom large model calling convention:
+;;   DX:AX = far pointer (first param)
+;;   BX    = integer param (second param)
+;;   CX    = integer param (third param)
+;; To internal register-based calling:
+;;   DS:SI = buffer pointer
+;;   CX    = length
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; _3c515_send_packet_ - C-callable wrapper for send_packet
+;; Input:  DX:AX = buffer far pointer, BX = length
+;; Return: AX = 0 on success, -1 on error
+global _3c515_send_packet_
+_3c515_send_packet_:
+    push    ds
+    push    si
+    mov     ds, dx              ; DS = buffer segment
+    mov     si, ax              ; SI = buffer offset
+    mov     cx, bx              ; CX = length
+    call    send_packet
+    pop     si
+    pop     ds
+    jc      .error
+    xor     ax, ax              ; return 0 = success
+    retf
+.error:
+    mov     ax, -1              ; return -1 = error
+    retf
+
+;; _3c515_receive_packet_ - C-callable wrapper for recv_packet
+;; Input:  DX:AX = buffer far pointer, BX = buffer size
+;; Return: AX = bytes received, or -1 on error/no packet
+global _3c515_receive_packet_
+_3c515_receive_packet_:
+    push    es
+    push    di
+    mov     es, dx              ; ES = buffer segment
+    mov     di, ax              ; DI = buffer offset
+    mov     cx, bx              ; CX = buffer size
+    call    recv_packet
+    pop     di
+    pop     es
+    jc      .no_packet
+    mov     ax, cx              ; return bytes received
+    retf
+.no_packet:
+    mov     ax, -1              ; return -1 = no packet
+    retf
+
+;; _3c515_handle_interrupt_ - C-callable wrapper for handle_interrupt
+;; Input:  none
+;; Return: void
+global _3c515_handle_interrupt_
+_3c515_handle_interrupt_:
+    call    handle_interrupt
+    retf
+
+;; _3c515_check_interrupt_ - Check if interrupt is from this NIC
+;; Input:  none
+;; Return: AX = 1 if ours, 0 if not
+global _3c515_check_interrupt_
+_3c515_check_interrupt_:
+    call    handle_interrupt
+    jc      .not_ours
+    mov     ax, 1
+    retf
+.not_ours:
+    xor     ax, ax
+    retf
+
+;; _3c515_enable_interrupts_ - Enable NIC interrupts
+;; Input:  none
+;; Return: AX = 0
+global _3c515_enable_interrupts_
+_3c515_enable_interrupts_:
+    PATCH_POINT pp_enable_int
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, 0A0FFh          ; SetIntrMask | all interrupt bits
+    out     dx, ax
+    xor     ax, ax
+    retf
+
+;; _3c515_disable_interrupts_ - Disable NIC interrupts
+;; Input:  none
+;; Return: AX = 0
+global _3c515_disable_interrupts_
+_3c515_disable_interrupts_:
+    PATCH_POINT pp_disable_int
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, 0A000h          ; SetIntrMask | 0 (disable all)
+    out     dx, ax
+    xor     ax, ax
+    retf
+
+;; _3c515_get_link_status_ - Get link status
+;; Return: AX = 1 if link up, 0 if down
+global _3c515_get_link_status_
+_3c515_get_link_status_:
+    ;; Read MediaStatus register (Window 4, offset 0Ah)
+    PATCH_POINT pp_link_status
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, CMD_SELECT_WINDOW | 4
+    out     dx, ax
+    PATCH_POINT pp_media_status
+    mov     dx, 0               ; patched: io_base + 0Ah (MediaStatus)
+    in      ax, dx
+    test    ax, 8000h           ; linkBeat bit
+    jnz     .link_up
+    xor     ax, ax
+    retf
+.link_up:
+    mov     ax, 1
+    retf
+
+;; _3c515_get_link_speed_ - Get link speed
+;; Return: AX = 10 or 100
+global _3c515_get_link_speed_
+_3c515_get_link_speed_:
+    ;; 3C515 supports 10/100 - check MediaStatus for speed
+    PATCH_POINT pp_link_speed
+    mov     dx, 0               ; patched: io_base + REG_COMMAND
+    mov     ax, CMD_SELECT_WINDOW | 4
+    out     dx, ax
+    PATCH_POINT pp_media_status2
+    mov     dx, 0               ; patched: io_base + 0Ah (MediaStatus)
+    in      ax, dx
+    test    ax, 0080h           ; 100Mbps indicator bit
+    jnz     .speed_100
+    mov     ax, 10
+    retf
+.speed_100:
+    mov     ax, 100
+    retf
+
+;; _3c515_dma_prepare_buffers_ - Prepare DMA buffers
+;; Return: AX = 0
+global _3c515_dma_prepare_buffers_
+_3c515_dma_prepare_buffers_:
+    xor     ax, ax
+    retf
+
+;; _3c515_dma_complete_buffers_ - Complete DMA buffers
+;; Return: void
+global _3c515_dma_complete_buffers_
+_3c515_dma_complete_buffers_:
+    retf
+
+;; _3c515_process_single_event_ - Process single NIC event
+;; Return: AX = 0
+global _3c515_process_single_event_
+_3c515_process_single_event_:
+    xor     ax, ax
+    retf
+
+;; _3c515_handle_interrupt_batched_ - Handle batched interrupts
+;; Return: void
+global _3c515_handle_interrupt_batched_
+_3c515_handle_interrupt_batched_:
+    call    handle_interrupt
+    retf
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; INTERNAL FUNCTIONS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; pci_config_read - Inlined PCI configuration space read (word)
 ;;
 ;; Input:  BH = bus, BL = dev/fn, CL = register offset
@@ -486,4 +654,11 @@ patch_table:
     PATCH_TABLE_ENTRY pp_isr_iobase4, PATCH_TYPE_IO   ; TX status (reclaim)
     PATCH_TABLE_ENTRY pp_isr_iobase5, PATCH_TYPE_IO   ; command (ack err)
     PATCH_TABLE_ENTRY pp_isr_iobase6, PATCH_TYPE_IO   ; command (ack latch)
+    ;; interrupt enable/disable/status patches
+    PATCH_TABLE_ENTRY pp_enable_int,  PATCH_TYPE_IO   ; command (enable)
+    PATCH_TABLE_ENTRY pp_disable_int, PATCH_TYPE_IO   ; command (disable)
+    PATCH_TABLE_ENTRY pp_link_status, PATCH_TYPE_IO   ; command (window select)
+    PATCH_TABLE_ENTRY pp_media_status, PATCH_TYPE_IO  ; MediaStatus read
+    PATCH_TABLE_ENTRY pp_link_speed,  PATCH_TYPE_IO   ; command (window select)
+    PATCH_TABLE_ENTRY pp_media_status2, PATCH_TYPE_IO ; MediaStatus read
 PATCH_COUNT equ ($ - patch_table) / 4
