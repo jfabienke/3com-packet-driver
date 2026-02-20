@@ -6,7 +6,7 @@
 ; Stubs are never called at runtime - JIT ASM modules override them.
 ; Replaces rt_stubs.c for ~4800 bytes ROOT code savings.
 ;
-; Last Updated: 2026-02-01 14:45:00 CET
+; Last Updated: 2026-02-02 11:15:00 CET
 ;
 ; Watcom naming conventions:
 ;   Functions: TRAILING underscore (func -> func_)
@@ -62,7 +62,7 @@
 %endmacro
 
 ; =============================================================================
-; DATA SEGMENT - Initialized non-zero values
+; DATA SEGMENT - Initialized non-zero values (DGROUP)
 ; =============================================================================
 segment _DATA class=DATA
 
@@ -77,11 +77,11 @@ global _log_file
 _log_file:  dw -1
 
 ; =============================================================================
-; BSS SEGMENT - Zero-initialized variables
+; BSS SEGMENT - DGROUP items (near-referenced by resident ASM modules)
 ; =============================================================================
 segment _BSS class=BSS
 
-; --- hardware_rt ---
+; --- hardware_rt (near-referenced by mod_api_rt.asm, mod_routing_rt.asm) ---
 global _g_nic_infos
 _g_nic_infos:           resb 2616   ; nic_info_t[8], 327 bytes each
 
@@ -91,7 +91,24 @@ _g_num_nics:            resw 1      ; int
 global _g_hardware_initialized
 _g_hardware_initialized: resb 1     ; bool
 
-; --- api_rt ---
+; --- xms_core_rt (near-referenced by mod_xms_rt.asm) ---
+global _g_xms_entry
+_g_xms_entry:           resd 1      ; void (far *)(void)
+
+global _g_xms_unavail_reason
+_g_xms_unavail_reason:  resb 64     ; char[64]
+
+; --- DGROUP association (only _DATA and near _BSS) ---
+group DGROUP _DATA _BSS
+
+; =============================================================================
+; FAR BSS SEGMENT - Init-only data (written by *_init.c, not used at runtime)
+; Cold C modules use -zt=0 so they access these via far pointers.
+; ASM JIT modules have their own copies in hot sections.
+; =============================================================================
+segment rt_FAR_BSS class=FAR_DATA
+
+; --- api_rt (only referenced by api_init.c, unwind.c) ---
 global _handles
 _handles:               resb 512    ; pd_handle_t[16]
 
@@ -140,7 +157,7 @@ _nic_error_counts:      resb 32     ; uint32_t[8]
 global _last_nic_used
 _last_nic_used:         resd 1      ; uint32_t
 
-; --- dmabnd_rt ---
+; --- dmabnd_rt (only referenced by dmabnd_init.c, dmasafe.c, dmatest.c) ---
 global _g_tx_bounce_pool
 _g_tx_bounce_pool:      resb 24     ; bounce_pool_t
 
@@ -162,7 +179,7 @@ _g_dpmi_available:      resb 1      ; bool
 global _g_memory_manager_detected
 _g_memory_manager_detected: resb 1  ; bool
 
-; --- dmamap_rt ---
+; --- dmamap_rt (only referenced by dmamap_init.c) ---
 global _g_dmamap_stats
 _g_dmamap_stats:        resb 32     ; dma_mapping_stats_t
 
@@ -175,15 +192,15 @@ _g_cache_hits:          resd 1      ; uint32_t
 global _g_cache_attempts
 _g_cache_attempts:      resd 1      ; uint32_t
 
-; --- pci_shim_rt ---
+; --- pci_shim_rt (only referenced by pci_shim_init.c) ---
 global _shim_state
 _shim_state:            resb 16     ; struct pci_shim_state
 
-; --- pcimux_rt ---
+; --- pcimux_rt (only referenced by pcimux_init.c) ---
 global _mplex_state
 _mplex_state:           resb 10     ; struct mplex_state_t
 
-; --- hwchksm_rt ---
+; --- hwchksm_rt (only referenced by hwchksm_init.c) ---
 global _checksum_system_initialized
 _checksum_system_initialized: resb 1 ; bool
 
@@ -196,7 +213,7 @@ _global_checksum_stats: resb 56     ; checksum_stats_t
 global _checksum_optimization_flags
 _checksum_optimization_flags: resw 1 ; uint16_t
 
-; --- irqmit_rt ---
+; --- irqmit_rt (only referenced by irqmit_init.c) ---
 global _g_mitigation_contexts
 _g_mitigation_contexts: resb 840    ; interrupt_mitigation_context_t[8]
 
@@ -205,21 +222,22 @@ _g_mitigation_initialized: resb 1   ; bool
 
 ; g_mitigation_batch, g_mitigation_timeout moved to rtcfg.asm
 
-; --- rxbatch_rt ---
+; --- rxbatch_rt (only referenced by rxbatch_init.c) ---
 global _g_rx_state
 _g_rx_state:            resb 2944   ; rx_batch_state_t[8]
 
 global _g_rx_batch_initialized
 _g_rx_batch_initialized: resb 1     ; bool
 
-; --- txlazy_rt ---
+; --- txlazy_rt (only referenced by txlazy_init.c) ---
 global _g_lazy_tx_state
 _g_lazy_tx_state:       resb 408    ; tx_lazy_state_t[8], 51 bytes each
 
 global _g_tx_lazy_initialized
 _g_tx_lazy_initialized: resb 1      ; uint8_t
 
-; --- xms_core_rt ---
+; --- xms_core_rt (only referenced by xms_core_init.c, routing.c) ---
+; Note: _g_xms_entry and _g_xms_unavail_reason stay in DGROUP _BSS (near ASM refs)
 global _g_xms_available
 _g_xms_available:       resw 1      ; int
 
@@ -232,9 +250,6 @@ _g_xms_free_kb:         resd 1      ; uint32_t
 global _g_xms_largest_block_kb
 _g_xms_largest_block_kb: resd 1     ; uint32_t
 
-global _g_xms_entry
-_g_xms_entry:           resd 1      ; void (far *)(void)
-
 global _g_promisc_xms
 _g_promisc_xms:         resb 14     ; xms_block_t
 
@@ -244,10 +259,7 @@ _g_routing_xms:         resb 14     ; xms_block_t
 global _g_xms_initialized
 _g_xms_initialized:     resw 1      ; int
 
-global _g_xms_unavail_reason
-_g_xms_unavail_reason:  resb 64     ; char[64]
-
-; --- logging_rt ---
+; --- logging_rt (referenced by logging_init.c, diag.c, mod_pktbuf.asm) ---
 global _logging_enabled
 _logging_enabled:       resw 1      ; int
 
@@ -312,9 +324,6 @@ _network_log_port:      resw 1      ; int
 
 global _network_log_protocol
 _network_log_protocol:  resw 1      ; int
-
-; --- DGROUP association ---
-group DGROUP _DATA _BSS
 
 ; =============================================================================
 ; CODE SEGMENT - 183 stub functions
